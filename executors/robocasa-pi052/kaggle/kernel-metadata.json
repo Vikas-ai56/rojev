@@ -1,0 +1,16 @@
+{
+  "id": "vikask2006/rojev-pi052",
+  "title": "rojev-pi052",
+  "code_file": "kaggle_run.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "dataset_sources": ["vikask2006/rojev-paligemma-tokenizer"],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": [],
+  "machine_shape": "NvidiaTeslaT4"
+}

@@ -1,0 +1,28 @@
+# Executor environment for π0.5² (lerobot/pi052_robocasa). Separate from executors/robocasa because pi052 exists only on
+# the unreleased LeRobot branch feat/smolvla-on-steerable (pinned in config/lerobot-steerable.commit).
+[project]
+name = "rojev-executor-robocasa-pi052"
+version = "0.0.1"
+requires-python = "==3.12.*"
+dependencies = [
+    "lerobot[dataset,pi]>=0.6.1",
+    "robocasa>=1.0.1",
+    "robosuite>=1.5.2",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+lerobot = { path = "../../vendor/lerobot-steerable", editable = true }
+robocasa = { path = "../../vendor/robocasa", editable = true }
+robosuite = { path = "../../vendor/robosuite", editable = true }
+
+# Same override as executors/robocasa: RoboCasa's lerobot==0.3.3 pin removed (LeRobot's documented --no-deps route).
+[[tool.uv.dependency-metadata]]
+name = "robocasa"
+version = "1.0.1"
+requires-dist = [
+  "numpy==2.2.5", "numba==0.61.2", "scipy==1.15.3", "mujoco==3.3.1", "pygame", "Pillow", "opencv-python",
+  "pyyaml", "pynput", "tqdm", "termcolor", "imageio", "h5py", "lxml", "hidapi", "tianshou==0.4.10", "gymnasium",
+]
