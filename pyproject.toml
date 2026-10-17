@@ -1,0 +1,32 @@
+[project]
+name = "rojev"
+version = "0.0.1"
+description = "Simulation-first visual skill agent SDK (MuJoCo SO-101 + OneJev selector)"
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = [
+  "arize-phoenix-otel>=0.17.2",
+  "mujoco>=3.1.3,<4",
+  "numpy",
+  "openinference-instrumentation>=0.1.71",
+  "pillow",
+  "pyyaml",
+  "qev",
+]
+
+[dependency-groups]
+dev = [
+  "arize-phoenix>=20.23.0",  # trace UI/collector server (`make phoenix`); not needed by SDK users
+  "pytest",
+]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+# OneJev client, cloned at config/onejev.commit; GGUF path only (no torch extra).
+qev = { path = "vendor/OneJev", editable = true }

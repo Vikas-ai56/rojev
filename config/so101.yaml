@@ -1,0 +1,5 @@
+# SO-101 robot settings that the MJCF does not carry. Every value states its source.
+control_rate_hz: 30            # command/observation loop; LeRobot dataset default (lerobot configs/dataset.py)
+max_velocity_rad_s:
+  value: 4.40                  # STS3215 no-load 0.238 s/60° @ 6 V
+  source: "retailer listing of STS3215 (no-load, 6 V); unverified on our units"

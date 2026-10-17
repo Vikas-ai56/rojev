@@ -1,0 +1,30 @@
+# Executor environment: RoboCasa + robosuite + frozen LeRobot SmolVLA.
+# Kept separate from the rojev/OneJev environment because the pins conflict
+# (robosuite needs mujoco<3.10, RoboCasa pins mujoco==3.3.1; LeRobot pins transformers<5.6).
+[project]
+name = "rojev-executor-robocasa"
+version = "0.0.1"
+requires-python = "==3.12.*"
+dependencies = [
+  "lerobot[smolvla]",
+  "robocasa",
+  "robosuite",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+lerobot = { path = "../../vendor/lerobot", editable = true }
+robocasa = { path = "../../vendor/robocasa", editable = true }
+robosuite = { path = "../../vendor/robosuite", editable = true }
+
+# RoboCasa's setup.py pins lerobot==0.3.3, which conflicts with the pinned LeRobot checkout. This replaces its
+# declared requirements with the same list minus that pin: the uv form of LeRobot's documented `--no-deps` route.
+[[tool.uv.dependency-metadata]]
+name = "robocasa"
+version = "1.0.1"
+requires-dist = [
+  "numpy==2.2.5", "numba==0.61.2", "scipy==1.15.3", "mujoco==3.3.1", "pygame", "Pillow", "opencv-python",
+  "pyyaml", "pynput", "tqdm", "termcolor", "imageio", "h5py", "lxml", "hidapi", "tianshou==0.4.10", "gymnasium",
+]
