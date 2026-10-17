@@ -108,14 +108,105 @@
 **Rejected alternatives:** Moving to LIBERO for OpenPi checkpoints (changes the environment, confounding the comparison); OpenPi's JAX runtime (NVIDIA-only).
 **Risks / edge cases found:** π0.5 is 3B (~6.6 GB bf16, estimated) and may not fit beside MJev on the 16 GB Mac.
 
-## [2026-10-17] MJev-Spatial answers at every decision point, after OneJev
-**Decision:** At each decision point (subgoal boundary, failure or retry, never per control step), OneJev answers first and MJev-Spatial-4B second, every time.
-**Why:** Real scenes are complex and we do no direct CV; MJev supplies the spatial evidence (relations, distances, points).
-**Rejected alternatives:** Calling MJev only on OneJev uncertainty (user: real scenes always need it); classical CV.
-**Risks / edge cases found:** The 16.45 GB fp32 checkpoint plus 9.32 GB base vision does not fit the ~9 GB Mac budget unquantized. The released `checkpoint.json` says step 100; predict.py uses 1024 image tokens vs 512 in training. Details: `docs/research/hierarchical-timing-and-mjev.md`.
+## [2026-10-17] MJev-Spatial answers at every decision point, before OneJev
+**Decision:** At each decision point (subgoal boundary, failure or retry, never per control step), MJev-Spatial-4B answers first; its spatial evidence goes into OneJev's state, then OneJev decides.
+**Why:** OneJev's action decision must rest on scene evidence; we do no direct CV, so MJev supplies it (relations, distances, points).
+**Rejected alternatives:** Calling MJev only on OneJev uncertainty; MJev after OneJev; classical CV.
+**Risks / edge cases found:** The calls are sequential, so decision latency = MJev + OneJev. The 16.45 GB fp32 checkpoint plus 9.32 GB base vision does not fit the ~9 GB Mac budget unquantized. The released `checkpoint.json` says step 100; predict.py uses 1024 image tokens vs 512 in training. Details: `docs/paper/related-work.md (§4) + appendix-engineering.md (§C)`.
 
 ## [2026-10-17] Literature positioning: dropped tools and prior art
 **Decision:** Drop 3DCodeVerse and VideoJev. The plan's own memory + monitor loop handles visual history, using OneJev with multi-image keyframes. Position the work against EmbodiedJev.
 **Why:** EmbodiedJev uses text-only Jev with no learned executor and no calibration or risk–coverage analysis; showing what it cannot do is the research value.
 **Rejected alternatives:** VideoJev as the progress monitor (4B, overlaps the planned feedback loop).
 **Risks / edge cases found:** New System One papers appear weekly; re-check novelty before writing up.
+
+## [2026-10-17] Executors are robot-agnostic plug-ins
+**Decision:** `Executor` interface + per-robot `EmbodimentAdapter` (observation/action mapping) + policy backend (LeRobot by repo id, later OpenPi client). Franka/RoboCasa first.
+**Why:** Any robot and any VLA must plug into the low level without touching the core.
+**Rejected alternatives:** Executor code specialised to RoboCasa or SmolVLA.
+**Risks / edge cases found:** Action heads are embodiment-specific; a new robot needs a policy trained for it.
+
+## [2026-10-17] SmolVLA: load the final trained weights only
+**Decision:** Load `smolvla_robocasa` with `load_vlm_weights=False`; only config/tokenizer come from the SmolVLM2 repo.
+**Why:** The base VLM weights would be overwritten by the checkpoint anyway.
+**Rejected alternatives:** Default load (downloads 2.03 GB of weights that are then discarded).
+**Risks / edge cases found:** Must assert zero missing/unexpected keys at load.
+
+## [2026-10-17] GPU work on Kaggle (2×T4)
+**Decision:** Use Kaggle 2×T4 for the MJev fp32 reference (port validation) and π0.5 runs.
+**Why:** No local GPU; the Mac's ~9 GB cannot hold either.
+**Rejected alternatives:** Buying or renting a GPU (not possible now).
+**Risks / edge cases found:** T4 has no bf16 (fp16/fp32 only); weekly GPU quota and 12 h sessions.
+
+## [2026-10-17] Decision timing chosen by experiment, not upfront
+**Decision:** Implement the timing approaches in `playground/timing/` behind one interface and choose on measured results.
+**Why:** The user won't choose without results; no paper compares sync vs async subgoal replanning directly.
+**Rejected alternatives:** Committing to sync or async now.
+**Risks / edge cases found:** Needs a working executor (G0-A) first.
+
+## [2026-10-17] Executor eval settings come from the checkpoint, never from docs
+**Decision:** Camera-key mapping is read from each policy's `policy_preprocessor.json`; the scene split matches its training data (`target` for `smolvla_robocasa`).
+**Why:** The LeRobot RoboCasa docs swap two cameras relative to how `smolvla_robocasa` was trained; `lerobot-eval` overrides the stored map.
+**Rejected alternatives:** Hardcoded mappings copied from docs or CI.
+**Risks / edge cases found:** Earlier G0-A/G0-C results are invalid; worth reporting upstream to LeRobot.
+
+## [2026-10-17] Executor rollouts use our own loop, not lerobot-eval
+**Decision:** `executors/robocasa/rollout.py` mirrors `lerobot_eval.rollout`, but the instruction is a parameter checked against the checkpoint's training vocabulary.
+**Why:** lerobot-eval always sends RoboCasa's sentence; smolvla_robocasa was trained on task names (A/B: 1/5 vs 0/5, same seeds). The supervisor must also control instruction text.
+**Rejected alternatives:** Patching lerobot-eval; monkeypatching the env's task_description.
+**Risks / edge cases found:** Must be kept in sync with LeRobot's rollout when the pinned commit changes.
+
+## [2026-10-17] Position against Steerable Policies + LeRobot's external-VLM planner
+**Decision:** Treat arXiv 2602.13193 and LeRobot's `rollout/planner.py` as the closest prior/concurrent work. Our contribution = typed probabilistic supervision (OneJev) instead of generated JSON.
+**Why:** Same architecture (external model steers a VLA's subtask); the decision interface is the difference.
+**Rejected alternatives:** Ignoring it (it's the obvious reviewer comparison).
+**Risks / edge cases found:** Their planner could become a baseline arm (generative VLM) or a host for OneJev; pi052 lives on an unreleased branch.
+
+## [2026-10-17] Executor: π0.5² (`lerobot/pi052_robocasa`), OneJev supplies its subtask
+**Decision:** Use pi052_robocasa (LeRobot branch `feat/smolvla-on-steerable` @9d00293, own executor env). Steer it by subclassing the policy so `_generate_low_level_subtask` returns OneJev's choice. Run on Kaggle T4 in fp16, validated against an fp32 CPU reference.
+**Why:** It is trained on natural language + subtask annotations (32k episodes); SmolVLA was ~1/5 per task. fp16 is the only single-T4 fit.
+**Rejected alternatives:** SmolVLA (too weak); pi05_robocasa (training data undocumented); Mac bf16 (over the ~9 GB budget).
+**Risks / edge cases found:** Unreleased branch; Gemma fp16 overflow (hence validation; fallback = fp32 across 2×T4); PaliGemma tokenizer gated; 4.14B params (2.82B bf16 + 1.32B fp32).
+
+## [2026-10-17] Code reuse: what we borrow
+**Decision:** Per `docs/features/v2-engineering-notes.md (§1)`. Import π0.5² (actions, its own planner as Arm A, subtask vocabulary as OneJev's candidates); port LeRobot's external-VLM planner (Arm C, Qwen3.5-0.8B) and RoboCombine's switching/metrics; MemER and Goal2Skill as ideas only; SkillNet not used.
+**Why:** Avoid rebuilding what exists, and keep every arm on identical candidates and identical low-level weights.
+**Rejected alternatives:** Forking π0.5² to change its planner; copying MemER code (no licence).
+**Risks / edge cases found:** The planner lives on another unreleased branch (port, pin commit); the subtask vocabulary must be extracted from the dataset's `language_persistent` column.
+
+## [2026-10-17] Scope the claim to recombination + decision quality, not new skills
+**Decision:** The research claims compositional recombination of trained subtasks plus better switch/retry/abort decisions. No new-skill or cross-domain claims. A language-following check on π0.5² comes before supervisor work.
+**Why:** Deep research (`docs/paper/related-work.md (§1–2)`): no VLA shows zero-shot new skills or cross-domain transfer; hierarchy helps on held-out compositions, but the low level is the bottleneck.
+**Rejected alternatives:** Claiming generalization to new task domains.
+**Risks / edge cases found:** π0.5² may ignore subtask text (the vision shortcut seen in LIBERO-PRO/CRAFT), which would make the selector moot.
+
+## [2026-10-17] No standalone language-following test for π0.5²
+**Decision:** Drop the separate Kaggle diagnostic (blank/gibberish/swapped subtask); language following is measured inside the supervisor runs.
+**Why:** User call: the actual workflow exercises the same question with the real subtask sequence.
+**Rejected alternatives:** Standalone E10 before supervisor work.
+**Risks / edge cases found:** If π0.5² ignores subtask text, we learn it later, after the supervisor is built; arm E (oracle subtasks) bounds it.
+
+## [2026-10-17] Candidate filter: keep the simple E9 builder, park templates
+**Decision:** Use the E9 exact-string builder; template slot-filling (E9b) stays in `playground/`, not in `rojev/`.
+**Why:** E9b @10 .405 vs .398 (no real gain); filter is an add-on, the working pipeline comes first; OneJev handles wording.
+**Rejected alternatives:** Growing hand-written word lists (synonyms, relations) to cover edge cases.
+**Risks / edge cases found:** New-task recall stays ~40% @10; reachability is the limit (75% exact vs 89–97% with templates).
+
+## [2026-10-17] π0.5² driver on LeRobot's language runtime; Kaggle kernel with embedded bundle
+**Decision:** `drive.py` reuses `lerobot.runtime` (env, loading, PI052 adapter) + success recording; Kaggle kernel gets pyproject/uv.lock/drive.py embedded, vendor repos cloned at pinned SHAs, `uv sync --frozen`.
+**Why:** Official pi052 path (no re-implementation); OneJev plugs into its subtask hook; the lockfile, not Kaggle's image, defines the env.
+**Rejected alternatives:** Own rollout loop (as for SmolVLA); private Kaggle dataset for code (stale-version risk); pip installs on Kaggle's image.
+**Risks / edge cases found:** Runtime skips actions when `ctrl_hz>0` (set 0); T4 lacks bf16 (probe, fp32 2-GPU fallback); ~10 GB assets downloaded per session; CLI-pushed runs can't read Kaggle secrets → gated tokenizer files ship as a private dataset, passed as a local dir via LeRobot's processor overrides + `config.tokenizer_name` (global HF-offline breaks the FAST tokenizer).
+
+## [2026-10-17] Steer π0.5² through the runtime subtask slot, not a subclass
+**Decision:** OneJev's subtask enters via LeRobot's runtime `set_context("subtask", …)` (direct-subtask mode); replaces the planned `_generate_low_level_subtask` subclass.
+**Why:** The official runtime already exposes this hook; no override of model code.
+**Rejected alternatives:** Subclassing PI052Policy.
+**Risks / edge cases found:** Hook lives on an unreleased branch (pinned @9d00293).
+
+## [2026-10-17] Curate the paper bibliography
+**Decision:** `docs/paper/references.bib` keeps 29 entries: load-bearing research papers, SmolVLA/π0-family papers/blogs/checkpoints, OneJev and MJev-Spatial. Codebases, tool docs, one-off side references removed; build notes moved to `docs/features/v2-engineering-notes.md`.
+**Why:** User call: the paper folder holds only what the paper cites.
+**Rejected alternatives:** Citing every source touched (141 entries).
+**Risks / edge cases found:** Removed sources (e.g. EmbodiedJev, Jev blog, Goal2Skill) are no longer cited; re-add deliberately if the paper text needs them.
+

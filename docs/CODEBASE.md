@@ -33,6 +33,16 @@ world state / planning scene (`world_version`), feasibility gates, motion contra
 | `config/onejev_weights.txt` | OneJev 1.5 0.8B GGUF + tokenizer snapshot hashes, sha256 of weight files |
 | `docs/plan/` | Implementation plan (md + pdf) |
 | `docs/decisions.md` | Decisions log |
+| **`docs/paper/`** | **Single place for the paper:** README (outline/status), related-work, method, experiments (all numbers + runs), appendix-engineering, references.bib, citations.md, sources/ (PDFs) |
+| `rojev/supervisor/` | Supervisor core: `candidates.py` deterministic candidate builder (transition graph, BM25 similar tasks, object overlap, canonical wording) |
+| `docs/features/v2-engineering-notes.md` | Build notes moved out of the paper: code reuse + licences, MJev on M5, platform notes |
+| `executors/robocasa-pi052/drive.py` | π0.5² RoboCasa driver on LeRobot's language runtime: success + subtask log; subtask source own/direct (OneJev hook) |
+| `executors/robocasa-pi052/kaggle/` | Kaggle 2×T4 runner: `kaggle_run.py` (staged setup + runs), `push.py` (bundle/push/status/pull), `kernel-metadata.json` |
+| `playground/candidates/coverage.py` | E9 coverage@K evaluation (held-out episodes / held-out tasks) |
+| `playground/candidates/templates.py`, `coverage_templates.py` | E9b template + slot-filling builder and its coverage run (experiment, not adopted) |
+| `data/vocab/pi052_robocasa_sequences.jsonl` | Ordered subtask timeline per π0.5² training episode (32,043) |
+| `tests/test_candidates.py` | Candidate builder unit tests |
+| `playground/archive/` | Archived experiment scripts referenced by `docs/paper/experiments.md` |
 | `docs/architecture.md` | Binding architecture rules (from the plan + motion_planner.md) |
 | `docs/features/phase0-install.md` | What G0 installed and how it was verified |
 | `docs/features/observability.md` | Phoenix usage, span contents, measured results |
@@ -44,7 +54,13 @@ world state / planning scene (`world_version`), feasibility gates, motion contra
 | `executors/robocasa/` | Separate uv project for the frozen executor (RoboCasa + robosuite + LeRobot SmolVLA); conflicting pins kept out of the rojev env |
 | `config/lerobot.commit`, `config/robocasa.commit`, `config/robosuite.commit` | Pinned executor sources |
 | `docs/onejev_learned_policy_plan_v2.md` | Active research plan (pivot 2026-10-16) |
-| `docs/research/hierarchical-timing-and-mjev.md` | Research notes: sync vs async in hierarchical VLA systems, reusable code, MJev on M5 |
+| `playground/timing/` | Experiments: decision-timing approaches (T1–T3 × S1–S4), chosen by results |
+| `executors/robocasa/checkpoint.py` | Reads camera mapping and training instruction vocabulary from a checkpoint |
+| `executors/robocasa/rollout.py` | Frozen-policy rollouts with an explicit instruction (mirrors lerobot-eval otherwise) |
+| `executors/robocasa/capability_table.py` | G0-C runner (lerobot-eval per task; superseded for instructions by rollout.py) |
+| `executors/robocasa-pi052/` | Separate uv env for π0.5² (LeRobot steerable branch); `extract_subtask_vocab.py` |
+| `data/vocab/pi052_robocasa_subtasks.json` | π0.5² training subtask vocabulary (21,326 strings, episode counts, tasks) |
+| `docs/features/v2-pi052-executor.md` | π0.5² executor: setup, steering point, subtask vocabulary |
 | `docs/features/v2-g0-executor.md` | v2 G0 progress: executor env, checkpoint facts, pending downloads |
 | `vendor/` (gitignored) | `mujoco_menagerie` (sparse), `OneJev`, `lerobot`, `robocasa`, `robosuite` |
 | `.venv/` (gitignored) | Built by `uv sync` |
