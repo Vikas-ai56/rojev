@@ -210,3 +210,51 @@
 **Rejected alternatives:** Citing every source touched (141 entries).
 **Risks / edge cases found:** Removed sources (e.g. EmbodiedJev, Jev blog, Goal2Skill) are no longer cited; re-add deliberately if the paper text needs them.
 
+## [2026-10-18] Sim on the Mac, π0.5² as a cloud service behind a tunnel
+**Decision:** RoboCasa runs locally (live window); π0.5² runs on Kaggle (`serve.py`), reached via a Cloudflare quick tunnel + bearer token; lossless .npz requests, one per 50-step chunk.
+**Why:** User call: a clean split, a visible sim; Kaggle accepts no inbound connections and CLI runs cannot read secrets (rules out ngrok/Tailscale tokens).
+**Rejected alternatives:** Sim on Kaggle (no live view); JPEG images (changes policy input); ngrok / Tailscale.
+**Risks / edge cases found:** Quick tunnels have no uptime guarantee; ~0.3 s extra round trip; service idles out after 30 min.
+
+## [2026-10-18] Arms B and E, and the first task set
+**Decision:** B = authored sequence, fixed budget per subtask (p75 demo duration); E = same sequence, switch on ground-truth checks; tasks MicrowaveThawingFridge, MoveFridgeToFreezer, LoadCondimentsInFridge.
+**Why:** User choices; ground truth logged for every arm attributes failures to arm vs executor.
+**Rejected alternatives:** Human key-press oracle (not scalable); OneJev-only switching for B (kept as a possible ablation).
+**Risks / edge cases found:** Noisy π0.5² training labels; "place … on the middle shelf" not in its vocabulary.
+
+## [2026-10-18] Drop tianshou from the robocasa dependency override
+**Decision:** Remove `tianshou==0.4.10` from the executor env's robocasa metadata override.
+**Why:** Only `robocasa/scripts/bench_speed.py` imports it; via tensorboard it pins protobuf<5, blocking rojev's tracing (protobuf≥5).
+**Rejected alternatives:** Separate processes for sim and supervisor; dropping tracing.
+**Risks / edge cases found:** RoboCasa's speed benchmark script no longer runs in this env.
+
+## [2026-10-18] Oracle (arm E) reads current state and may go back
+**Decision:** E's next subtask = the one after the latest subtask whose ground-truth check holds now; "pick up" = grasped AND off its source fixture/container.
+**Why:** E10: grasp contact fired with the steak still on its plate; forward-only E kept saying "place" after a drop.
+**Rejected alternatives:** Grasp-only check; forward-only sequence; distance-lift thresholds.
+**Risks / edge cases found:** Relies on checks being states (held/inside/closed/on); a non-persistent check would need its own rule.
+
+## [2026-10-18] Ground-truth checks are evaluation-only; baselines leave the supervisor package
+**Decision:** Arms B/E move to `rojev/eval/baselines.py`; `rojev/supervisor` keeps only the arm contract and the real supervisor. Sim checks (`tasks.py`) are used for scoring, the arm-E ceiling and as training labels, never as supervisor input.
+**Why:** User: per-subtask hand-coded checks do not generalise (unknown number of subtasks, continuous actions outside the kitchen); the model must judge from images and be trained/given better input instead.
+**Rejected alternatives:** Validating previous subtasks with per-subtask checks inside the supervisor.
+**Risks / edge cases found:** Arm D's recovery depends on OneJev re-reading the image and on earlier subtasks being in the shortlist; to be measured.
+
+## [2026-10-18] Arm D on two GPUs: MJev service (own env, bf16 trunk) + speculative π0.5²
+**Decision:** New notebook rojev-armd: MJev-Spatial on GPU 1 (separate env: torch 2.9, transformers 5.17.0), π0.5² on GPU 0; OneJev local. MJev trunk stored bf16, readout fp32; base model pinned to its `base_revision`; arm D overlaps the "continue" chunk with the decision.
+**Why:** MJev's fp32 language weights (16.4 GB) exceed a T4; its pins conflict with π0.5²'s env; most chunks are "continue", so overlap halves chunk latency.
+**Rejected alternatives:** One shared env; fp32 MJev split across both GPUs (contends with π0.5²); MJev on the Mac (MLX port, weeks).
+**Risks / edge cases found:** Upstream pins inconsistent (transformers 5.17.0 needs huggingface-hub≥1.5, MJev pins <1) → relaxed via metadata override; upstream inference runs fp32 weights, so bf16 is validated vs fp32 on CPU (`check_precision.py`); ~37 GB of weights on a 57 GB disk.
+
+## [2026-10-18] Arm D evidence = MJev judges candidate subtasks with one template
+**Decision:** MJev answers "Robot step: '<s>'. Which is true right now?" (done/possible/blocked) for current + recent + top-M candidates; one OneJev choice decides (continue / switch / redo / complete).
+**Why:** User: evidence must be general, not hand-picked facts (gripper only). Subtask-level judgements cover presence, completion and state for any language subtask.
+**Rejected alternatives:** Fixed fact questions (gripper, door); object parsing + per-object questions; separate Q1 done-check.
+**Risks / edge cases found:** MJev not trained on this template → accuracy measured vs sim ground truth (`evidence_vs_truth`); M bounds what is judged.
+
+## [2026-10-18] Evaluation not tied to authored tasks
+**Decision:** Arm D runs on any of the 300 RoboCasa pretrain tasks, scored by RoboCasa's own task success; `tasks.py` stays for 3 diagnosis tasks (per-subtask truth, arms B/E). MJev precision inputs are seeded random scenes with filter-chosen subtasks (`make_testdata.py`).
+**Why:** User: avoid overfitting to hand-picked tasks/scenes.
+**Rejected alternatives:** Authoring sequences and checks for many tasks; hand-picked test scenes.
+**Risks / edge cases found:** Tasks without `tasks.py` have no per-subtask attribution, only task success and MJev evidence logs.
+

@@ -110,5 +110,19 @@ Model under test unless stated: OneJev [onejev] 1.5 0.8B Q8_0 GGUF (`mradermache
 - Finding: templates raise what is *reachable* (75% → 89–97%), but ranking stays weak (+0.7 pt @10, +6.8 pt @50). Grounding alone hurts (.398 → .339).
 - Conclusion: keep the E9 builder; the shortlist only needs recall, OneJev handles wording/meaning. Revisit after the pipeline works.
 
+## E10 — Live workflow bring-up, arm E, MicrowaveThawingFridge (2026-10-18)
+- Setup: sim on the Mac (M5, 26.9 steps/s), π0.5² on Kaggle T4 (bf16) via Cloudflare tunnel; seed 1000 (same scene); max 2320 steps; arm E (authored sequence, ground-truth switching). Runs: `results/runs/workflow/MicrowaveThawingFridge_E_s1000_20261018-{134816,135317,135758}/`.
+- Per chunk (median): π0.5² inference 2.40 s, network 0.21 s, request 121 KB; ≈ 4.5 min per 2320-step episode.
+
+| Ep | Oracle version | First lift | Outcome | Stage at fault |
+|---|---|---|---|---|
+| 1 | grasp-only "pick up" check, forward-only | 299 (false: steak still on the plate) | step limit, 0/4 subtasks | ground-truth check (premature switch) |
+| 2 | grasp + off plate/fridge, forward-only | 424; held at steps ~600–750, dropped in transit | step limit, 0/4 | executor (drop) + oracle did not go back |
+| 3 | grasp + off plate/fridge, goes back on undone progress | 794 (brief); held again ~2100, dropped | step limit, 0/4 | executor (grasp reliability) |
+
+- Same seed, different trajectories: π0.5²'s flow sampling is stochastic.
+- Findings: (1) "grasped" ≠ "picked up" (contact fires while the object rests on its plate); (2) a forward-only oracle cannot recover drops; (3) with correct subtasks and switching, π0.5² failed to pick up and hold the steak reliably (~2000 of 2320 steps on "pick up").
+- Invalid as arm comparison (n = 3, oracle changed between episodes); bring-up only.
+
 ## Planned (not yet run)
 - π0.5² language following: no standalone diagnostic; per-subtask success vs the chosen subtask text is logged in the supervisor runs (arms A–E).

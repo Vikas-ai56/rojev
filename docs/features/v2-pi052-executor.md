@@ -4,7 +4,7 @@
 - Code: LeRobot branch `feat/smolvla-on-steerable` @9d00293 (`config/lerobot-steerable.commit`) → `vendor/lerobot-steerable`.
 - Env: `executors/robocasa-pi052/` (own uv project; `lerobot[pi,dataset]`, robocasa, robosuite; same robocasa pin override). `PI052Policy` imports; torch 2.11, transformers 5.5.4, mujoco 3.3.1.
 - Access: PaliGemma tokenizer (gated) works with the user's HF login.
-- Model: 4.14B params (2.82B bf16 + 1.32B fp32), Apache-2.0. Not downloaded (doesn't fit the Mac; runs on Kaggle).
+- Model: 4.14B params (2.82B bf16 + 1.32B fp32), Apache-2.0. Base model (model card): `lerobot/pi05_robocasa`; training init: `pepijn223/pi052_robocasa_ki_false_20k`, then 40k steps on the pretrain human300 data. Robot: RoboCasa PandaOmron (sim only). Model card reports no success rates. Not downloaded (doesn't fit the Mac; runs on Kaggle).
 
 ## How it is steered
 - Low-level actions are conditioned on `"User: {subtask}, State: …"` only.
@@ -33,7 +33,10 @@
 - Global `HF_HUB_OFFLINE=1` does not work: the FAST tokenizer loads `bpe_tokenizer/config.json`, which does not exist on the Hub; online the 404 is tolerated, offline it is fatal (v3–v4).
 - Precision: checkpoint dtype bf16 (config allows bf16/fp32 only). T4 has no native bf16 → bf16 probe measures whether it runs; fallback = fp32 across both GPUs.
 
-## Next
-1. First Kaggle run = setup check only (one 50-step chunk via the `direct` hook). No standalone π0.5² evaluation; it is measured in the supervisor workflow (decision 2026-10-17).
+## Kaggle setup verified (v5, 2026-10-17, `results/kaggle/pi052_20261017-192153/`)
+- All stages ok, 697 s total: clone 17 s · uv sync 160 s · assets 134 s (11 GB) · EGL render ok · bf16 probe rel. err 0.29% · model 64 s · smoke run 310 s.
+- Smoke run (CloseFridge, `direct` "close the refrigerator door", 50 steps): env 43 s, policy load 204 s, 50 steps in 40.5 s (1.23 steps/s, includes first-call warm-up), GPU peak 9.5 GB on one T4. Video 50 frames; robot moves (frame diff 27). Success not expected in 50 steps.
+- Open: steps/s after warm-up (first chunk vs. later chunks) — sets episodes per session.
 
-- FAST action tokenizer (`lerobot/fast-action-tokenizer`): training-only auxiliary loss; at inference the preprocessor step is built (needs the files) but skips (`action is None`). Actions come from the flow-matching action expert.
+## Next
+1. Supervisor workflow on Kaggle: many episodes per session (setup ≈ 11.6 min paid once).

@@ -35,9 +35,23 @@ world state / planning scene (`world_version`), feasibility gates, motion contra
 | `docs/decisions.md` | Decisions log |
 | **`docs/paper/`** | **Single place for the paper:** README (outline/status), related-work, method, experiments (all numbers + runs), appendix-engineering, references.bib, citations.md, sources/ (PDFs) |
 | `rojev/supervisor/` | Supervisor core: `candidates.py` deterministic candidate builder (transition graph, BM25 similar tasks, object overlap, canonical wording) |
+| `docs/features/v2-levers.md` | Registry of every workflow lever (current value, where, cost to change, symptom) |
 | `docs/features/v2-engineering-notes.md` | Build notes moved out of the paper: code reuse + licences, MJev on M5, platform notes |
+| `rojev/executor/` | Executor contract (`Observation`, `ActionChunk`, `Executor`), lossless wire format, `RemoteExecutor` HTTPS client |
+| `rojev/supervisor/base.py` | Arm contract (`SubtaskSource`, `DecisionContext`, `Decision`) implemented by every arm |
+| `rojev/supervisor/onejev_arm.py` | Arm D: MJev judges candidates (done/possible/blocked), one OneJev choice (`docs/features/v2-arm-d.md`) |
+| `tests/test_onejev_arm.py` | Arm D with stand-in OneJev / MJev |
+| `rojev/perception/` | `RemoteMJev` HTTPS client for the MJev-Spatial service |
+| `services/mjev/` | MJev-Spatial service env + `serve_mjev.py` (bf16 trunk, fp32 readout) + `check_precision.py` + `make_testdata.py` (seeded random scenes, filter subtasks → private dataset `vikask2006/rojev-mjev-testdata`) |
+| `rojev/eval/baselines.py` | Evaluation-only baselines: B `FixedSequence`, E `OracleSequence` (simulator ground truth); never shipped |
+| `executors/robocasa-pi052/serve.py` | π0.5² as a remote executor service (cloud GPU) |
+| `executors/robocasa-pi052/tasks.py` | Evaluation only: authored sequences + per-subtask ground truth for 3 diagnosis tasks (arms B/E) |
+| `executors/robocasa-pi052/workflow.py` | Mac runner: live window, arm loop, Phoenix spans, chunk logs, video |
+| `docs/features/v2-arm-d.md` | Arm D: decision flow, evidence rule, logging, checks |
+| `docs/features/v2-workflow.md` | Workflow split, run steps, what is logged, arms, task set |
+| `tests/test_baselines.py` | Baselines B/E unit tests |
 | `executors/robocasa-pi052/drive.py` | π0.5² RoboCasa driver on LeRobot's language runtime: success + subtask log; subtask source own/direct (OneJev hook) |
-| `executors/robocasa-pi052/kaggle/` | Kaggle 2×T4 runner: `kaggle_run.py` (staged setup + runs), `push.py` (bundle/push/status/pull), `kernel-metadata.json` |
+| `executors/robocasa-pi052/kaggle/` | Kaggle 2×T4: `kaggle_run.py` (modes serve / smoke), `push.py` (bundle/push/service/status/pull), `kernel-metadata.json` |
 | `playground/candidates/coverage.py` | E9 coverage@K evaluation (held-out episodes / held-out tasks) |
 | `playground/candidates/templates.py`, `coverage_templates.py` | E9b template + slot-filling builder and its coverage run (experiment, not adopted) |
 | `data/vocab/pi052_robocasa_sequences.jsonl` | Ordered subtask timeline per π0.5² training episode (32,043) |
