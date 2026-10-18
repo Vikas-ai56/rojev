@@ -67,3 +67,17 @@ def test_no_continue_option_before_the_first_subtask():
     a = arm("open the fridge door")
     a.decide(ctx(None))
     assert not any(v.startswith("continue") for v in a.client.last["questions"]["next"].criteria.values())
+
+
+def test_task_progress_summary_records_outcomes_rechecks_and_redo():
+    mjev = FakeMJev()
+    a = arm("place the milk", mjev)
+    a.decide(ctx("pick up the milk"))  # switch: pick-up entry closed with MJev's verdict
+    entry = a.progress[0]
+    assert entry["subtask"] == "pick up the milk" and entry["outcome"] == "left unfinished"  # fake MJev: "possible"
+    a.client.want = "pick up the milk"
+    a.decide(DecisionContext(chunk=2, step=100, current="place the milk in the fridge", chunks_on_current=1,
+                             history=("pick up the milk",), observation=ctx(None).observation))
+    assert a.progress[0]["outcome"] == "undone, redoing" and a.progress[0]["checked_at_step"] == 100
+    assert a.client.last["state"]["task_progress"][0]["subtask"] == "pick up the milk"
+

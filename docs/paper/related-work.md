@@ -57,6 +57,7 @@ Every arXiv ID was checked against the arXiv API. "(fig)" = value read from a fi
   - Gemini Robotics 1.5: orchestrator calls the VLA as a tool [team2025geminirobotics15].
 - **Typed (System One) decision models:** OneJev [onejev]; MJev-Spatial: typed spatial choice/number/point, 65.64% avg over 12 benchmarks, **no calibration reported** [qin2026mjevspatial].
 - **Our gap:** image-conditioned typed supervision of a learned VLA, with calibration and risk–coverage.
+- **Learned progress value:** π\*0.6 / RECAP [intelligence2025pistar06, pistar06_blog]: value predicts (negative) steps to completion from images; advantage = change in value; drops mark failures (crumpled shirt, tipped filter) and recoveries. Policy trained on all data annotated with advantage. Reported: >2× throughput, ~½ failure rate on the hardest tasks. A cross-task single value model is claimed in talks, not in the blog. Our use: progress/done/failure signal for the supervisor, trained on π0.5² demo timestamps (planned).
 - **Decision reliability:** option-order bias and debiasing [zheng2023pride]; conformal prediction sets / ask for help [ren2023knowno].
 
 ## 4. Decision timing (sync vs async)

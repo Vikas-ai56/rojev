@@ -124,5 +124,51 @@ Model under test unless stated: OneJev [onejev] 1.5 0.8B Q8_0 GGUF (`mradermache
 - Findings: (1) "grasped" ≠ "picked up" (contact fires while the object rests on its plate); (2) a forward-only oracle cannot recover drops; (3) with correct subtasks and switching, π0.5² failed to pick up and hold the steak reliably (~2000 of 2320 steps on "pick up").
 - Invalid as arm comparison (n = 3, oracle changed between episodes); bring-up only.
 
+## E11 — MJev-Spatial bf16 trunk vs fp32, arm-D template, T4 (2026-10-18)
+- Setup: 4 RoboCasa pretrain scenes sampled with seed 0 (PrepareCocktailStation, ReheatMeal, BeverageOrganization, OpenElectricKettleLid), 3 cameras each, top-3 filter subtasks per instruction; question "Robot step: '<s>'. Which is true right now?" → done/possible/blocked. Reference fp32 on CPU; test bf16 trunk + fp32 readout on T4. Files: `results/kaggle/armd_20261018-interactive/`.
+- **Top-1 agreement 12/12; max |Δp| 0.029.** GPU memory 9.0 GB.
+- Latency per request (3 questions, 3 images, 1024 image tokens each): **≈ 24.5 s bf16 on T4**, ≈ 65 s fp32 on CPU.
+- Zero-shot answers lean "possible" (0.65–0.94 in 11 of 12 judgements; ground truth not available for these frames).
+- Consequence: precision OK; latency too high for per-chunk evidence (~8 questions) → speed levers next (image tokens, fp16, fewer images).
+
+## E12 — MJev speed levers on T4 (2026-10-18)
+- Same 4 scenes and fp32 reference as E11; `services/mjev/speed_check.py`; file `results/kaggle/armd_20261018-interactive/mjev_speed.json`.
+
+| Variant | ms / request (3 questions) | top-1 vs fp32 | max \|Δp\| |
+|---|---|---|---|
+| bf16, 1024 image tokens, 3 cams | 24,167 | 12/12 | 0.027 |
+| bf16, 512, 3 cams | 24,135 | 12/12 | 0.027 |
+| fp16, 1024, 3 cams | 22,713 | 12/12 | 0.027 |
+| fp16, 512, 3 cams | 21,713 | 12/12 | 0.027 |
+| fp16, 512, 2 cams | 14,473 | 12/12 | 0.219 |
+
+- Image-token cap irrelevant (256² frames are below both caps); fp16 ≈ −10%; 2 cams change answers (Δp 0.22) → keep 3.
+- Hypothesis: transformers' PyTorch fallback for Gated DeltaNet (no `flash-linear-attention`, FLA).
+- **E12b, FLA installed** (`mjev_speed_fla.json`): bf16 24,397 ms (12/12, Δp 0.023), fp16 21,821 ms (12/12, Δp 0.026) → **no speed-up; hypothesis rejected.** `causal_conv1d` still on its fallback. Next: stage profile of one request (`services/mjev/profile_mjev.py`).
+
+## E12d — Where MJev's time goes (2026-10-18)
+- One request (3 images, 3 questions), bf16, T4: total 23.8 s = vision + embeddings 20.7 s (87%) + language trunk 3.0 s + CPU preprocessing 0.02 s + readout 0.002 s.
+- Inside vision: **patch embedding (one Conv3d, kernel = stride = 2×16×16) 20.6 s of 21.2 s**; 24 transformer blocks ≈ 0.8 s. Input 2304 × 1536 (3 images, 16×16 patch grid each), bf16, cuda, sdpa.
+- Cause: a slow Conv3d path on T4, not the model size.
+- **E12e fix candidates** (same 2304 × 1536 input; `mjev_patch_embed.json`): bf16 Conv3d 21,057 ms · fp32 Conv3d 15.9 ms · **bf16 linear 4.8 ms** · fp32 linear 2.8 ms; max |diff| vs current 0.0078–0.0156 (outputs mean 0.31; = bf16 rounding). Kernel = stride → the conv is exactly a matrix multiply over patches. Adopted: `PatchLinear` in `serve_mjev.py` (checked against the conv at load).
+- **E12f end to end with PatchLinear** (`mjev_speed_patched.json`): bf16 **3,484 ms** (12/12, Δp 0.024) · fp16 **1,280 ms** (12/12, Δp 0.031, no NaN) per 3-question request — 7× and 19× faster than E12. Serving default → fp16.
+
+## E13 — OneJev next-subtask decisions on π0.5² demo frames (2026-10-18)
+- Benchmark: 40 frames from 15 held-out tasks (E9 split), 3 cameras each, true next subtask from the demo annotations; options always contain the truth; correct = same meaning (verb phrase + first object). `playground/onejev_bench/`; runs `results/runs/e13_onejev_bench_*`.
+- Baselines: chance 4.8% (21 options) / 11.1% (9); filter top-1 (no images) 25%; truth in raw top-20 shortlist 67.5%.
+
+| Variant | 0.8B | 4B |
+|---|---|---|
+| V0 arm-D prompt (composite image, task, 20 raw options) | 22.5% | 40.0% |
+| T1 V0 + blank image | 17.5% | 42.5% |
+| T2 V0 without task text | 12.5% | — |
+| T3 ≤ 8 distinct meanings | 30.0% | 40.0% |
+| T4 T3 + 3 separate images | 20.0% | — |
+
+- Findings: 4B ≈ 2× 0.8B on the current prompt; **blank image does not lower accuracy for either model** → decisions come from task + history text, not the cameras; distinct options help 0.8B; separate images do not help; instruction copy rate low (0–17.5%).
+- Caveat: n = 40 (≈ ±15 points); widen before paper claims. Labels are π0.5²'s noisy annotations.
+- Consequence: prompt fixes alone cannot make OneJev read the scene → train OneJev on image-dependent decisions (same benchmark = data + yardstick).
+
 ## Planned (not yet run)
 - π0.5² language following: no standalone diagnostic; per-subtask success vs the chosen subtask text is logged in the supervisor runs (arms A–E).
+- Progress-value question for OneJev (RECAP-style): Score "how far from finishing <subtask>?" trained on π0.5² demo timestamps + our rollouts; compared with MJev zero-shot done/possible/blocked on held-out tasks.

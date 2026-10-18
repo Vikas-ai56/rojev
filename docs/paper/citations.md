@@ -22,6 +22,7 @@
 | `onejev` | https://github.com/OmniJev/OneJev | OneJev (qev) | typed decision model + server |
 | `pi052_robocasa` | https://huggingface.co/lerobot/pi052_robocasa | lerobot/pi052_robocasa | executor (π0.5²; no paper) |
 | `pi07_blog` | https://www.pi.website/blog/pi07 | π0.7 blog post | laundry = cross-embodiment transfer; zero-shot air fryer caveat |
+| `pistar06_blog` | https://www.pi.website/blog/pistar06 | π*0.6 blog (RECAP) | value = negative steps to completion; advantage = change in value; policy told to take high-advantage actions |
 | `qin2026mjevspatial` | arXiv:2610.22276 | MJev-Spatial | spatial-evidence model (decision: MJev before OneJev) |
 | `ren2023knowno` | arXiv:2307.01928 | KnowNo | conformal sets, ask for help |
 | `shi2025hirobot` | arXiv:2502.19417 | HiRobot | hierarchical VLM over pi0, 1 s cadence |

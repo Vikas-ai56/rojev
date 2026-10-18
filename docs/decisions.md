@@ -258,3 +258,33 @@
 **Rejected alternatives:** Authoring sequences and checks for many tasks; hand-picked test scenes.
 **Risks / edge cases found:** Tasks without `tasks.py` have no per-subtask attribution, only task success and MJev evidence logs.
 
+## [2026-10-18] Add flash-linear-attention to the MJev env
+**Decision:** `flash-linear-attention` (Linux) in `services/mjev`; keep bf16, 3 cameras.
+**Why:** E12: precision and image-token levers barely change MJev latency (≈ 8 s/question); transformers falls back to PyTorch Gated-DeltaNet without FLA.
+**Rejected alternatives:** fp16 (≈ 10% faster only); 2 cameras (answers change, Δp 0.22); fewer image tokens (no effect at 256²).
+**Risks / edge cases found:** FLA's Triton kernels on T4 (sm_75) untested; `causal_conv1d` stays on its fallback (needs a CUDA build).
+
+## [2026-10-18] FLA did not fix MJev latency; profile before the next change
+**Decision:** Keep FLA in the MJev env (harmless, used), but make no further speed change until a stage profile (`profile_mjev.py`) shows where the ≈ 24 s per request goes.
+**Why:** E12b: with FLA, bf16 24.4 s and fp16 21.8 s per request (unchanged); two guessed causes (precision, FLA) were wrong.
+**Rejected alternatives:** More guessed fixes (causal_conv1d build, fewer cameras) without measurement.
+**Risks / edge cases found:** Remaining candidates: `causal_conv1d` fallback, CPU preprocessing, vision encoder, MJev's Python loops.
+
+## [2026-10-18] OneJev decision quality measured on demo frames; next lever is training
+**Decision:** Use the E13 demo-frame benchmark as OneJev's yardstick; adopt ≤ 8 distinct options; plan OneJev training on image-dependent next-subtask labels; evaluate 4B as the decision model.
+**Why:** E13: blank image ≈ real image accuracy (0.8B and 4B) → OneJev ignores the cameras for this decision; 4B 40% vs 0.8B 22.5%; distinct options 30% vs 22.5% (0.8B).
+**Rejected alternatives:** More prompt wording changes (do not make it use the image); separate camera images (no gain).
+**Risks / edge cases found:** n = 40; mradermacher 4B GGUF fails in llama.cpp 0.6.0 (missing blk.32 tensor) → prithivMLmods @eb1a6d6 used; 4B on the Mac uses ~5.2 GB.
+
+## [2026-10-18] MJev patch embedding as its exact matrix-multiply form
+**Decision:** At load, replace the vision tower's patch-embedding Conv3d (kernel = stride) with `PatchLinear` (same weights, F.linear over flattened patches); startup check vs the conv refuses to serve if they differ (> 0.05).
+**Why:** E12d/E12e: that Conv3d took 20.6 of 23.8 s per request on T4 (bf16); the matrix form takes 4.8 ms with bf16-rounding-level differences.
+**Rejected alternatives:** fp32 Conv3d only (15.9 ms but changes the dtype flow into bf16 blocks); fewer cameras (changes answers); waiting for an upstream fix.
+**Risks / edge cases found:** Library-module swap at load time (documented, checked); upstream cause (slow bf16 Conv3d on sm_75) unreported.
+
+## [2026-10-18] Serve MJev in fp16
+**Decision:** `serve_mjev.py` default `--language-dtype fp16` (trunk + vision fp16, readout fp32), with `PatchLinear`.
+**Why:** E12f: fp16 1.3 s vs bf16 3.5 s per 3-question request on T4; both 12/12 top-1 vs fp32, no NaN.
+**Rejected alternatives:** bf16 (2.7× slower, T4 has no fast bf16); fp32 (does not fit with the trunk).
+**Risks / edge cases found:** fp16 overflow risk on unseen inputs; validated on 4 scenes only → keep `check_precision.py` as a gate.
+

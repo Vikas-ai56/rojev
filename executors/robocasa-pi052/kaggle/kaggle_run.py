@@ -32,7 +32,8 @@ BUNDLE_B64 = ""  # filled by push.py
 MODE = "serve"  # set by push.py
 VALIDATE_MJEV = False  # set by push.py (`push armd validate`)
 IDLE_MIN = 30  # serve: shut down after this long without requests (GPU quota)
-CLOUDFLARED = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+CLOUDFLARED = ("https://github.com/cloudflare/cloudflared/releases/download/2026.10.1/cloudflared-linux-amd64")  # pinned:
+# the version that served the 2026-10-18 E10 runs
 # Setup check only: one 50-step action chunk through the subtask hook OneJev will use ("direct"). Proves load,
 # inference, rendering and stepping work; says nothing about task success (π0.5² is evaluated in the workflow).
 RUNS = [  # drive.py invocations; each writes outputs/<name>/

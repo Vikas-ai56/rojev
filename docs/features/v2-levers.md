@@ -12,7 +12,8 @@ Cost of a change: **config** = edit a value · **refit** = rebuild from data (mi
 ## 2. Scene extraction (MJev-Spatial)
 | Lever | Current | Where | Cost | Symptom it fixes |
 |---|---|---|---|---|
-| Model / precision | MJev-Spatial-4B @0657319 (code @df37e9e), base Qwen3.5-4B @851bf6e; bf16 trunk + fp32 readout on T4 #1 (`check_precision.py`) | cloud service | swap | wrong evidence |
+| Model / precision | MJev-Spatial-4B @0657319 (code @df37e9e), base Qwen3.5-4B @851bf6e; fp16 trunk + vision, fp32 readout on T4 #1, validated vs fp32 (E11/E12f: 12/12, Δp ≤ 0.031) | cloud service | swap | wrong evidence |
+| MJev speed | fp16 (1.3 s / 3-question request, E12f); 3 cameras (2 change answers, E12); image-token cap irrelevant at 256²; cause = patch-embedding Conv3d (20.6 s, E12d) → exact matrix-multiply form (4.8 ms, E12e) | MJev env / `serve_mjev.py` | config | decision latency |
 | Evidence template | "Robot step: '<s>'. Which is true right now?" → done / possible / blocked, all 3 cameras | `onejev_arm.py` | config | wrong evidence wording |
 | Judged subtasks | current + 2 recent + top M = 5 candidates | `onejev_arm.py` | config | right next step never judged |
 | Answer type per question | choice / number / point | supervisor | config | — |

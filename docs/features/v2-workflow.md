@@ -64,6 +64,8 @@ Ground truth (`tasks.py`) is an evaluation instrument, never supervisor input: s
 - Wording = most frequent phrasing in π0.5²'s training subtasks; "place … on the middle shelf" is not in the vocabulary.
 
 ## Known weak points (found while building)
+- Interactive Kaggle sessions are invisible to the CLI: start notebooks as committed runs (`push.py push …`) so `push.py service` can read the addresses; otherwise they idle out after 30 min.
+- cloudflared pinned to 2026.10.1 (`kaggle_run.py`).
 - "pick up" check = grasped AND no contact with its source fixture / container (grasp contact alone fires on the plate; E10 ep 1).
 - π0.5²'s training subtask labels are noisy: "open the refrigerator door" appears although doors start open; junk labels ("place the chicken drumstick on the floor", "move the robot arm").
 - Local sim speed: 26.9 steps/s incl. 3-camera rendering (M5); scene build 7–10 s.

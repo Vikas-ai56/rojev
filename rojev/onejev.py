@@ -13,16 +13,19 @@ _tracer = trace.get_tracer("rojev.onejev")
 _MSG = "llm.input_messages.0.message"
 
 
-def system_one(client: Client, image: np.ndarray | Image.Image, state: dict[str, Any], questions: dict[str, Any],
+Img = np.ndarray | Image.Image
+
+
+def system_one(client: Client, image: Img | list[Img], state: dict[str, Any], questions: dict[str, Any],
                span_name: str = "onejev", session_id: str | None = None, **params: Any) -> Response:
-    """Ask OneJev `questions` about `state`, which refers to `image` as `<image:1>`.
+    """Ask OneJev `questions` about `state`, which refers to the images as `<image:1>`, `<image:2>`, … in order.
 
     The span records the data URI sent, the state and questions, the answers, qev's debug diagnostics (raw slot
     logits, timing, prompt hash) and each probability as a numeric `onejev.<question>[.<option>]` attribute.
     `params` are qev request options, e.g. `debias=3` (average over cyclic shifts of the option order).
     """
-    pil = image if isinstance(image, Image.Image) else Image.fromarray(image)
-    uri = data_uri(pil)
+    images = image if isinstance(image, list) else [image]
+    uris = [data_uri(i if isinstance(i, Image.Image) else Image.fromarray(i)) for i in images]
     wire_questions = {k: (v.to_dict() if hasattr(v, "to_dict") else v) for k, v in questions.items()}
     with _tracer.start_as_current_span(span_name) as span:
         span.set_attribute("openinference.span.kind", "LLM")
@@ -32,13 +35,14 @@ def system_one(client: Client, image: np.ndarray | Image.Image, state: dict[str,
         span.set_attribute(f"{_MSG}.contents.0.message_content.type", "text")
         span.set_attribute(f"{_MSG}.contents.0.message_content.text",
                            json.dumps({"state": state, "questions": wire_questions}, indent=1))
-        span.set_attribute(f"{_MSG}.contents.1.message_content.type", "image")
-        span.set_attribute(f"{_MSG}.contents.1.message_content.image.image.url", uri)
+        for n, uri in enumerate(uris, start=1):
+            span.set_attribute(f"{_MSG}.contents.{n}.message_content.type", "image")
+            span.set_attribute(f"{_MSG}.contents.{n}.message_content.image.image.url", uri)
         span.set_attribute("input.value", json.dumps(state))
         span.set_attribute("input.mime_type", "application/json")
         span.set_attribute("onejev.params", json.dumps(params))
 
-        r = client.system_one(state=state, questions=questions, media=[{"type": "image", "data": uri}],
+        r = client.system_one(state=state, questions=questions, media=[{"type": "image", "data": u} for u in uris],
                               **{"debug": 1, **params})
 
         span.set_attribute("llm.model_name", r.model)

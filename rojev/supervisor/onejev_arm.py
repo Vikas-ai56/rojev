@@ -5,7 +5,11 @@ One generic rule, no per-subtask or per-object code (docs/features/v2-arm-d.md):
   2. evidence    MJev, same template for every judged subtask s (current + recent + top M candidates):
                  "Robot step: '<s>'. Which is true right now?"  → done / possible / blocked
   3. decision    one OneJev Choice over {continue current, candidates, recent (redo), task complete} on the
-                 composite image, with the evidence table in its state
+                 composite image, with the evidence table and the task-progress summary in its state
+Task-progress summary (task-level memory, no generated text): one entry per subtask the arm moved past, with its
+step range, the outcome at the switch (MJev: judged done / left unfinished; redo → "undone, redoing") and its latest
+re-checked P(done). Recent entries are re-judged every decision, so a stale record shows its age. The images, not the
+summary, are the truth.
 Logged alongside: the SayCan-style product P_OneJev(option) × P_MJev(possible) [ahn2022saycan] (no extra calls).
 Option order is shuffled per decision (seeded, logged) against position bias [PriDe].
 """
@@ -40,6 +44,8 @@ class OneJevSupervisor(SubtaskSource):
                  session_id: str | None = None):
         self.client, self.candidates, self.mjev, self.cameras = client, candidates, mjev, cameras
         self.k, self.m, self.recent, self.seed, self.session_id = k, m, recent, seed, session_id
+        self.progress: list[dict] = []  # task-progress summary, oldest first
+        self.started = 0  # step at which the current subtask began
 
     def _evidence(self, images: list[np.ndarray], judged: list[str]) -> tuple[dict, dict]:
         """{subtask: {done, possible, blocked}} from one batched MJev request."""
@@ -65,9 +71,13 @@ class OneJevSupervisor(SubtaskSource):
         if current:
             options["continue"] = f"continue the current subtask: {current}"
         options["complete"] = COMPLETE
+        for entry in self.progress:  # re-checked entries get fresh evidence
+            if entry["subtask"] in evidence:
+                entry.update(p_done_now=round(evidence[entry["subtask"]]["done"], 2), checked_at_step=ctx.step)
         state = {"image": "<image:1> = robot cameras side by side: " + ", ".join(self.cameras),
-                 "task": obs.task, "previous_subtasks": history, "current_subtask": current,
-                 "chunks_spent_on_current": ctx.chunks_on_current}
+                 "task": obs.task, "task_progress": self.progress,
+                 "task_progress_note": "a record of earlier subtasks; trust the current images over it",
+                 "current_subtask": current, "chunks_spent_on_current": ctx.chunks_on_current}
         if evidence:
             state["evidence_per_subtask"] = {s: {k: round(p, 2) for k, p in v.items()} for s, v in evidence.items()}
 
@@ -86,8 +96,24 @@ class OneJevSupervisor(SubtaskSource):
                   "top5": [(options[k], round(p, 4)) for k, p in top], "saycan_top3": saycan,
                   "timings_ms": {"mjev": mjev_ms, "onejev": onejev_ms}}
         p = probs[choice]
+        if choice != "continue":
+            self._record(current, ctx.step, evidence, redo=None if choice == "complete" else options[choice])
+        detail["task_progress"] = [dict(e) for e in self.progress]
         if choice == "complete":
             return Decision(None, f"task complete (p={p:.2f})", detail)
         if choice == "continue":
             return Decision(current, f"continue (p={p:.2f})", detail)
         return Decision(options[choice], f"{'start' if current is None else 'switch'} (p={p:.2f})", detail)
+
+    def _record(self, left: str | None, step: int, evidence: dict, redo: str | None) -> None:
+        """Close the entry for the subtask being left; mark a chosen earlier subtask as being redone."""
+        if left is not None:
+            e = evidence.get(left)
+            outcome = ("no evidence" if e is None else
+                       "judged done" if max(e, key=e.get) == "done" else "left unfinished")
+            self.progress.append({"subtask": left, "steps": [self.started, step], "outcome": outcome,
+                                  "p_done_now": None if e is None else round(e["done"], 2), "checked_at_step": step})
+        for entry in self.progress:
+            if redo is not None and entry["subtask"] == redo:
+                entry["outcome"] = "undone, redoing"
+        self.started = step
