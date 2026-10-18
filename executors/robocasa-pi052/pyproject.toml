@@ -8,6 +8,7 @@ dependencies = [
     "lerobot[dataset,pi]>=0.6.1",
     "robocasa>=1.0.1",
     "robosuite>=1.5.2",
+    "rojev",
 ]
 
 [tool.uv]
@@ -17,12 +18,15 @@ package = false
 lerobot = { path = "../../vendor/lerobot-steerable", editable = true }
 robocasa = { path = "../../vendor/robocasa", editable = true }
 robosuite = { path = "../../vendor/robosuite", editable = true }
+rojev = { path = "../../", editable = true }
 
 # Same override as executors/robocasa: RoboCasa's lerobot==0.3.3 pin removed (LeRobot's documented --no-deps route).
+# tianshou==0.4.10 also removed: only robocasa/scripts/bench_speed.py imports it, and it pins protobuf<5 via
+# tensorboard, which conflicts with rojev's tracing (arize-phoenix-otel needs protobuf>=5).
 [[tool.uv.dependency-metadata]]
 name = "robocasa"
 version = "1.0.1"
 requires-dist = [
   "numpy==2.2.5", "numba==0.61.2", "scipy==1.15.3", "mujoco==3.3.1", "pygame", "Pillow", "opencv-python",
-  "pyyaml", "pynput", "tqdm", "termcolor", "imageio", "h5py", "lxml", "hidapi", "tianshou==0.4.10", "gymnasium",
+  "pyyaml", "pynput", "tqdm", "termcolor", "imageio", "h5py", "lxml", "hidapi", "gymnasium",
 ]
