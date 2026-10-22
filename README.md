@@ -25,9 +25,16 @@ make test
 
 ## Package
 
-| Module | Purpose |
+`rojev` is split along the architecture (map: `docs/CODEBASE.md`; layering enforced by `tests/test_architecture.py`):
+
+| Package | Purpose |
 |---|---|
-| `rojev.robot` | Robot interface for sim and hardware: timestamped joint/camera data, clock + fixed-rate loop, hard joint limits + safety filter, MuJoCo and mock backends |
-| `rojev.sim` | MuJoCo world utilities: scene composition, contacts, segmentation ground truth |
-| `rojev.onejev` | OneJev System One call, recorded as a span with the exact image sent |
-| `rojev.tracing` | OpenTelemetry → Phoenix setup |
+| `rojev.protocol` | Shared contracts: observations, commands, decisions |
+| `rojev.robot` | Robot interface for sim and hardware (timestamped joints/cameras, clocks, hard limits, `ActionSpec`); `rojev.robot.sim` = MuJoCo backend |
+| `rojev.control` | Real-time layer: control loop, execution runtime, guard, robot adapter |
+| `rojev.system1` | Visuomotor policy contract, remote client, chunk runner |
+| `rojev.system2` | Decider contract, decision worker, OneJev / MJev clients |
+| `rojev.owner` | State owner: the single writer of intent |
+| `rojev.eval` | Baseline deciders (evaluation only) |
+| `rojev.observability` | OpenTelemetry → Phoenix |
+| `rojev.legacy_v2` | Quarantined v2 supervisor (removed after roadmap T8) |
