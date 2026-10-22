@@ -5,6 +5,7 @@ description = "Simulation-first visual skill agent SDK (MuJoCo SO-101 + OneJev s
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
+  "aioquic>=1.7.0",
   "arize-phoenix-otel>=0.17.2",
   "mujoco>=3.1.3,<4",
   "numpy",
@@ -30,3 +31,8 @@ module-root = ""
 [tool.uv.sources]
 # OneJev client, cloned at config/onejev.commit; GGUF path only (no torch extra).
 qev = { path = "vendor/OneJev", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["timing: wall-clock real-time budgets; run alone with `uv run pytest -m timing`"]
+addopts = "-m 'not timing'"
