@@ -1,4 +1,5 @@
-"""Evaluation-only components (baselines, ground-truth references); never part of the deployed supervisor."""
-from .baselines import FixedSequence, OracleSequence
+"""Evaluation only: baseline deciders Jev must beat (scripted, simulator-truth oracle, S1's own planner). Never part of
+a deployed system; the oracle reads simulator truth."""
+from .deciders import AlwaysContinue, NativePlanner, ScriptedSequence, TruthSequence, next_after_latest_done
 
-__all__ = ["FixedSequence", "OracleSequence"]
+__all__ = ["AlwaysContinue", "NativePlanner", "ScriptedSequence", "TruthSequence", "next_after_latest_done"]
