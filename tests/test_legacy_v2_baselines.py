@@ -1,6 +1,5 @@
 """rojev.eval baselines: arms B (fixed budget) and E (ground-truth oracle)."""
-from rojev.eval import FixedSequence, OracleSequence
-from rojev.supervisor import DecisionContext
+from rojev.legacy_v2 import DecisionContext, FixedSequence, OracleSequence
 
 SEQ = ["open the door", "pick up the cup", "close the door"]
 

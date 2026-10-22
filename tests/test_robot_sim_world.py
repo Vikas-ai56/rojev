@@ -2,7 +2,7 @@
 import mujoco
 import pytest
 
-from rojev import sim
+from rojev.robot.sim import world as sim
 
 
 @pytest.fixture()

@@ -1,10 +1,12 @@
 """One contract every robot backend must satisfy (simulator and mock now; the real SO-101 later)."""
+import time
+
 import mujoco
 import numpy as np
 import pytest
 
-from rojev import sim
-from rojev.robot import CameraSpec, JointLimits, MockRobot, MujocoRobot, Rate, camera_info, so101
+from rojev.robot.sim import world as sim
+from rojev.robot import CameraSpec, JointLimits, MockRobot, MujocoRobot, Rate, ViewerClosed, camera_info, so101
 
 
 def _mujoco():
@@ -155,3 +157,73 @@ def test_trajectory_violations_flag_position_and_speed():
     beyond = ok.copy()
     beyond[2, 0] = lim.upper[0] + 0.1
     assert any(v.startswith("t=0.200s shoulder_pan=") and "outside" in v for v in lim.trajectory_violations(t, beyond))
+
+
+def _sim(time_mode):
+    return so101.simulated(cameras=(CameraSpec("overhead", width=160, height=120, fps=10.0),), time_mode=time_mode)
+
+
+def test_lockstep_physics_waits_for_the_caller():
+    with _sim("lockstep") as robot:
+        t0 = robot.read().joints.stamp.acquired
+        time.sleep(0.2)
+        assert robot.read().joints.stamp.acquired == t0
+
+
+def test_realtime_physics_runs_while_the_caller_blocks():
+    with _sim("realtime") as robot:
+        w0 = time.perf_counter()
+        t0 = robot.read().joints.stamp.acquired
+        time.sleep(0.3)
+        w1 = time.perf_counter()
+        dt_sim, dt_wall = robot.read().joints.stamp.acquired - t0, w1 - w0
+        assert dt_sim == pytest.approx(dt_wall, abs=0.03)
+        assert robot.clock.max_lag_s < 0.05
+
+
+def test_realtime_rate_drops_missed_ticks_instead_of_bursting():
+    with _sim("realtime") as robot:
+        rate = Rate(robot.clock, robot.control_rate_hz)
+        rate.sleep()
+        time.sleep(0.3)
+        assert rate.sleep() > 0.2
+        t0 = robot.clock.now()
+        rate.sleep()
+        assert robot.clock.now() - t0 == pytest.approx(1 / robot.control_rate_hz, abs=0.01)
+
+
+def test_realtime_commands_are_tracked():
+    with _sim("realtime") as robot:
+        target = (robot.limits.lower + robot.limits.upper) / 2 + 0.2
+        results = _ramp_to(robot, target, seconds=1.0)
+        assert all(not r.violations for r in results)
+        time.sleep(0.5)
+        assert np.abs(robot.read().joints.position - target).max() < 0.01
+
+
+def test_realtime_physics_errors_reach_the_caller():
+    class ClosedViewer:
+        def is_running(self):
+            return False
+
+        def sync(self):
+            pass
+
+    robot = _sim("realtime")
+    robot.attach_viewer(ClosedViewer())
+    with robot, pytest.raises(ViewerClosed):
+        robot.clock.wait_until(robot.clock.now() + 0.1)
+
+
+def test_realtime_physics_stops_on_disconnect():
+    robot = _sim("realtime")
+    with robot:
+        time.sleep(0.05)
+    t = robot.data.time
+    time.sleep(0.1)
+    assert robot.data.time == t
+
+
+def test_unknown_time_mode_is_rejected():
+    with pytest.raises(ValueError, match="time_mode"):
+        _sim("fast")

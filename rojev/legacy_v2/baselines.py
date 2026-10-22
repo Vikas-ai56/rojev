@@ -8,7 +8,9 @@ supervisor; the deployable arm decides from images without per-subtask checks.
 """
 from collections.abc import Callable
 
-from rojev.supervisor.base import Decision, DecisionContext, SubtaskSource
+from rojev.eval.deciders import next_after_latest_done
+
+from .arms import Decision, DecisionContext, SubtaskSource
 
 
 class FixedSequence(SubtaskSource):
@@ -42,8 +44,7 @@ class OracleSequence(SubtaskSource):
 
     def decide(self, ctx: DecisionContext) -> Decision:
         now = [bool(self.is_done(i)) for i in range(len(self.sequence))]
-        latest = max((i for i, ok in enumerate(now) if ok), default=-1)
-        previous, self.index = self.index, latest + 1
+        previous, self.index = self.index, next_after_latest_done(now)
         if self.index >= len(self.sequence):
             return Decision(None, "all subtasks done (ground truth)", {"index": self.index, "now": now})
         if ctx.current is None:

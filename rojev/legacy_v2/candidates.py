@@ -7,6 +7,8 @@ Fitted once from ordered subtask timelines of the executor's training episodes (
   D. canonical wording  one most-frequent surface form per normalised meaning
 Scores from A, B, C are each scaled to [0, 1] and summed; the top-k canonical subtasks are returned.
 See docs/paper/method.md §3.
+
+`SYNONYMS` is an explicit, reviewed table (normalisation only; extend deliberately, never automatically).
 """
 import math
 import re
@@ -17,7 +19,6 @@ START = "<start>"
 ARTICLES = {"a", "an", "the"}
 STOPWORDS = ARTICLES | {"to", "of", "and", "in", "on", "into", "onto", "from", "with", "it", "its", "then", "for", "at",
                         "by", "up", "down", "is", "are", "that", "this", "please", "make", "sure"}
-# Explicit, reviewed synonym table (normalisation only; extend deliberately, never automatically).
 SYNONYMS = {"fridge": "refrigerator"}
 
 
@@ -54,14 +55,14 @@ class BM25:
 
 @dataclass
 class CandidateBuilder:
-    surface: dict[str, str]  # normalised key -> most frequent original phrasing
-    transitions: dict[str, Counter]  # previous key (or START) -> Counter of next keys
-    task_subtasks: dict[str, Counter]  # task string -> Counter of subtask keys used in its episodes
+    surface: dict[str, str]  
+    transitions: dict[str, Counter]  
+    task_subtasks: dict[str, Counter]  
     task_names: list[str]
     bm25: BM25
-    words: dict[str, set[str]] = field(default_factory=dict)  # key -> content words
+    words: dict[str, set[str]] = field(default_factory=dict)  
     similar_tasks: int = 10
-    _task_scores: dict[str, dict[str, float]] = field(default_factory=dict, repr=False)  # B depends only on the task
+    _task_scores: dict[str, dict[str, float]] = field(default_factory=dict, repr=False)  
 
     @classmethod
     def fit(cls, episodes: list[tuple[str, list[str]]], similar_tasks: int = 10) -> "CandidateBuilder":
@@ -102,19 +103,20 @@ class CandidateBuilder:
 
     def scores(self, task: str, history: list[str], evidence_words: set[str] = frozenset(),
                weights: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> dict[str, float]:
-        """Per-key score = wA·A + wB·B + wC·C, each source scaled to [0, 1]. C only re-ranks keys proposed by A or B."""
+        """Per-key score = wA·A + wB·B + wC·C, each source scaled to [0, 1]: A = transitions from the last subtask,
+        B = similar tasks, C = word overlap with the task and evidence (only re-ranks keys proposed by A or B)."""
         wa, wb, wc = weights
         total: dict[str, float] = defaultdict(float)
         prev = normalize(history[-1]) if history else START
         nxt = self.transitions.get(prev)
-        if nxt and wa:  # A
+        if nxt and wa:
             top = max(nxt.values())
             for k, c in nxt.items():
                 total[k] += wa * c / top
-        if wb:  # B
+        if wb:
             for k, v in self._similar_task_scores(task).items():
                 total[k] += wb * v
-        query = content_words(task) | set(evidence_words)  # C
+        query = content_words(task) | set(evidence_words)
         if wc and query:
             for k in list(total):
                 w = self.words.get(k, set())

@@ -1,5 +1,5 @@
 """rojev.supervisor.candidates on a toy corpus."""
-from rojev.supervisor import CandidateBuilder, normalize
+from rojev.legacy_v2 import CandidateBuilder, normalize
 
 EPISODES = [
     ("Put the milk in the fridge.", ["open the fridge door", "pick up the milk", "place the milk in the fridge",

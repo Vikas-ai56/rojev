@@ -5,7 +5,7 @@ safety filter, and the same loop would drive the real arm. With --onejev, the ov
 is sent to OneJev for observation only; a separate evaluator checks the answers against simulator ground truth.
 
   uv run python examples/scripted_trajectory.py                    # headless
-  uv run mjpython examples/scripted_trajectory.py --viewer         # watch it (macOS needs mjpython for the viewer)
+  uv run mjpython examples/scripted_trajectory.py --viewer         # watch it in real time (macOS needs mjpython)
   uv run python examples/scripted_trajectory.py --onejev           # also query OneJev (needs `make qev`)
   uv run python examples/scripted_trajectory.py --onejev --hide-box --instruction "Describe the scene"
 """
@@ -21,8 +21,9 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from qev import Choice, Client, Noul
 
-from rojev import onejev, tracing
-from rojev.robot import CameraSpec, Rate, so101
+from rojev.observability import tracing
+from rojev.system2.models import onejev
+from rojev.robot import TIME_MODES, CameraSpec, Rate, so101
 
 HOME = {"shoulder_pan": 0.0, "shoulder_lift": 0.0, "elbow_flex": 0.0, "wrist_flex": 0.0, "wrist_roll": 0.0, "gripper": 0.0}
 # ctrl of the "pickup" keyframe in Menagerie's robotstudio_so101/scene_box.xml
@@ -85,6 +86,8 @@ def evaluate(robot, r, tracer, run_id: str, label: str) -> list[str]:
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--viewer", action="store_true", help="open the passive MuJoCo viewer (run under mjpython)")
+    p.add_argument("--time-mode", choices=TIME_MODES, help="default: realtime with --viewer (physics keeps running "
+                   "during OneJev calls), else lockstep (physics advances only when the loop waits)")
     p.add_argument("--onejev", action="store_true", help="ask OneJev about each checkpoint frame (observe only)")
     p.add_argument("--hide-box", action="store_true", help="make the green box invisible (physics unchanged)")
     p.add_argument("--instruction", default="Approach the visible green box")
@@ -94,7 +97,8 @@ def main():
 
     provider = tracing.setup(args.project)
     tracer = trace.get_tracer("examples.scripted_trajectory")
-    robot = so101.simulated(cameras=(CameraSpec(CAMERA),), realtime=args.viewer)
+    time_mode = args.time_mode or ("realtime" if args.viewer else "lockstep")
+    robot = so101.simulated(cameras=(CameraSpec(CAMERA),), time_mode=time_mode)
     if args.hide_box:  # scenario setup on the simulated world, not something the pipeline can do
         robot.model.geom_rgba[robot.model.geom("box").id, 3] = 0.0
     names = robot.joint_names
@@ -102,7 +106,8 @@ def main():
     viewer = mujoco.viewer.launch_passive(robot.model, robot.data) if args.viewer else None
 
     run_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
-    print(f"run {run_id}  (Phoenix project '{args.project}', session {run_id}, {robot.control_rate_hz:g} Hz control)")
+    print(f"run {run_id}  (Phoenix project '{args.project}', session {run_id}, {robot.control_rate_hz:g} Hz control, "
+          f"{time_mode})")
     with robot, tracer.start_as_current_span("episode") as ep:
         if viewer is not None:
             robot.attach_viewer(viewer)
@@ -110,10 +115,10 @@ def main():
         ep.set_attribute("session.id", run_id)
         ep.set_attribute("input.value", json.dumps({"scene": "pick_place.xml", "waypoints": [w[0] for w in WAYPOINTS],
                                                     "hide_box": args.hide_box, "instruction": args.instruction,
-                                                    "control_rate_hz": robot.control_rate_hz}))
+                                                    "control_rate_hz": robot.control_rate_hz, "time_mode": time_mode}))
         rate, obs = Rate(robot.clock, robot.control_rate_hz), robot.read()
         target, wall_t0 = obs.joints.position.copy(), time.perf_counter()
-        worst, failures, paused = 0.0, [], 0.0
+        worst, failures, checkpoint_wall = 0.0, [], 0.0
         for name, spec, move_s, checkpoint in WAYPOINTS:
             start = target.copy()
             target = start.copy()
@@ -160,8 +165,8 @@ def main():
                 print(f"  {name:13s} final err max {err.max():.4f} rad ({names[int(err.argmax())]})  peak {peak:.3f}  "
                       f"floor contacts {floor_hits}  clamps {len(clamps)}  t={robot.clock.now():.2f}s" + report(problems))
             if checkpoint and client is not None:
-                t_pause = time.perf_counter()
-                with robot.clock.paused(), tracer.start_as_current_span(f"checkpoint:{name}") as cp:
+                t_check = time.perf_counter()
+                with tracer.start_as_current_span(f"checkpoint:{name}") as cp:
                     cp.set_attribute("openinference.span.kind", "CHAIN")
                     cp.set_attribute("session.id", run_id)
                     frame = obs.cameras[CAMERA]
@@ -176,8 +181,8 @@ def main():
                     failures += problems
                     print(f"    OneJev @ {name}: P(box visible)={r.answers['box_visible'].noul:.3f}  "
                           f"next={ {k: round(v, 3) for k, v in r.answers['next'].probabilities.items()} }" + report(problems))
-                paused += time.perf_counter() - t_pause
-        wall = time.perf_counter() - wall_t0 - paused
+                checkpoint_wall += time.perf_counter() - t_check
+        wall = time.perf_counter() - wall_t0 - checkpoint_wall
         ep.set_attribute("output.value", json.dumps({"max_final_error_rad": round(worst, 4), "sim_time_s": round(robot.clock.now(), 3),
                                                      "motion_wall_time_s": round(wall, 3), "failures": failures}))
         fail(ep, failures)

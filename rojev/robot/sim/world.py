@@ -1,6 +1,9 @@
 """MuJoCo world utilities: loading and composing scenes, joint readout, contacts, rendering, segmentation ground truth.
 
 Used by the simulator backend and by evaluators. Pipeline code reaches the robot through `rojev.robot` instead.
+
+`ROBOT_OPTIONS` are the solver settings the robot model is tuned for; `MjSpec.attach` would otherwise keep the world
+file's defaults.
 """
 import os
 from pathlib import Path
@@ -8,10 +11,9 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[3]
 SO101_DIR = Path(os.environ.get("ROJEV_SO101_DIR", REPO / "vendor/mujoco_menagerie/robotstudio_so101"))
 SCENES_DIR = REPO / "scenes"
-# Solver settings the robot model is tuned for; MjSpec.attach would otherwise keep the world file's defaults.
 ROBOT_OPTIONS = ("timestep", "iterations", "ls_iterations", "impratio", "integrator", "cone")
 
 

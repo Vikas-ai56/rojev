@@ -2,8 +2,8 @@
 import numpy as np
 from qev.client import Response, _Answer
 
-from rojev.executor import Observation
-from rojev.supervisor import CandidateBuilder, DecisionContext, OneJevSupervisor
+from rojev.legacy_v2 import CandidateBuilder, DecisionContext, OneJevSupervisor
+from rojev.protocol import Observation
 
 EPISODES = [("Put the milk in the fridge.", ["open the fridge door", "pick up the milk", "place the milk in the fridge",
                                              "close the fridge door"])] * 5

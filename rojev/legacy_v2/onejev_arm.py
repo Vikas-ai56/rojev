@@ -1,6 +1,6 @@
 """Arm D: OneJev picks the next subtask from the current images; MJev-Spatial judges the candidates.
 
-One generic rule, no per-subtask or per-object code (docs/features/v2-arm-d.md):
+One generic rule, no per-subtask or per-object code (v2 arm D; decisions.md 2026-10-18/19):
   1. candidates  shortlist (`CandidateBuilder`, K) given the task and the subtasks so far
   2. evidence    MJev, same template for every judged subtask s (current + recent + top M candidates):
                  "Robot step: '<s>'. Which is true right now?"  → done / possible / blocked
@@ -19,10 +19,9 @@ import time
 import numpy as np
 from qev import Choice, Client
 
-from rojev import onejev
-from rojev.perception import RemoteMJev
+from rojev.system2.models import RemoteMJev, onejev
 
-from .base import Decision, DecisionContext, SubtaskSource
+from .arms import Decision, DecisionContext, SubtaskSource
 from .candidates import CandidateBuilder
 
 STATES = {"done": "done: its goal is already achieved",
@@ -37,6 +36,9 @@ def evidence_question(i: int, subtask: str) -> dict:
 
 
 class OneJevSupervisor(SubtaskSource):
+    """Arm D. `progress` is the task-progress summary (oldest first); `started` the step at which the current subtask
+    began."""
+
     name = "D-onejev"
 
     def __init__(self, client: Client, candidates: CandidateBuilder, mjev: RemoteMJev | None,
@@ -44,8 +46,8 @@ class OneJevSupervisor(SubtaskSource):
                  session_id: str | None = None):
         self.client, self.candidates, self.mjev, self.cameras = client, candidates, mjev, cameras
         self.k, self.m, self.recent, self.seed, self.session_id = k, m, recent, seed, session_id
-        self.progress: list[dict] = []  # task-progress summary, oldest first
-        self.started = 0  # step at which the current subtask began
+        self.progress: list[dict] = []
+        self.started = 0
 
     def _evidence(self, images: list[np.ndarray], judged: list[str]) -> tuple[dict, dict]:
         """{subtask: {done, possible, blocked}} from one batched MJev request."""
@@ -58,7 +60,6 @@ class OneJevSupervisor(SubtaskSource):
     def decide(self, ctx: DecisionContext) -> Decision:
         obs, current, history = ctx.observation, ctx.current, list(ctx.history)
         images = [obs.images[c] for c in self.cameras]
-        # Next steps assume the current one is finished; "continue current" stays an option either way.
         shortlist = [s for s in self.candidates.shortlist(obs.task, history + ([current] if current else []), self.k)
                      if s != current]
         recent = [h for h in history[-self.recent:] if h != current]
@@ -71,7 +72,7 @@ class OneJevSupervisor(SubtaskSource):
         if current:
             options["continue"] = f"continue the current subtask: {current}"
         options["complete"] = COMPLETE
-        for entry in self.progress:  # re-checked entries get fresh evidence
+        for entry in self.progress:  
             if entry["subtask"] in evidence:
                 entry.update(p_done_now=round(evidence[entry["subtask"]]["done"], 2), checked_at_step=ctx.step)
         state = {"image": "<image:1> = robot cameras side by side: " + ", ".join(self.cameras),

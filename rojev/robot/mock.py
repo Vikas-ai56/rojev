@@ -4,7 +4,7 @@ import numpy as np
 
 from .base import Clock, Robot
 from .limits import JointLimits
-from .types import JointCommand, JointState, Observation, Stamp
+from .types import JointCommand, JointState, RobotObservation, Stamp
 
 
 class ManualClock(Clock):
@@ -34,11 +34,11 @@ class MockRobot(Robot):
     def _disconnect(self) -> None:
         pass
 
-    def _read(self) -> Observation:
+    def _read(self) -> RobotObservation:
         t = self.clock.now()
         state = JointState(Stamp(t, t, self._seq), self.joint_names, self._q.copy(), None)
         self._seq += 1
-        return Observation(state, {})
+        return RobotObservation(state, {})
 
     def _write(self, cmd: JointCommand) -> None:
         self._q = cmd.position.copy()
