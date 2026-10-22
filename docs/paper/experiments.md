@@ -78,7 +78,7 @@ Model under test unless stated: OneJev [onejev] 1.5 0.8B Q8_0 GGUF (`mradermache
 - Paraphrases coexist: "open the fridge door" 596; 1,237 fridge-related variants.
 
 ## E9 — Candidate-builder coverage@K, exact strings (2026-10-17)
-- Data: 32,043 ordered timelines (`data/vocab/pi052_robocasa_sequences.jsonl`; mean 5.48 subtasks/episode, median 5, max 43). Builder: `rojev/supervisor/candidates.py`. Script: `playground/candidates/coverage.py`. Run: `results/runs/e9_coverage_20261017-174343/`.
+- Data: 32,043 ordered timelines (`data/vocab/pi052_robocasa_sequences.jsonl`; mean 5.48 subtasks/episode, median 5, max 43). Builder: `rojev/supervisor/candidates.py` (now `rojev/legacy_v2/candidates.py`). Script: `playground/candidates/coverage.py`. Run: `results/runs/e9_coverage_20261017-174343/`.
 - Hit = true next subtask (normalised: lowercase, no punctuation/articles, fridge→refrigerator) is in the top-K shortlist.
 
 | Split | Ceiling (target string exists in fitted vocab) | Variant | @1 | @5 | @10 | @20 | @50 |
@@ -165,9 +165,10 @@ Model under test unless stated: OneJev [onejev] 1.5 0.8B Q8_0 GGUF (`mradermache
 | T3 ≤ 8 distinct meanings | 30.0% | 40.0% |
 | T4 T3 + 3 separate images | 20.0% | — |
 
-- Findings: 4B ≈ 2× 0.8B on the current prompt; **blank image does not lower accuracy for either model** → decisions come from task + history text, not the cameras; distinct options help 0.8B; separate images do not help; instruction copy rate low (0–17.5%).
+- Findings: 4B ≈ 2× 0.8B on the current prompt; distinct options help 0.8B; separate images do not help; instruction copy rate low (0–17.5%).
+- **Correction (2026-10-19; see `docs/features/v2-selector-approaches.md` (removed 2026-10-22; in git history)):** the option shuffle seed included the variant, so real vs blank image saw different option orders (0/40 identical). Exact choice changed on 25/40 (0.8B) and 15/40 (4B); real-correct/blank-wrong 5 vs 3 (0.8B), 3 vs 4 (4B). ⇒ **no demonstrated accuracy benefit from images** — NOT proof that OneJev ignores them. Metric (verb + first object) can also credit a wrong destination. Re-run with fixed ordering, matched counterfactuals and a destination-aware metric.
 - Caveat: n = 40 (≈ ±15 points); widen before paper claims. Labels are π0.5²'s noisy annotations.
-- Consequence: prompt fixes alone cannot make OneJev read the scene → train OneJev on image-dependent decisions (same benchmark = data + yardstick).
+- Consequence (revised): benchmark must be fixed before conclusions; approaches in `docs/features/v2-selector-approaches.md` (removed 2026-10-22; in git history).
 
 ## Planned (not yet run)
 - π0.5² language following: no standalone diagnostic; per-subtask success vs the chosen subtask text is logged in the supervisor runs (arms A–E).
