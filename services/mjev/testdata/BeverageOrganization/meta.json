@@ -1,0 +1,10 @@
+{
+  "task": "BeverageOrganization",
+  "instruction": "Move the drinks to the dining counter.",
+  "subtasks": [
+    "open the cabinet door",
+    "pick up the yellow bottle",
+    "move to the dining counter"
+  ],
+  "seed": 0
+}

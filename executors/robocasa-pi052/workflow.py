@@ -37,11 +37,11 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from qev import Client
 
-from rojev import tracing
-from rojev.executor import ActionChunk, Executor, Observation, RemoteExecutor
-from rojev.eval import FixedSequence, OracleSequence
-from rojev.perception import RemoteMJev
-from rojev.supervisor import CandidateBuilder, DecisionContext, OneJevSupervisor, normalize
+from rojev.legacy_v2 import CandidateBuilder, DecisionContext, FixedSequence, OneJevSupervisor, OracleSequence, normalize
+from rojev.observability import tracing
+from rojev.protocol import Observation
+from rojev.system1 import ActionChunk, Policy, RemotePolicy
+from rojev.system2.models import RemoteMJev
 from tasks import TASKS
 
 HERE = Path(__file__).resolve().parent
@@ -52,7 +52,7 @@ PANEL_H = 230
 DEFAULT_MAX_STEPS = 2000  # tasks without a tasks.py spec (lever; specs use ≈ 1.5 × p90 demo length)
 
 
-class HoldExecutor(Executor):
+class HoldPolicy(Policy):
     """Zero actions (robot holds still): checks the loop, live window and logging without a GPU."""
 
     def act(self, obs: Observation, subtask: str) -> ActionChunk:
@@ -147,8 +147,8 @@ def main() -> int:
     tracer = trace.get_tracer("rojev.workflow")
     need_services = a.executor == "remote" or (a.arm == "D" and not a.no_mjev)
     services = service_addresses(a.service, "armd" if a.arm == "D" else "serve") if need_services else {}
-    executor: Executor = HoldExecutor() if a.executor == "hold" else RemoteExecutor(**services["pi052"])
-    if isinstance(executor, RemoteExecutor):
+    executor: Policy = HoldPolicy() if a.executor == "hold" else RemotePolicy(**services["pi052"])
+    if isinstance(executor, RemotePolicy):
         print(f"[workflow] executor service: {executor.health()}", flush=True)
 
     t0 = time.perf_counter()

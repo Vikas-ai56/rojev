@@ -1,0 +1,25 @@
+# OneJev decision service (cloud GPU): `qev serve` with the PyTorch backend. Own env: qev[torch] needs a CUDA torch and
+# must not share pins with the π0.5² executor or MJev. Code pinned in config/onejev.commit -> vendor/OneJev; weights
+# pinned in config/onejev_weights.txt.
+[project]
+name = "rojev-service-onejev"
+version = "0.0.1"
+requires-python = "==3.12.*"
+dependencies = [
+    "qev[torch]",
+    "torch>=2.9,<2.12",
+    "torchvision",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+qev = { path = "../../vendor/OneJev", editable = true }
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]

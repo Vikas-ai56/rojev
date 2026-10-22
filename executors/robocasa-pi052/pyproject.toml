@@ -11,6 +11,10 @@ dependencies = [
     "rojev",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
 [tool.uv]
 package = false
 

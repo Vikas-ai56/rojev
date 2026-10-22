@@ -1,5 +1,7 @@
 # v2 executor: π0.5² (`lerobot/pi052_robocasa`)
 
+**Status:** v2 set-up record (2026-10-17). Still current: the checkpoint, its steering point (subtask slot, empty = own planner) and the subtask vocabulary. Superseded: the OneJev arm (v3: [`v3-runtime.md`](v3-runtime.md)); service, adapter and transport now in [`remote-models.md`](remote-models.md); GPU boxes via [`gpu-setup.md`](gpu-setup.md) (Kaggle runner kept for history).
+
 ## Set up (2026-10-17)
 - Code: LeRobot branch `feat/smolvla-on-steerable` @9d00293 (`config/lerobot-steerable.commit`) → `vendor/lerobot-steerable`.
 - Env: `executors/robocasa-pi052/` (own uv project; `lerobot[pi,dataset]`, robocasa, robosuite; same robocasa pin override). `PI052Policy` imports; torch 2.11, transformers 5.5.4, mujoco 3.3.1.

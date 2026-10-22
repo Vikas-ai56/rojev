@@ -1,0 +1,38 @@
+# MJev-Spatial evidence service (cloud GPU). Own env: MJev pins torch 2.9 + transformers 5.17.0, which conflict with
+# the π0.5² executor env (torch 2.11, transformers 5.5.4). Code pinned in config/mjev.commit -> vendor/MJev-Spatial.
+[project]
+name = "rojev-service-mjev"
+version = "0.0.1"
+requires-python = "==3.12.*"
+dependencies = [
+    "flash-linear-attention>=0.5.2 ; sys_platform == 'linux'",
+    "mjev-spatial[inference]>=0.2.0",
+    "torch>=2.9,<2.10",
+    "torchvision>=0.24,<0.25",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+mjev-spatial = { path = "../../vendor/MJev-Spatial", editable = true }
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+
+# Upstream pins are inconsistent: transformers==5.17.0 requires huggingface-hub>=1.5, mjev-spatial pins <1.
+# Only that pin is relaxed (to what transformers 5.17.0 requires); everything else is MJev's own list.
+[[tool.uv.dependency-metadata]]
+name = "mjev-spatial"
+version = "0.2.0"
+requires-dist = [
+  "torch>=2.9,<2.10 ; extra == 'inference'", "torchvision>=0.24,<0.25 ; extra == 'inference'",
+  "transformers==5.17.0 ; extra == 'inference'", "numpy>=1.26,<3 ; extra == 'inference'",
+  "Pillow>=10 ; extra == 'inference'", "safetensors>=0.4.5 ; extra == 'inference'",
+  "huggingface-hub>=1.5,<2 ; extra == 'inference'",
+]
+provides-extras = ["inference"]

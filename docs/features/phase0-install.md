@@ -1,5 +1,7 @@
 # Phase 0 — install (G0)
 
+**Status:** install record of the v1 SO-101 plan (2026-10-16), partly current: toolchain, MuJoCo and Menagerie rows and `tests/test_install.py` still apply; the OneJev rows are stale (the pin is now OneJev 1.6 4B, `config/onejev_weights.txt`, decisions 2026-10-19; OneJev and MJev serve on the GPU box, [`gpu-setup.md`](gpu-setup.md)).
+
 Plan reference: §1 and gate **G0 — install** (viewer, actuator inventory, PNG, OneJev Choice response).
 **Status: G0 passed on 2026-10-16** (MacBook Air M5 `Mac17,3`, 16 GB, macOS 26.6.2).
 

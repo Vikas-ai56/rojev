@@ -1,5 +1,2 @@
-repo mradermacher/OneJev1.5-0.8B-GGUF @ 57b376b8e75f3bc6cf861dbf8fc5c37a81213db9
-tokenizer OmniJev/OneJev1.5-0.8B @ 7106bc6ee2fb5d5e0163f6eb7b5c5e18a45ca975
+repo OmniJev/OneJev1.6-4B @ 7d55a87ce87ff77e25c4a43eb637dc3a52342977
 calibration.json: absent upstream (identity calibration)
-sha256 237b5e71409b9d72ddc5d2c8acbf881ce0c3dbcd6f8ba1b4718b3fd666c63267  OneJev1.5-0.8B.mmproj-f16.gguf
-sha256 df1885740210c36ab14795cf4e7a216e9e65b695c0a5c9cbadb9694b419fb75e  OneJev1.5-0.8B.Q8_0.gguf

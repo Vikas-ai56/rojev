@@ -13,12 +13,15 @@ from .types import JointCommand
 
 @dataclass(frozen=True)
 class JointLimits:
+    """`lower` / `upper` in rad; `max_velocity` in rad/s (inf where unknown); `max_effort` the actuator force limit (inf
+    where unlimited); `sources` says where each kind of limit came from."""
+
     names: tuple[str, ...]
-    lower: np.ndarray  # rad
-    upper: np.ndarray  # rad
-    max_velocity: np.ndarray  # rad/s; inf where unknown
-    max_effort: np.ndarray  # actuator force limit; inf where unlimited
-    sources: dict[str, str]  # where each kind of limit came from
+    lower: np.ndarray
+    upper: np.ndarray
+    max_velocity: np.ndarray
+    max_effort: np.ndarray
+    sources: dict[str, str]
 
     @classmethod
     def from_model(cls, m: mujoco.MjModel, names: tuple[str, ...], max_velocity: dict[str, float] | None = None,

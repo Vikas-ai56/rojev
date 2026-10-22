@@ -1,5 +1,7 @@
 # Engineering notes (moved from docs/paper/appendix-engineering.md, 2026-10-17)
 
+**Status:** v2-era build notes (2026-10-17), kept for history: the licence and reuse rules still apply to code still in use; the arm and selector rows (OneJev hook, arm C, G3 memory) are v2 and superseded by v3 ([`v3-runtime.md`](v3-runtime.md)).
+
 Not paper content; kept for the build. Paper-relevant pitfalls stay in `docs/paper/appendix-engineering.md`.
 
 ## 1. Code reuse decisions and licences
