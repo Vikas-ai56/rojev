@@ -1,4 +1,8 @@
-"""OpenTelemetry tracing to the local Phoenix server (`make phoenix`, UI at http://localhost:6006)."""
+"""OpenTelemetry tracing to the local Phoenix server (`make phoenix`, UI at http://localhost:6006).
+
+`MAX_IMAGE_CHARS`: OpenInference replaces base64 images longer than 32k chars with "__REDACTED__"; a 640×480 frame is
+~100k, so the limit is raised.
+"""
 import os
 import urllib.request
 
@@ -6,7 +10,6 @@ from openinference.instrumentation import TraceConfig
 from phoenix.otel import register
 
 PHOENIX_URL = os.environ.get("PHOENIX_URL", "http://localhost:6006")
-# OpenInference replaces base64 images longer than 32k chars with "__REDACTED__"; a 640x480 frame is ~100k.
 MAX_IMAGE_CHARS = 1_000_000
 
 
