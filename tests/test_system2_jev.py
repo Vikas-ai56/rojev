@@ -6,12 +6,12 @@ import pytest
 from rojev.control import ExecutionRuntime, Guard
 from rojev.eval import NativePlanner
 from rojev.owner import StateOwner
-from rojev.protocol import (ROBOT, USER, Capture, Deviation, Hold, Keyframe, Observation, ObservationSnapshot,
-                            Operation, OpKind, Turn, UserInstruction)
+from rojev.protocol import (ROBOT, UNANSWERED, USER, Capture, Deviation, Hold, Keyframe, Observation,
+                            ObservationSnapshot, Operation, OpKind, Turn, UserInstruction)
 from rojev.robot import KEEP, ActionDim, ActionSpec
 from rojev.system2 import DecisionWorker
 from rojev.system2.jev import (ABORT, ASK, CLARIFY, CONTINUE, RESUME, RETRY, REVISE, WAIT, WAITING, Calibration,
-                               JevInteraction, candidates, fit_temperature)
+                               JevInteraction, candidates, fit_calibration, fit_margin, fit_temperature)
 from rojev.system2.jev.chooser import situation
 
 OBS = Observation({"left": np.zeros((4, 4, 3), np.uint8), "right": np.zeros((4, 4, 3), np.uint8)},
@@ -112,8 +112,19 @@ def test_temperature_scaling_and_fit():
     sharp = Calibration(temperature=0.5).apply({"a": 0.6, "b": 0.4})
     assert sharp["a"] > 0.6 and sum(sharp.values()) == pytest.approx(1.0)
     rows = [{"a": 0.9, "b": 0.1}] * 6 + [{"a": 0.9, "b": 0.1}] * 4
-    fitted = fit_temperature(rows, ["a"] * 6 + ["b"] * 4, margin=0.1)
-    assert fitted.fitted and fitted.cases == 10 and fitted.temperature > 1.0
+    assert fit_temperature(rows, ["a"] * 6 + ["b"] * 4) > 1.0
+
+
+def test_the_margin_is_the_smallest_that_reaches_the_target_accuracy():
+    confident = [{"a": 0.95, "b": 0.05}] * 8
+    unsure = [{"a": 0.55, "b": 0.45}] * 4
+    rows, labels = confident + unsure, ["a"] * 8 + ["a", "b", "b", "b"]
+    margin, coverage = fit_margin(rows, labels, 1.0, target_accuracy=0.95)
+    assert 0.1 < margin <= 0.9 and coverage == 8 / 12
+    assert fit_margin(rows, labels, 1.0, target_accuracy=0.5) == (0.0, 1.0)
+    assert fit_margin([{"a": 0.9, "b": 0.1}] * 3, ["b"] * 3, 1.0, target_accuracy=0.9) == (1.0, 0.0)
+    fitted = fit_calibration(rows, labels, target_accuracy=0.95)
+    assert fitted.fitted and fitted.cases == 12 and fitted.coverage == 8 / 12
     assert Calibration.from_json(fitted.to_json()) == fitted
 
 
@@ -143,7 +154,7 @@ class WordChooser:
     name = "words"
 
     def choose(self, snapshot, options):
-        text = snapshot.instruction
+        text = snapshot.latest_utterance
         best = ABORT if "stop" in text else RESUME if "go on" in text else CONTINUE
         return {o.label: (0.9 if o.label == best else 0.1 / (len(options) - 1)) for o in options}
 
@@ -171,3 +182,38 @@ def test_with_the_owner_a_stop_holds_through_heartbeats_and_go_on_resumes_the_st
     owner.handle(UserInstruction("go on"))
     owner.handle(jev.decide(interaction.requests[-1]))
     assert owner.hold is None and owner.desired.operation == step
+
+
+def test_a_hold_taken_because_nothing_answered_is_decided_on_the_recheck():
+    held = snap(trigger="hold", op=Operation(OpKind.GUARDED_WAIT, template=UNANSWERED),
+                hold=Hold(Operation(OpKind.GUARDED_WAIT, template=UNANSWERED), 1.0, STEP), instruction="stop")
+    chooser = StubChooser({ABORT: 0.9})
+    v = JevInteraction(chooser).decide(held)
+    assert v.operation.kind == OpKind.ABORT and chooser.offered[-1][0] == RESUME
+
+
+def test_only_revise_adopts_new_task_text():
+    said = snap(dialogue=[Turn(4.0, USER, 1, "actually, put the cube on the plate")])
+    revise = JevInteraction(StubChooser({REVISE: 0.9})).decide(said)
+    assert revise.operation == Operation(OpKind.SWITCH_TO) and revise.task == "actually, put the cube on the plate"
+    for act in (CONTINUE, WAIT, ABORT):
+        assert JevInteraction(StubChooser({act: 0.9})).decide(said).task is None
+
+
+def test_onejev_sees_neutral_option_ids_and_scores_map_back_to_acts(monkeypatch):
+    from types import SimpleNamespace
+
+    from rojev.system2.jev import OneJevChooser, Option
+    from rojev.system2.jev import chooser as chooser_module
+
+    seen = {}
+
+    def fake_system_one(client, image, state, questions, **kw):
+        seen["criteria"] = questions["act"].criteria
+        return SimpleNamespace(answers={"act": SimpleNamespace(probabilities={"o1": 0.2, "o2": 0.8})})
+
+    monkeypatch.setattr(chooser_module.onejev, "system_one", fake_system_one)
+    options = [Option(CONTINUE, "keep holding still"), Option(RESUME, "go on with the interrupted step")]
+    scores = OneJevChooser(None, ["left", "right"]).score(list(OBS.images.values()), {}, options)
+    assert set(seen["criteria"]) == {"o1", "o2"} and "continue" not in " ".join(seen["criteria"])
+    assert scores == {CONTINUE: 0.2, RESUME: 0.8}

@@ -32,6 +32,7 @@ Where each kind of document lives. Code map: [`CODEBASE.md`](CODEBASE.md).
 | [`remote-models.md`](features/remote-models.md) | Remote models: transport (HTTP/1.1 keep-alive, HTTP/3), frame codecs, π0.5² / OneJev / MJev services, WAN measurements |
 | [`system1-map.md`](features/system1-map.md) | System 1 map (start here for S1): call map, control loop → guard → runtime ← runner ← π0.5², commitment, transport, monitor, messages, timeline, evidence |
 | [`system2-map.md`](features/system2-map.md) | System 2 map (start here for S2): owner lanes / holds / dialogue, workers, planning lane, Jev v1, step watcher, messages to S1, timeline, evidence |
+| [`scorecard.md`](features/scorecard.md) | T8 revision-benchmark scorecard: inputs, window and answer rule, metric definitions, aggregation, what is not validated |
 | [`jev-interaction.md`](features/jev-interaction.md) | Jev v1 interaction lane (legal acts, calibration, abstention, budgets, REVISE), owner holds / dialogue / utterances / step events, MJev end-state checks + step watcher; flags, spoofs, tests, what is not validated |
 | [`live-harness.md`](features/live-harness.md) | Live RoboCasa harness: `realtime.py` flags and outputs, 19-case scenario matrix, invariants, declared spoofs, viewer, video, matrix results |
 | [`robot-interface.md`](features/robot-interface.md) | Robot interface (`rojev.robot`: MuJoCo SO-101, mock; hardware adapter later): limits, cameras, clocks and time modes |

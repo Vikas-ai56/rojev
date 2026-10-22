@@ -84,10 +84,10 @@ class Pi052Policy(Policy):
             torch.cuda.synchronize()
         return time.perf_counter()
 
-    def act(self, obs: Observation, subtask: str) -> ActionChunk:
+    def act(self, obs: Observation, subtask: str, timeout_s: float | None = None) -> ActionChunk:
         return self.act_samples(obs, subtask, 1)[0]
 
-    def act_samples(self, obs: Observation, subtask: str, k: int) -> list[ActionChunk]:
+    def act_samples(self, obs: Observation, subtask: str, k: int, timeout_s: float | None = None) -> list[ActionChunk]:
         """K chunks for one observation: one preprocessing, one subtask (planner mode), one K-row forward batch; each
         chunk postprocessed per action and mapped by `to_action_space`. Stage times are shared by the K chunks."""
         t0 = self._sync()

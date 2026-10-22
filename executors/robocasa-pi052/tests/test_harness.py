@@ -6,8 +6,9 @@ import numpy as np
 
 from harness.deciders import (KeywordChooser, RevisableSequence, RewriteReviser, RuleBasedInteraction, destination,
                               rewrite)
-from harness.invariants import Run, active_monotonic, changes_answered, gripper_held, no_stale_action
-from rojev.protocol import Capture, Hold, Observation, ObservationSnapshot, Operation, OpKind
+from embodiment import PANDA_OMRON
+from harness.invariants import Run, active_monotonic, changes_answered, no_stale_action, switches_held
+from rojev.protocol import USER, Capture, Hold, Observation, ObservationSnapshot, Operation, OpKind, Turn
 from rojev.system2.jev import CLARIFY, JevInteraction
 
 PICK = Operation(OpKind.SWITCH_TO, subtask="pick up the steak")
@@ -15,10 +16,13 @@ PLACE = Operation(OpKind.SWITCH_TO, subtask="place the steak in the microwave")
 SEQ = ["pick up the steak", "place the steak in the microwave", "press the start button"]
 
 
-def snap(text="task", op=None, trigger="instruction", rev=1, since=None, now=0.0, interrupted=None):
+def snap(text="task", op=None, trigger="instruction", rev=1, since=None, now=0.0, interrupted=None, task=None):
+    """`text` = what the user just said; `task` = the task text in force (default: the same words, i.e. adopted)."""
     hold = Hold(op, now, interrupted) if op is not None and not op.moves_robot() else None
-    return ObservationSnapshot(1, 1, now, Capture(0, now, Observation({}, np.zeros(16), text)), rev, text,
-                               1 if op else None, op, since, (), trigger, hold=hold)
+    task = text if task is None else task
+    return ObservationSnapshot(1, 1, now, Capture(0, now, Observation({}, np.zeros(16), task)), rev, task,
+                               1 if op else None, op, since, (), trigger, hold=hold,
+                               dialogue=(Turn(now, USER, rev, text=text),))
 
 
 def test_destination_and_rewrite():
@@ -82,8 +86,27 @@ def test_invariants_catch_what_they_promise():
               {"kind": "ack", "status": "activated", "cmd": 1, "t": 0.1},
               {"kind": "instruction", "text": "stop", "t": 1.0, "rev": 1}]
     run = run_of(ticks, events)
-    assert no_stale_action(run) and gripper_held(run) and active_monotonic(run) and changes_answered(run)
+    assert no_stale_action(run) and switches_held(run, PANDA_OMRON) and active_monotonic(run) and changes_answered(run)
     clean = run_of([tick(0.0), tick(0.05)], [{"kind": "instruction", "text": "go", "t": 1.0, "rev": 1},
                                              {"kind": "continue", "t": 1.2}])
-    assert not (no_stale_action(clean) or gripper_held(clean) or active_monotonic(clean) or changes_answered(clean))
+    assert not (no_stale_action(clean) or switches_held(clean, PANDA_OMRON) or active_monotonic(clean) or changes_answered(clean))
     assert json.dumps(run.summary)
+
+
+def test_jev_decisions_become_calibration_cases_a_person_can_label(tmp_path):
+    from calibrate_jev import images, labelled
+    from harness.recording import InteractionCases
+
+    cams = {"left": np.zeros((4, 4, 3), np.uint8), "right": np.full((4, 4, 3), 9, np.uint8)}
+    s = ObservationSnapshot(1, 7, 3.0, Capture(5, 3.0, Observation(cams, np.zeros(16), "task")), 1, "task", 1,
+                            PICK, 0.0, (), "instruction", dialogue=(Turn(3.0, USER, 1, text="stop now"),))
+    recorder = InteractionCases(JevInteraction(KeywordChooser(), reviser=RewriteReviser()), ["left", "right"],
+                                tmp_path, "run1")
+    assert recorder.decide(s).operation.kind == OpKind.ABORT and recorder.saved == 1
+    lines = (tmp_path / "labels.jsonl").read_text().splitlines()
+    assert json.loads(lines[0])["predicted"] == "abort" and json.loads(lines[0])["label"] is None
+    assert labelled(tmp_path) == []
+    (tmp_path / "labels.jsonl").write_text(lines[0].replace('"label": null', '"label": "abort"') + "\n")
+    [(case, label)] = labelled(tmp_path)
+    assert label == "abort" and "abort" in case["options"] and case["situation"]["user_just_said"] == "stop now"
+    assert [i[0, 0, 0] for i in images(tmp_path, case)] == [0, 9]

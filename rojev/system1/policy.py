@@ -23,14 +23,16 @@ class ActionChunk:
 
 class Policy(ABC):
     @abstractmethod
-    def act(self, obs: Observation, subtask: str) -> ActionChunk:
+    def act(self, obs: Observation, subtask: str, timeout_s: float | None = None) -> ActionChunk:
         """Actions for the next chunk, conditioned on `subtask` (the text the policy was trained to follow). An empty
-        `subtask` asks a policy with its own planner to choose the subtask from `obs.task`."""
+        `subtask` asks a policy with its own planner to choose the subtask from `obs.task`. `timeout_s`: the caller
+        gives up on the answer after it; a remote policy abandons the request (`TimeoutError`), a local one may finish
+        anyway."""
 
-    def act_samples(self, obs: Observation, subtask: str, k: int) -> list[ActionChunk]:
+    def act_samples(self, obs: Observation, subtask: str, k: int, timeout_s: float | None = None) -> list[ActionChunk]:
         """`k` independent chunks for the same observation (a stochastic policy samples different ones). Default:
         `k` sequential calls; a service that batches samples overrides it."""
-        return [self.act(obs, subtask) for _ in range(k)]
+        return [self.act(obs, subtask, timeout_s) for _ in range(k)]
 
     @abstractmethod
     def reset(self) -> None:

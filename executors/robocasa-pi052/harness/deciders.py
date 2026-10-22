@@ -49,7 +49,7 @@ def _act(s: ObservationSnapshot) -> str:
     """The act the keyword rules pick for a change."""
     if s.trigger == "deviation":
         return jev.RETRY
-    text = s.instruction.lower()
+    text = s.latest_utterance.lower()
     if STOP.search(text):
         return jev.ABORT
     if WAIT.search(text):
@@ -85,10 +85,10 @@ class RuleBasedInteraction:
         if act == jev.RESUME:
             return Verdict(s.hold.interrupted, "resume the interrupted step")
         if act == jev.REVISE:
-            revised = RewriteReviser().revise(s)
+            revised, task = RewriteReviser().revise(s)
             if revised.kind == OpKind.CONTINUE:
-                return Verdict(revised, "destination applies to a later step")
-            return Verdict(revised, f"revise: {destination(s.instruction)}")
+                return Verdict(revised, "destination applies to a later step", task=task)
+            return Verdict(revised, f"revise: {destination(task)}", task=task)
         return Verdict(Operation(OpKind.CONTINUE), "nothing to change")
 
 
@@ -109,19 +109,19 @@ class KeywordChooser:
 
 
 class RewriteReviser:
-    """`Reviser` stand-in: the step a hold interrupted (else the running one) rewritten to the destination the
-    instruction names; CONTINUE when the destination concerns a later step."""
+    """`Reviser` stand-in: what the user said becomes the task text, and the step a hold interrupted (else the running
+    one) is rewritten to the destination it names; CONTINUE when the destination concerns a later step."""
 
-    def revise(self, s: ObservationSnapshot) -> Operation:
+    def revise(self, s: ObservationSnapshot) -> tuple[Operation, str]:
+        task = s.latest_utterance
         step = s.hold.interrupted if s.hold is not None and s.hold.interrupted is not None else s.active_operation
-        phrase = destination(s.instruction)
         if step is None or not step.subtask:
-            return Operation(OpKind.CONTINUE)
-        revised = rewrite(step.subtask, phrase)
+            return Operation(OpKind.CONTINUE), task
+        revised = rewrite(step.subtask, destination(task))
         held = s.active_operation is not None and not s.active_operation.moves_robot()
         if revised == step.subtask and not held:
-            return Operation(OpKind.CONTINUE)
-        return Operation(OpKind.SWITCH_TO, subtask=revised)
+            return Operation(OpKind.CONTINUE), task
+        return Operation(OpKind.SWITCH_TO, subtask=revised), task
 
 
 class RevisableSequence:

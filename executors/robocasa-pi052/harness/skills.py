@@ -132,10 +132,10 @@ class SkillScriptPolicy(Policy):
         self.world, self.latency_s, self.noise_m, self.horizon = world, latency_s, noise_m, horizon
         self.rng = np.random.default_rng(seed)
 
-    def act(self, obs: Observation, subtask: str) -> ActionChunk:
+    def act(self, obs: Observation, subtask: str, timeout_s: float | None = None) -> ActionChunk:
         return self.act_samples(obs, subtask, 1)[0]
 
-    def act_samples(self, obs: Observation, subtask: str, k: int) -> list[ActionChunk]:
+    def act_samples(self, obs: Observation, subtask: str, k: int, timeout_s: float | None = None) -> list[ActionChunk]:
         t0 = time.perf_counter()
         skill, start, info = self.world(lambda kitchen: self._read(kitchen, np.asarray(obs.state, dtype=float), subtask))
         time.sleep(max(0.0, self.latency_s - (time.perf_counter() - t0)))

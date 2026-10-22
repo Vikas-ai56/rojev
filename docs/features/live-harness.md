@@ -51,8 +51,8 @@ Core it drives: [`v3-runtime.md`](v3-runtime.md). S1 supply / commitment: [`s1-s
 | ask | "put it over there" 5 s, "on the plate" 9 s | ASK, then a SWITCH_TO after the answer |
 | revoke-baseline | `--on-change revoke`, "nice work" | revoke recorded, hold ticks in 5–7 s |
 | one-lane | no interaction lane, "wait" | the planning lane answers |
-| s2-slow | interaction delay 1.6 s > timeout 1.0 s | interaction timeout, planning answers |
-| s2-fail | interaction decider raises | `decision failed`, planning answers within 1 s |
+| s2-slow | interaction delay 1.6 s > timeout 1.0 s | interaction timeout, `unanswered` said, planning never answers the change, holding after |
+| s2-fail | interaction decider raises | `decision failed`, unanswered hold within 1 s, planning never answers, holding after |
 | s1-slow | S1 latency 0.9 s | floor ≥ 37, 0 starved |
 | stop-stays | rules, "stop" at 5 s, 15 s | ABORT, a standing hold, no moving command after it, hold ticks to the end (D4) |
 | jev-wait-resume | jev + keyword scores, "wait" 5 s, "go on" 9 s | GUARDED_WAIT, interrupted step resumed, two `ack`s |
@@ -62,8 +62,8 @@ Core it drives: [`v3-runtime.md`](v3-runtime.md). S1 supply / commitment: [`s1-s
 | blocked | monitor on, arm blocked 6–8 s | a deviation, RETRY from the interaction lane |
 
 ## `harness/invariants.py`: what every run must keep
-- `no_stale_action`: no chunk action of a command after its `revoked` / `expired` ACK.
-- `gripper_held`: no gripper switch change on a tick under review or holding.
+- `no_stale_action`: no chunk action of a command after its `revoked` / `expired` / `dropped` ACK.
+- `switches_held`: no irreversible switch of the robot's `ActionSpec` (PandaOmron: gripper) changes on a tick under review or holding.
 - `active_monotonic`: activated command ids strictly increase.
 - `changes_answered`: every instruction followed by a command, reaffirm or continue before the next instruction or the end (if ≥ 2 s remain).
 - `no_violations`: no incoming action clamped by the bounds.

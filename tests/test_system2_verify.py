@@ -1,8 +1,10 @@
 """End-state checks and the step watcher with stub verifiers: confirmation streaks, one event per command, no checks
 for commands without a step, failures counted; `MJevVerifier` builds one MJev request for all steps."""
+import time
+
 import numpy as np
 
-from rojev.protocol import AcceptedGoal, Capture, Observation, Operation, OpKind, Transition
+from rojev.protocol import AcceptedGoal, Capture, Observation, Operation, OpKind, StepEvent, Transition
 from rojev.system2.verify import STATES, MJevVerifier, StepWatcher, question
 
 OBS = Observation({"left": np.zeros((4, 4, 3), np.uint8)}, np.zeros(1, np.float32), "put the cube in A")
@@ -39,7 +41,7 @@ def test_a_step_is_reported_once_after_consecutive_confirmations():
     events = [w.check_once() for _ in range(5)]
     assert [e is not None for e in events] == [False, False, False, True, False]
     assert len(posted) == 1 and posted[0].cmd_id == 3 and posted[0].source == "stub"
-    assert posted[0].detail["step"] == "pick the cube" and posted[0].detail["p_done"] == 0.95
+    assert posted[0].step == "pick the cube" and posted[0].detail["p_done"] == 0.95
     assert w.stats.checks == 4
 
 
@@ -79,3 +81,24 @@ def test_mjev_checks_every_step_in_one_request():
     q = mjev.asked[0][1]
     assert q["question"] == question("open the door")
     assert [o["id"] for o in q["answer_space"]["options"]] == list(STATES)
+
+
+def test_a_claimed_step_counts_only_when_the_check_confirms_it():
+    claim = StepEvent(1, 4, 2.0, "s1-planner", "pick the cube", {"next": "place the cube"})
+    w, posted = watcher(ScriptedVerifier([0.2, 0.9]), lambda: goal(4, Operation(OpKind.SWITCH_TO)))
+    assert w.confirm(claim) is None and w.stats.unconfirmed == 1 and posted == []
+    event = w.confirm(claim)
+    assert event.checked and event.step == "pick the cube" and event.source == "stub"
+    assert event.detail["claimed_by"] == "s1-planner" and event.detail["next"] == "place the cube"
+    assert posted == [event] and w.stats.claims == 2
+
+
+def test_the_watcher_thread_confirms_claims_between_periodic_checks():
+    w, posted = watcher(ScriptedVerifier([0.95] * 50), lambda: goal(4, Operation(OpKind.SWITCH_TO)), every_s=5.0)
+    w.start()
+    w.claim(StepEvent(1, 4, 2.0, "s1-planner", "pick the cube"))
+    deadline = time.monotonic() + 2.0
+    while not posted and time.monotonic() < deadline:
+        time.sleep(0.01)
+    w.stop()
+    assert len(posted) == 1 and posted[0].checked

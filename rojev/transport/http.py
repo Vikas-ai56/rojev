@@ -6,10 +6,12 @@ us-east through an SSH tunnel: 680 ms of network per request against a 216 ms pi
   HttpTransport(url, token)       client; a connection the server or the tunnel dropped (restart, or lost mid-request)
                                   is replaced and the request resent once with the same request id, so a service that
                                   already ran it answers from its replay cache instead of running it again; any other
-                                  failure propagates
+                                  failure propagates. `request(..., timeout_s)` bounds the whole call, retry included:
+                                  past it the connection (state unknown) is closed and `TimeoutError` raised
   HttpServer(endpoint, host, port) threaded keep-alive server for an `Endpoint`: admission before reading the body
 """
 import http.client
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -27,12 +29,13 @@ class HttpTransport:
         self.token, self.timeout_s = token, timeout_s
         self._conn: http.client.HTTPConnection | None = None
 
-    def request(self, method: str, path: str, body: bytes = b"") -> bytes:
+    def request(self, method: str, path: str, body: bytes = b"", timeout_s: float | None = None) -> bytes:
         request_id = new_request_id()
+        deadline = time.monotonic() + (self.timeout_s if timeout_s is None else timeout_s)
         try:
-            return self._exchange(method, path, body, request_id)
+            return self._exchange(method, path, body, request_id, deadline)
         except STALE:
-            return self._exchange(method, path, body, request_id)
+            return self._exchange(method, path, body, request_id, deadline)
 
     def health(self) -> str:
         conn = self._connection(30.0)
@@ -51,9 +54,15 @@ class HttpTransport:
         cls = http.client.HTTPSConnection if self.scheme == "https" else http.client.HTTPConnection
         return cls(self.host, self.port, timeout=timeout_s)
 
-    def _exchange(self, method: str, path: str, body: bytes, request_id: str) -> bytes:
+    def _exchange(self, method: str, path: str, body: bytes, request_id: str, deadline: float) -> bytes:
+        budget = deadline - time.monotonic()
+        if budget <= 0:
+            raise TimeoutError(f"{method} {path}: deadline passed before sending")
         if self._conn is None:
-            self._conn = self._connection(self.timeout_s)
+            self._conn = self._connection(budget)
+        self._conn.timeout = budget
+        if self._conn.sock is not None:
+            self._conn.sock.settimeout(budget)
         try:
             self._conn.request(method, self.base + path, body=body,
                                headers={"Authorization": f"Bearer {self.token}", REQUEST_ID: request_id,
@@ -63,6 +72,9 @@ class HttpTransport:
         except STALE:
             self.close()
             raise
+        except TimeoutError as e:
+            self.close()
+            raise TimeoutError(f"{method} {path}: no answer within {budget:.2f} s") from e
         if response.status != 200:
             raise ConnectionError(f"{method} {path}: HTTP {response.status} {response.reason}")
         return data

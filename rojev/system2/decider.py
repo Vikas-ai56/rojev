@@ -8,13 +8,15 @@ from rojev.protocol import ObservationSnapshot, Operation, Precondition
 @dataclass(frozen=True)
 class Verdict:
     """A decider's answer: the operation, why, and the evidence behind it (scores per option, preconditions it relied
-    on, anything else worth logging)."""
+    on, anything else worth logging); `task` is new task text to condition S1 on when the answer revises the task
+    (None keeps the task text in force)."""
 
     operation: Operation
     reason: str
     scores: dict[str, float] = field(default_factory=dict)
     preconditions: tuple[Precondition, ...] = ()
     evidence: dict = field(default_factory=dict)
+    task: str | None = None
 
 
 class Decider(Protocol):

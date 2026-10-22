@@ -12,10 +12,15 @@ sequence switched by simulator truth · `revisable` / `revisable-truth` the same
 current instruction names · `native` π0.5² plans its own subtasks. Authored sequences are in tasks.py.
 Interaction lane (`--interaction`): `none` (one lane) · `continue` (always-continue baseline) · `rules` (keyword
 stand-in for Jev's acts) · `jev` (Jev v1, `rojev.system2.jev`: `--chooser onejev` scores acts with OneJev from the
-service JSON, `--chooser keywords` with the keyword stand-in; `--reviser s1|rewrite`, `--max-asks`, `--jev-calibration`);
-`--hold-recheck S` asks the lane again while a hold stands; `--interaction-delay` / `--interaction-fail` inject S2
+service JSON, `--chooser keywords` with the keyword stand-in; `--reviser s1|rewrite`, `--max-asks`,
+`--jev-calibration`);
+`--hold-recheck S` asks the lane again while a hold stands; `--record-interaction DIR` saves Jev's model decisions as
+calibration cases; `--interaction-delay` / `--interaction-fail` inject S2
 faults on that lane. Step-completion events (`--verify mjev|truth`): end-state checks of the running step
-(`rojev.system2.verify`; `truth` = simulator truth of authored steps, a declared spoof), posted to the owner. What the robot says is printed and logged (utterances.jsonl).
+(`rojev.system2.verify`; `truth` = simulator truth of authored steps, a declared spoof), posted to the owner; with
+`--arm native --policy remote` π0.5²'s own subtask switches are step events too: claims the step watcher confirms
+with one check when `--verify` is on (only confirmed ones are progress), else unchecked events. The planning heartbeat defaults to
+1 s, or 0.8 × lease when step events cover progress. What the robot says is printed and logged (utterances.jsonl).
 `--say T:TEXT` (repeatable) sends a user instruction T seconds in; `--on-change review|revoke`.
 Commitment: `--commit-policy fixed|phase`, `--speculative-predict --samples K`, `--sample-noise` (skills: target noise
 per sample). Execution monitor: `--execution-monitor MODEL.json` / `--monitor-record OUT.npz`; `--block-at T --block-s
@@ -25,7 +30,8 @@ Phoenix (`make phoenix`).
   uv run python realtime.py --task LoadCondimentsInFridge --arm revisable --policy skills --interaction rules \\
       --say "8:wait" --say "11:go on" --viewer --trace rojev-live
 Outputs: <out>/{config.json, ticks.jsonl, owner.jsonl, s1_requests.jsonl, commits.jsonl, decisions.jsonl,
-utterances.jsonl, summary.json, view.mp4 (with --video: three cameras + command / lane / decision panel, 10 fps)}.
+utterances.jsonl, verify_checks.jsonl (with --verify: each check with simulator truth), summary.json, view.mp4 (with
+--video: three cameras + command / lane / decision panel, 10 fps)}.
 After setup the process freezes the objects it built (`gc.freeze`), so a full garbage collection never walks them
 during the run (measured 45–96 ms per full pass otherwise: docs/research/2026-10-22-native-runtime.md).
 """
@@ -41,9 +47,9 @@ from lerobot.envs.robocasa import RoboCasaEnv
 from qev import Client
 
 from embodiment import ARM_DIMS, PANDA_OMRON, PandaOmronEffect
-from harness import (FailingDecider, KeywordChooser, MirrorPublisher, RecordingCommit, RecordingDecider,
-                     RecordingPolicy, RevisableSequence, RewriteReviser, RuleBasedInteraction, SkillScriptPolicy,
-                     SlowDecider, TruthVerifier, VideoRecorder)
+from harness import (FailingDecider, InteractionCases, KeywordChooser, MirrorPublisher, RecordingCommit,
+                     RecordingDecider, RecordingPolicy, RecordingVerifier, RevisableSequence, RewriteReviser,
+                     RuleBasedInteraction, SkillScriptPolicy, SlowDecider, TruthVerifier, VideoRecorder)
 from rojev.control import ControlLoop, ExecutionRuntime, Guard, TickRecord
 from rojev.eval import AlwaysContinue, NativePlanner, ScriptedSequence, TruthSequence
 from rojev.owner import INSTRUCTION_CHANGE_MODES, INTERACTION_TRIGGERS, StateOwner
@@ -141,10 +147,10 @@ class WigglePolicy(Policy):
         a[:, 11] = -1.0
         return ActionChunk(a, {"infer": self.latency_s * 1000})
 
-    def act(self, obs: Observation, subtask: str) -> ActionChunk:
+    def act(self, obs: Observation, subtask: str, timeout_s: float | None = None) -> ActionChunk:
         return self.act_samples(obs, subtask, 1)[0]
 
-    def act_samples(self, obs: Observation, subtask: str, k: int) -> list[ActionChunk]:
+    def act_samples(self, obs: Observation, subtask: str, k: int, timeout_s: float | None = None) -> list[ActionChunk]:
         time.sleep(self.latency_s)
         return [self.sample() for _ in range(k)]
 
@@ -190,6 +196,8 @@ def parse(argv=None) -> argparse.Namespace:
     p.add_argument("--max-asks", type=int, default=2)
     p.add_argument("--jev-calibration", type=Path, help="jev: Calibration JSON (default: T=1, declared margin)")
     p.add_argument("--hold-recheck", type=float, help="ask the interaction lane again after a hold stood this long (s)")
+    p.add_argument("--record-interaction", type=Path,
+                   help="jev: save each model decision as a calibration case here (calibrate_jev.py)")
     p.add_argument("--verify", choices=["none", "mjev", "truth"], default="none",
                    help="step-completion events from MJev, or from simulator truth (spoof)")
     p.add_argument("--verify-every", type=float, default=1.0)
@@ -205,7 +213,9 @@ def parse(argv=None) -> argparse.Namespace:
     p.add_argument("--refill", type=float, default=1.0)
     p.add_argument("--blend", type=float, default=0.2)
     p.add_argument("--lease", type=float, default=3.0)
-    p.add_argument("--decide-every", type=float, default=1.0)
+    p.add_argument("--decide-every", type=float,
+                   help="planning heartbeat (s); default 1.0, or 0.8 × lease when step events cover progress "
+                        "(--verify, or --arm native with --policy remote: π0.5²'s own subtask switches)")
     p.add_argument("--commit-policy", choices=list(COMMIT_POLICIES), default="fixed")
     p.add_argument("--speculative-predict", action="store_true")
     p.add_argument("--samples", type=int)
@@ -227,6 +237,10 @@ def parse(argv=None) -> argparse.Namespace:
     if needs_service and not a.service:
         p.error("--chooser onejev and --verify mjev need --service with onejev / mjev entries")
     a.reviser = a.reviser or ("s1" if a.policy == "remote" else "rewrite")
+    if a.record_interaction and a.interaction != "jev":
+        p.error("--record-interaction needs --interaction jev")
+    step_events = a.verify != "none" or (a.arm == "native" and a.policy == "remote")
+    a.decide_every = a.decide_every or (0.8 * a.lease if step_events else 1.0)
     try:
         a.commit = make_commit_policy(a.commit_policy, a.speculative_predict, **{
             k: v for k, v in (("samples", a.samples), ("tolerance", a.tolerance)) if v is not None})
@@ -276,6 +290,9 @@ def make_interaction(a):
     if a.interaction == "none":
         return None
     decider = {"continue": AlwaysContinue, "rules": RuleBasedInteraction, "jev": lambda: make_jev(a)}[a.interaction]()
+    if a.record_interaction:
+        run = f"{a.task}-s{a.seed}-{time.strftime('%H%M%S')}"
+        decider = InteractionCases(decider, list(CAMS), a.record_interaction, run)
     if a.interaction_delay:
         decider = SlowDecider(decider, a.interaction_delay)
     if a.interaction_fail:
@@ -283,11 +300,16 @@ def make_interaction(a):
     return decider
 
 
-def make_verifier(a, backend: RoboCasaBackend, steps):
-    if a.verify == "mjev":
-        return MJevVerifier(RemoteMJev(**service_addresses(a.service, "serve")["mjev"]))
+def make_verifier(a, backend: RoboCasaBackend, steps, now) -> RecordingVerifier:
+    """The end-state checker, wrapped so every check is logged with the simulator's truth (verify_checks.jsonl)."""
     checks = {s.subtask: s.done for s in steps}
-    return TruthVerifier(lambda step: backend.truth(checks[step]) if step in checks else None)
+
+    def truth(step: str) -> bool | None:
+        return backend.truth(checks[step]) if step in checks else None
+
+    inner = MJevVerifier(RemoteMJev(**service_addresses(a.service, "serve")["mjev"])) if a.verify == "mjev" \
+        else TruthVerifier(truth)
+    return RecordingVerifier(inner, truth, now)
 
 
 class Speaker:
@@ -352,7 +374,8 @@ def main(argv=None) -> int:
     loop = ControlLoop(backend, guard, PANDA_OMRON, realtime=True, on_tick=on_tick)
     policy = RecordingPolicy(make_policy(a, backend), loop.now)
     commit = RecordingCommit(a.commit, loop.now)
-    runner = S1Runner(runtime, policy, loop.latest, loop.now, refill_s=a.refill, commit=commit)
+    runner = S1Runner(runtime, policy, loop.latest, loop.now, refill_s=a.refill, commit=commit,
+                      on_step=lambda e: watcher.claim(e) if watcher is not None else owner.post(e))
     planner, steps = make_planner(a, backend)
     planning = RecordingDecider(planner, loop.now, "planning")
     worker = DecisionWorker(planning, lambda prop: owner.post(prop), loop.now, name="planning")
@@ -365,7 +388,7 @@ def main(argv=None) -> int:
                        decide_every_s=a.decide_every, on_instruction_change=a.on_change, review_s=a.review_s,
                        interaction=responder, interaction_timeout_s=a.interaction_timeout, say=speaker.say,
                        hold_recheck_s=a.hold_recheck)
-    watcher = (StepWatcher(make_verifier(a, backend, steps), lambda: runtime.active, loop.latest, owner.post, loop.now,
+    watcher = (StepWatcher(make_verifier(a, backend, steps, loop.now), runtime.active_goal, loop.latest, owner.post, loop.now,
                            list(CAMS), every_s=a.verify_every, done_threshold=a.done_threshold,
                            confirmations=a.confirmations)
                if a.verify != "none" else None)
@@ -414,6 +437,8 @@ def main(argv=None) -> int:
     write_jsonl(out / "commits.jsonl", commit.log)
     write_jsonl(out / "decisions.jsonl", decisions)
     write_jsonl(out / "utterances.jsonl", speaker.log)
+    if watcher is not None:
+        write_jsonl(out / "verify_checks.jsonl", watcher.verifier.log)
     summary = summarize(a, config, out, loop, runtime, runner, owner, worker, responder, monitor, model, backend,
                         steps, wall, watcher)
     (out / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
@@ -469,12 +494,13 @@ def summarize(a, config, out, loop, runtime, runner, owner, worker, responder, m
                             for e in ev if e["kind"] == "step event"],
             "verify": None if watcher is None else {
                 "checks": watcher.stats.checks, "errors": watcher.stats.errors, "events": watcher.stats.events,
+                "claims": watcher.stats.claims, "unconfirmed": watcher.stats.unconfirmed,
                 "last_error": watcher.stats.last_error},
             "truth_now": {s.subtask: backend.truth(s.done) for s in steps},
             "s1_requests": st.requests, "s1_accepted": st.accepted, "s1_errors": st.errors, "s1_last_error": st.last_error,
             "s1_latency_est_s": None if runner.latency_s() is None else round(runner.latency_s(), 3),
             "s1_floor_last": st.floors[-1] if st.floors else None, "s1_commit_reasons": st.commit_reasons,
-            "s1_forced": st.forced,
+            "s1_forced": st.forced, "s1_planner_steps": st.planner_steps, "s1_timeouts": st.timeouts,
             "monitor": None if monitor is None or model is None else {
                 "threshold": round(model.threshold, 3), "max_score": round(monitor.max_score, 3),
                 "uncovered_ticks": monitor.uncovered,

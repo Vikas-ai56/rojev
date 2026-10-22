@@ -274,6 +274,11 @@ class ExecutionRuntime:
                 return self.active
             return None
 
+    def active_goal(self) -> AcceptedGoal | None:
+        """The active command (None when nothing is active), read under the lock."""
+        with self._lock:
+            return self.active
+
     def last_action(self) -> np.ndarray | None:
         """A copy of the action last applied (None before the first, unless seeded)."""
         with self._lock:

@@ -55,7 +55,7 @@ DEFAULT_MAX_STEPS = 2000  # tasks without a tasks.py spec (lever; specs use ≈ 
 class HoldPolicy(Policy):
     """Zero actions (robot holds still): checks the loop, live window and logging without a GPU."""
 
-    def act(self, obs: Observation, subtask: str) -> ActionChunk:
+    def act(self, obs: Observation, subtask: str, timeout_s: float | None = None) -> ActionChunk:
         return ActionChunk(np.zeros((50, 12), np.float32), {"infer": 0.0})
 
     def reset(self) -> None:

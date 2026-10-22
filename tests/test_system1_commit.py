@@ -202,7 +202,7 @@ class Counter(Policy):
     def __init__(self):
         self.calls = 0
 
-    def act(self, obs, subtask):
+    def act(self, obs, subtask, timeout_s=None):
         self.calls += 1
         return ActionChunk(chunk(np.full(5, float(self.calls))))
 
@@ -270,11 +270,11 @@ class ReachPolicy(Policy):
             rows.append([v, CLOSED if arrived else OPEN])
         return ActionChunk(np.array(rows))
 
-    def act_samples(self, obs, subtask, k):
+    def act_samples(self, obs, subtask, k, timeout_s=None):
         self.clock.advance(self.latency_s * (1 if self.batched else k))
         return [self.sample(i) for i in range(k)]
 
-    def act(self, obs, subtask):
+    def act(self, obs, subtask, timeout_s=None):
         return self.act_samples(obs, subtask, 1)[0]
 
     def reset(self):

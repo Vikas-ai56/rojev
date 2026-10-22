@@ -10,23 +10,28 @@ Lanes: decisions go to the planning worker (heartbeat, step events, failed or ex
 the interaction worker (changes: `instruction`, `deviation`, `hold`). The interaction lane has priority: while its
 request is pending, planning requests are deferred (the latest is sent once the interaction decision is applied) and
 planning proposals are refused, so a routine next-step decision never overrides the response to what the user just
-said. The pending request is released by its proposal, its `DecisionFailure`, or `interaction_timeout_s`; if it fails,
-times out or its proposal is refused, the same trigger goes to the planning lane, so a change is always answered.
-Without an interaction worker every trigger goes to the planning worker (one lane).
+said. The pending request is released by its proposal, its `DecisionFailure`, or `interaction_timeout_s`. A change
+nobody answered (failure, timeout, refused proposal) is never handed to the planning lane: the robot holds
+(GUARDED_WAIT `UNANSWERED`, said to the user) and the interaction lane is asked again on the hold recheck, so an
+unread "stop" can never move the robot. Without an interaction worker every trigger goes to the planning worker (one
+lane).
 
 Rules:
 - A user instruction bumps `instruction_rev`, joins the dialogue, is acknowledged at once (`Utterance` `ACK`, before
-  any model answers) and asks for a decision. With `on_instruction_change="review"` (default) the moving command is
-  put under review: it keeps its reversible motion, its irreversible switches freeze and its lease shrinks to
-  `review_s`, so the robot never stops just because the user spoke; with `"revoke"` it is revoked at once.
+  any model answers) and asks for a decision. It does not change the task text S1 is conditioned on (`instruction`):
+  only an accepted decision does, by carrying new task text (`DecisionProposal.task`, e.g. a revision), so "wait" or
+  "go on" never become the task. With `on_instruction_change="review"` (default) the moving command is put under
+  review: it keeps its reversible motion, its irreversible switches freeze and its lease shrinks to the review window
+  (the interaction deadline when an interaction lane exists, else `review_s`), so the robot never stops just because
+  the user spoke and the command never expires before its answer is due; with `"revoke"` it is revoked at once.
 - A proposal is accepted only if it answers a request this owner made, is from this epoch, for the current instruction
   revision, about the current desired command, newer than the last applied request, not expired, not a planning
   proposal while an interaction decision is pending (or an interaction proposal superseded by a newer one), and not a
   routine planning proposal while a hold stands; anything else is logged. Preconditions are checked when evidence
   exists to check them (step 6); until then a proposal that carries any is refused rather than trusted.
 - CONTINUE (or the same operation again) renews the lease (`renewed` says whether there was a command to renew); if
-  the command predates the current instruction it is reaffirmed instead: the same operation as a new command carrying
-  the new instruction, always `immediate` (no pause, S1 re-conditioned). COMPLETE marks the task done and holds;
+  the decision adopted new task text it is reaffirmed instead: the same operation as a new command carrying the new
+  task text, always `immediate` (no pause, S1 re-conditioned). COMPLETE marks the task done and holds;
   anything else becomes a new command with a new id. Between two moving commands the configured transition applies
   (default `immediate`); after a revoke, or into a hold, `pause_hold`. An operation with a template (an ASK question,
   a report) is said (`Utterance`) and joins the dialogue.
@@ -37,8 +42,11 @@ Rules:
   decider's wait budget). The hold remembers the moving step it interrupted, for a resume.
 - Progress keyframes: when an accepted proposal moves past a step that was running (SWITCH_TO another subtask, or
   COMPLETE), the step is recorded as a `Keyframe` with the observation the decision used; its evidence is the step
-  event about that command if one came, else the decider's judgement. Snapshots carry all keyframes, so after a repair
-  or a revision no decider redoes a done step. ABORT, waits, asks and retries are not progress.
+  event about that command if one came, else the decider's judgement. When S1 plans its own steps (the running command
+  has no subtask), no decider moves past them: a checked step event about that command is itself the keyframe (an
+  unchecked claim, e.g. S1's planner moving on, is not progress). Snapshots carry
+  all keyframes, so after a repair or a revision no decider redoes a done step. ABORT, waits, asks and retries are not
+  progress.
 - A deviation or step event about the active command is kept for the decider (`snapshot.deviation`,
   `snapshot.step_event`) and asks at once (triggers `deviation` → interaction, `step` → planning); one about any other
   command, or another epoch, is logged as stale. A newly activated command clears both.
@@ -56,9 +64,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from rojev.control import ExecutionRuntime, Guard
-from rojev.protocol import (ACK, ROBOT, USER, AcceptedGoal, AckStatus, Capture, DecisionFailure, DecisionProposal,
-                            Deviation, ExecutionAck, Hold, Keyframe, ObservationSnapshot, Operation, OpKind, Revoke,
-                            StepEvent, Transition, Turn, UserInstruction, Utterance)
+from rojev.protocol import (ACK, ROBOT, UNANSWERED, USER, AcceptedGoal, AckStatus, Capture, DecisionFailure,
+                            DecisionProposal, Deviation, ExecutionAck, Hold, Keyframe, ObservationSnapshot, Operation,
+                            OpKind, Revoke, StepEvent, Transition, Turn, UserInstruction, Utterance)
 from rojev.system2 import DecisionWorker
 
 INSTRUCTION_CHANGE_MODES = ("review", "revoke")
@@ -170,7 +178,7 @@ class StateOwner:
             request_id = self._interaction_pending[0]
             self._interaction_pending = None
             self.record.add(now, "interaction timeout", request=request_id)
-            self._escalate(self._requests[request_id])
+            self._unanswered(self._requests[request_id], "interaction timeout")
         if self.hold is not None:
             self._keep_hold(now)
             return
@@ -214,19 +222,27 @@ class StateOwner:
                 pass
             self.tick()
 
+    @property
+    def review_window_s(self) -> float:
+        """How long a moving command stays under review after the user speaks: until the answer is due, i.e. the
+        interaction deadline when an interaction lane exists (one deadline, so the command never expires while its
+        answer is still allowed to arrive), else `review_s`."""
+        return self.interaction_timeout_s if self.workers[INTERACTION] is not None else self.review_s
+
     def _on_instruction(self, text: str) -> None:
         now = self.now()
-        self.instruction, self.instruction_rev, self.complete = text, self.instruction_rev + 1, False
+        self.instruction_rev, self.complete = self.instruction_rev + 1, False
         self.dialogue.append(Turn(now, USER, self.instruction_rev, text=text))
         self.record.add(now, "instruction", rev=self.instruction_rev, text=text)
         self._utter(now, ACK, (), None)
         if self.desired is not None and self.desired.operation.moves_robot():
             cmd = self.desired.cmd_id
-            if self.on_instruction_change == "review" and self.runtime.review(cmd, now + self.review_s, now):
+            until = now + self.review_window_s
+            if self.on_instruction_change == "review" and self.runtime.review(cmd, until, now):
                 self.reviewing = cmd
                 self.desired = self.goals[cmd] = dataclasses.replace(
-                    self.desired, expires_t=min(self.desired.expires_t, now + self.review_s))
-                self.record.add(now, "review", cmd=cmd, until=round(now + self.review_s, 3))
+                    self.desired, expires_t=min(self.desired.expires_t, until))
+                self.record.add(now, "review", cmd=cmd, until=round(until, 3))
             else:
                 self.runtime.revoke(Revoke(self.epoch, cmd, "instruction changed"), now)
                 self.record.add(now, "revoke", cmd=cmd, reason="instruction changed")
@@ -249,7 +265,10 @@ class StateOwner:
             self.record.add(now, "stale step event", cmd=e.cmd_id, active=self.active_cmd, source=e.source)
             return
         self.step_event = e
-        self.record.add(now, "step event", cmd=e.cmd_id, t_detect=e.t, source=e.source, detail=e.detail)
+        self.record.add(now, "step event", cmd=e.cmd_id, t_detect=e.t, source=e.source, step=e.step, detail=e.detail)
+        running = self.goals.get(e.cmd_id)
+        if e.checked and running is not None and running.operation.subtask is None:
+            self._keyframe(running, e.step, self.latest(), f"{e.source}: {e.detail}", now)
         self.request_decision(STEP)
 
     def _on_failure(self, f: DecisionFailure) -> None:
@@ -261,7 +280,7 @@ class StateOwner:
             return
         if self._interaction_pending is not None and self._interaction_pending[0] == f.request_id:
             self._interaction_pending = None
-            self._escalate(request)
+            self._unanswered(request, f"decision failed: {f.error}")
 
     def _on_proposal(self, p: DecisionProposal) -> None:
         now = self.now()
@@ -292,7 +311,7 @@ class StateOwner:
             self.record.add(now, "refused", request=p.request_id, lane=lane, op=op.kind.value, subtask=op.subtask,
                             why=problem)
             if answers_pending:
-                self._escalate(request)
+                self._unanswered(request, f"proposal refused: {problem}")
             return
         self._apply(p, request, now)
         if answers_pending and self._deferred is not None:
@@ -308,7 +327,10 @@ class StateOwner:
                   "reason": p.evidence.get("reason", ""), "decider": p.evidence.get("decider")}
         desired = self.desired
         same = desired is not None and (op.kind == OpKind.CONTINUE or op == desired.operation)
-        if same and desired.instruction_rev != self.instruction_rev and desired.operation.moves_robot():
+        if p.task is not None and p.task != self.instruction:
+            self.instruction = p.task
+            self.record.add(now, "task", text=p.task, request=p.request_id)
+        if same and desired.instruction != self.instruction and desired.operation.moves_robot():
             self._issue(desired.operation, now, "reaffirm", detail, Transition.IMMEDIATE)
             return
         if same or op.kind == OpKind.CONTINUE:
@@ -325,11 +347,21 @@ class StateOwner:
         self._update_hold(op, request.snapshot.trigger in INTERACTION_TRIGGERS, now)
         self._issue(op, now, "command", detail)
 
-    def _escalate(self, request: _Request) -> None:
-        """The interaction lane did not answer a change (failure, timeout, refusal): the planning lane answers it, and
-        replaces any planning request deferred meanwhile."""
+    def _unanswered(self, request: _Request, why: str) -> None:
+        """No decision answered a change (the interaction lane failed, timed out, or its proposal was refused): the
+        robot holds as if the answer were "wait" (`Hold`, interrupted step kept), says `UNANSWERED`, and the interaction
+        lane is asked again on the hold recheck. A deferred routine planning request is dropped (planning is held)."""
+        now = self.now()
         self._deferred = None
-        self.request_decision(request.snapshot.trigger, lane=PLANNING)
+        op = Operation(OpKind.GUARDED_WAIT, template=UNANSWERED)
+        self.record.add(now, "unanswered", request=request.snapshot.request_id, trigger=request.snapshot.trigger,
+                        why=why)
+        if self.desired is not None and self.desired.operation == op:
+            return
+        self._update_hold(op, True, now)
+        self._issue(op, now, "command", {"request": request.snapshot.request_id, "lane": INTERACTION,
+                                         "trigger": request.snapshot.trigger, "reason": f"unanswered: {why}",
+                                         "decider": None})
 
     def _update_hold(self, op: Operation, answers_change: bool, now: float) -> None:
         """A hold that answers a change stands until a later change resolves it; keeps the step it first interrupted."""
@@ -368,7 +400,10 @@ class StateOwner:
         seen = snap.step_event
         evidence = (f"{seen.source}: {seen.detail}" if seen is not None and seen.cmd_id == running.cmd_id else
                     f"decider {p.evidence.get('decider')}: {p.evidence.get('reason', '')}")
-        frame = Keyframe(running.cmd_id, step.subtask, running.instruction_rev, snap.capture, evidence)
+        self._keyframe(running, step.subtask, snap.capture, evidence, now)
+
+    def _keyframe(self, running: AcceptedGoal, subtask: str, capture: Capture, evidence: str, now: float) -> None:
+        frame = Keyframe(running.cmd_id, subtask, running.instruction_rev, capture, evidence)
         self.keyframes.append(frame)
         self.record.add(now, "keyframe", cmd=frame.cmd_id, subtask=frame.subtask, obs_id=frame.capture.obs_id,
                         evidence=frame.evidence)

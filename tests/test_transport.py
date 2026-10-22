@@ -372,3 +372,20 @@ def test_remote_policy_defaults_to_the_wire_default_codec(h3):
     assert default.codec == wire.DEFAULT_CODEC == "webp90" and lossless.act(obs(), "pick").actions.shape == (50, 12)
     default.transport.close()
     lossless.transport.close()
+
+
+@pytest.mark.parametrize("transport", ["http", "h3"])
+def test_a_request_past_its_deadline_is_abandoned_and_the_next_one_answers(request, transport):
+    if transport == "http":
+        proxy, service, _ = request.getfixturevalue("http")
+        policy = RemotePolicy(f"http://127.0.0.1:{proxy.port}", TOKEN)
+    else:
+        pem, service, _ = request.getfixturevalue("h3")
+        policy = RemotePolicy(f"h3://127.0.0.1:{H3_PORT}", TOKEN, pem)
+    service.on_call = lambda: time.sleep(0.6)
+    w0 = time.perf_counter()
+    with pytest.raises(TimeoutError):
+        policy.act(obs(), "slow", timeout_s=0.2)
+    assert time.perf_counter() - w0 < 0.5
+    time.sleep(0.5)
+    assert policy.act(obs(), "next", timeout_s=2.0).info["subtask"] == "next"

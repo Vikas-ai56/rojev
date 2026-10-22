@@ -12,8 +12,8 @@ import pytest
 from rojev.eval import AlwaysContinue, NativePlanner, ScriptedSequence, TruthSequence
 from rojev.control import ControlLoop, ExecutionRuntime, Guard, Mode
 from rojev.owner import INTERACTION, PLANNING, StateOwner
-from rojev.protocol import (Capture, DecisionFailure, DecisionProposal, Deviation, Observation, Operation, OpKind,
-                            Precondition, StepEvent, TimedChunk, Transition, UserInstruction)
+from rojev.protocol import (UNANSWERED, Capture, DecisionFailure, DecisionProposal, Deviation, Observation, Operation,
+                            OpKind, Precondition, StepEvent, TimedChunk, Transition, UserInstruction)
 from rojev.robot import KEEP, ActionDim, ActionSpec
 from rojev.system1 import ActionChunk, Policy, S1Runner
 from rojev.system2 import DecisionWorker
@@ -39,7 +39,7 @@ class StandInPolicy(Policy):
     def __init__(self, latency_s=0.02):
         self.latency_s, self.calls = latency_s, []
 
-    def act(self, obs, subtask):
+    def act(self, obs, subtask, timeout_s=None):
         self.calls.append((obs.task, subtask))
         time.sleep(self.latency_s)
         return ActionChunk(np.tile([1.0, -1.0], (20, 1)).astype(np.float32))
@@ -74,12 +74,13 @@ def ask(owner, trigger="heartbeat"):
     return owner.workers[PLANNING].requests[-1].request_id
 
 
-def proposal(owner, op, request_id=None, rev=None, base="desired", pre=(), expires=10.0, epoch=1, decider="test"):
-    """A proposal answering `request_id` (default: a fresh planning request)."""
+def proposal(owner, op, request_id=None, rev=None, base="desired", pre=(), expires=10.0, epoch=1, decider="test",
+             task=None):
+    """A proposal answering `request_id` (default: a fresh planning request); `task` = new task text it adopts."""
     request_id = ask(owner) if request_id is None else request_id
     base_cmd = (owner.desired.cmd_id if owner.desired else None) if base == "desired" else base
     return DecisionProposal(epoch, request_id, 1, 0.0, owner.instruction_rev if rev is None else rev, base_cmd, 0, op,
-                            {}, pre, expires, {"decider": decider, "reason": "test"})
+                            {}, pre, expires, {"decider": decider, "reason": "test"}, task)
 
 
 def run_command(owner, runtime, clock, cmd, value=1.0, n=50):
@@ -122,7 +123,9 @@ def test_revoke_mode_stops_at_once_and_asks_for_a_decision():
     clock["t"] = 0.05
     owner.handle(UserInstruction("actually, put it in B"))
     assert runtime.tick(0.06).source == "hold" and owner.instruction_rev == 1 and owner.desired is None
-    assert worker.requests[-1].trigger == "instruction" and worker.requests[-1].instruction == "actually, put it in B"
+    assert worker.requests[-1].trigger == "instruction"
+    assert worker.requests[-1].latest_utterance == "actually, put it in B"
+    assert worker.requests[-1].instruction == "put the cube in A"
     owner.handle(proposal(owner, B, worker.requests[-1].request_id - 1, rev=0))
     assert owner.desired is None
 
@@ -276,14 +279,26 @@ def test_review_keeps_the_command_running_and_freezes_irreversible_switches():
     assert r.source == "chunk" and r.review
 
 
-def test_continue_under_the_new_instruction_reaffirms_without_a_pause():
+def test_an_utterance_never_becomes_the_task_text_and_a_plain_continue_only_renews():
+    owner, runtime, worker, clock = unit_owner()
+    owner.handle(proposal(owner, A))
+    run_command(owner, runtime, clock, 1)
+    owner.handle(UserInstruction("wait, nice work"))
+    assert owner.instruction == "put the cube in A" and worker.requests[-1].latest_utterance == "wait, nice work"
+    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), worker.requests[-1].request_id))
+    assert owner.desired.cmd_id == 1 and owner.desired.instruction == "put the cube in A"
+    assert not any(e["kind"] == "reaffirm" for e in owner.record.events)
+
+
+def test_a_decision_adopting_new_task_text_reaffirms_without_a_pause():
     owner, runtime, worker, clock = unit_owner()
     owner.handle(proposal(owner, A))
     runtime.submit(TimedChunk(1, 1, 1, 0.0, SPEC.dt, np.tile([1.0, -1.0], (50, 1))), 0.0)
     runtime.tick(0.0)
     clock["t"] = 0.05
     owner.handle(UserInstruction("actually, put it in B"))
-    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), worker.requests[-1].request_id))
+    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), worker.requests[-1].request_id,
+                          task="actually, put it in B"))
     assert owner.desired.cmd_id == 2 and owner.desired.operation == A
     assert owner.desired.instruction == "actually, put it in B" and owner.desired.instruction_rev == 1
     assert runtime.tick(0.08).source == "chunk"
@@ -350,7 +365,8 @@ def test_while_an_interaction_decision_is_pending_planning_waits():
     assert any(e["kind"] == "planning deferred" for e in owner.record.events)
     owner.handle(proposal(owner, B, stale_plan))
     assert owner.desired.operation == A
-    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), interaction_request(owner).request_id))
+    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), interaction_request(owner).request_id,
+                          task="actually, put it in B"))
     assert not owner.interaction_pending and owner.desired.instruction == "actually, put it in B"
     assert len(planning.requests) == n + 1 and planning.requests[-1].trigger == "cmd 9 expired"
 
@@ -370,11 +386,13 @@ def test_a_newer_change_supersedes_an_older_interaction_request():
 
 
 @pytest.mark.parametrize("release", ["failure", "timeout", "refused"])
-def test_an_unanswered_change_goes_to_the_planning_lane(release):
-    owner, runtime, planning, clock = unit_owner(interaction=True, interaction_timeout_s=0.3)
+def test_an_unanswered_change_holds_the_robot_and_never_reaches_planning(release):
+    said = []
+    owner, runtime, planning, clock = unit_owner(interaction=True, interaction_timeout_s=0.3, say=said.append)
     owner.handle(proposal(owner, A))
     run_command(owner, runtime, clock, 1)
-    owner.handle(UserInstruction("actually, put it in B"))
+    n = len(planning.requests)
+    owner.handle(UserInstruction("stop"))
     request = interaction_request(owner)
     if release == "failure":
         owner.handle(DecisionFailure(1, request.request_id, "RuntimeError: model down"))
@@ -386,10 +404,26 @@ def test_an_unanswered_change_goes_to_the_planning_lane(release):
         owner.tick()
     else:
         owner.handle(proposal(owner, B, request.request_id, expires=-1.0))
-    assert not owner.interaction_pending
-    assert planning.requests[-1].trigger == "instruction" and planning.requests[-1].instruction_rev == 1
-    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), planning.requests[-1].request_id))
-    assert owner.desired.instruction == "actually, put it in B"
+    assert not owner.interaction_pending and len(planning.requests) == n
+    assert owner.desired.operation == Operation(OpKind.GUARDED_WAIT, template=UNANSWERED)
+    assert owner.hold is not None and owner.hold.interrupted == A and said[-1].template == UNANSWERED
+    assert runtime.active.operation.kind == OpKind.GUARDED_WAIT
+    owner.tick()
+    assert owner.desired.operation.template == UNANSWERED
+
+
+def test_an_unanswered_change_is_asked_again_on_the_hold_recheck_and_then_answered():
+    owner, runtime, planning, clock = unit_owner(interaction=True, hold_recheck_s=1.0)
+    owner.handle(proposal(owner, A))
+    run_command(owner, runtime, clock, 1)
+    owner.handle(UserInstruction("go to B"))
+    owner.handle(DecisionFailure(1, interaction_request(owner).request_id, "boom"))
+    clock["t"] = 1.0
+    owner.tick()
+    retry = interaction_request(owner)
+    assert retry.trigger == "hold" and retry.hold.operation.template == UNANSWERED
+    owner.handle(proposal(owner, B, retry.request_id))
+    assert owner.hold is None and owner.desired.operation == B
 
 
 def test_without_an_interaction_worker_every_trigger_goes_to_planning():
@@ -440,7 +474,8 @@ def test_keyframes_survive_a_deviation_and_an_instruction_change():
     assert [k.subtask for k in planning.requests[-1].keyframes] == ["pick the cube"]
     owner.handle(UserInstruction("actually, put it in B"))
     assert [k.subtask for k in planning.requests[-1].keyframes] == ["pick the cube"]
-    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), planning.requests[-1].request_id))
+    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), planning.requests[-1].request_id,
+                          task="actually, put it in B"))
     run_command(owner, runtime, clock, 3, value=2.0)
     owner.handle(proposal(owner, Operation(OpKind.COMPLETE)))
     assert [(k.subtask, k.instruction_rev, k.cmd_id) for k in owner.keyframes] == [
@@ -518,21 +553,6 @@ def test_a_hold_is_rechecked_by_the_interaction_lane_on_its_wait_budget():
     assert snap.trigger == "hold" and snap.hold.operation.kind == OpKind.GUARDED_WAIT
 
 
-def test_an_interaction_failure_on_a_change_lets_planning_answer_it_while_held():
-    owner, runtime, planning, clock = unit_owner(interaction=True)
-    owner.handle(proposal(owner, A))
-    run_command(owner, runtime, clock, 1)
-    owner.handle(UserInstruction("wait"))
-    owner.handle(interaction_answer(owner, Operation(OpKind.GUARDED_WAIT)))
-    owner.handle(UserInstruction("go on"))
-    pending = owner.workers[INTERACTION].requests[-1].request_id
-    owner.handle(DecisionFailure(1, pending, "boom"))
-    escalated = planning.requests[-1]
-    assert escalated.trigger == "instruction" and escalated.hold is not None
-    owner.handle(proposal(owner, A, escalated.request_id))
-    assert owner.hold is None and owner.desired.operation == A
-
-
 def test_instructions_are_acknowledged_at_once_and_questions_join_the_dialogue():
     said = []
     owner, runtime, _, clock = unit_owner(interaction=True, say=said.append, dialogue_turns=3)
@@ -555,9 +575,9 @@ def test_a_step_event_asks_planning_at_once_and_becomes_the_keyframe_evidence():
     owner, runtime, planning, clock = unit_owner()
     owner.handle(proposal(owner, A))
     run_command(owner, runtime, clock, 1)
-    owner.handle(StepEvent(1, 7, 0.1, "mjev", {"done": 0.9}))
+    owner.handle(StepEvent(1, 7, 0.1, "mjev", "pick the cube", {"done": 0.9}))
     assert any(e["kind"] == "stale step event" for e in owner.record.events)
-    owner.handle(StepEvent(1, 1, 0.1, "mjev", {"done": 0.9}))
+    owner.handle(StepEvent(1, 1, 0.1, "mjev", "pick the cube", {"done": 0.9}))
     snap = planning.requests[-1]
     assert snap.trigger == "step" and snap.step_event.source == "mjev"
     owner.handle(proposal(owner, B, snap.request_id))
@@ -582,7 +602,8 @@ def test_a_reaffirm_never_pauses_even_when_switches_pause():
     owner.handle(proposal(owner, A))
     run_command(owner, runtime, clock, 1)
     owner.handle(UserInstruction("carry on, carefully"))
-    owner.handle(interaction_answer(owner, Operation(OpKind.CONTINUE)))
+    request = owner.workers[INTERACTION].requests[-1].request_id
+    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), request, task="carry on, carefully"))
     reaffirm = next(e for e in owner.record.events if e["kind"] == "reaffirm")
     assert reaffirm["transition"] == "immediate"
 
@@ -613,8 +634,35 @@ def test_a_step_finishing_while_a_change_is_pending_is_planned_after_the_change(
     run_command(owner, runtime, clock, 1)
     owner.handle(UserInstruction("put it in B instead"))
     n = len(planning.requests)
-    owner.handle(StepEvent(1, 1, 0.1, "mjev", {"done": 0.9}))
+    owner.handle(StepEvent(1, 1, 0.1, "mjev", "pick the cube", {"done": 0.9}))
     assert len(planning.requests) == n and any(e["kind"] == "planning deferred" for e in owner.record.events)
     owner.handle(interaction_answer(owner, Operation(OpKind.CONTINUE)))
     after = planning.requests[-1]
     assert after.trigger == "step" and after.instruction_rev == 1 and after.step_event.source == "mjev"
+
+
+def test_when_s1_plans_its_own_steps_only_a_checked_step_event_is_the_keyframe():
+    owner, runtime, planning, clock = unit_owner()
+    native = Operation(OpKind.SWITCH_TO)
+    owner.handle(proposal(owner, native))
+    run_command(owner, runtime, clock, 1)
+    owner.handle(StepEvent(1, 1, 0.5, "s1-planner", "pick the cube", {"next": "place the cube"}))
+    assert owner.keyframes == [] and planning.requests[-1].trigger == "step"
+    owner.handle(StepEvent(1, 1, 0.6, "mjev", "pick the cube", {"p_done": 0.9, "claimed_by": "s1-planner"},
+                           checked=True))
+    assert [(k.subtask, k.evidence) for k in owner.keyframes] == [
+        ("pick the cube", "mjev: {'p_done': 0.9, 'claimed_by': 's1-planner'}")]
+
+
+
+def test_the_review_window_lasts_until_the_interaction_answer_is_due():
+    owner, runtime, _, clock = unit_owner(interaction=True, interaction_timeout_s=2.2, review_s=1.0)
+    owner.handle(proposal(owner, A))
+    run_command(owner, runtime, clock, 1)
+    owner.handle(UserInstruction("wait"))
+    assert owner.review_window_s == 2.2 and owner.desired.expires_t == pytest.approx(2.2)
+    clock["t"] = 1.5
+    runtime.tick(1.5)
+    owner.tick()
+    owner.handle(interaction_answer(owner, Operation(OpKind.GUARDED_WAIT)))
+    assert owner.desired.operation.kind == OpKind.GUARDED_WAIT and owner.hold is not None
