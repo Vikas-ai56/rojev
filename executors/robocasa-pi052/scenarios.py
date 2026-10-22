@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from embodiment import PANDA_OMRON
 from harness.invariants import Run, check
 
 HERE = Path(__file__).resolve().parent
@@ -108,18 +109,22 @@ SCENARIOS = [
              [("planning lane answered", lambda r: any(e["kind"] in ("reaffirm", "continue")
                                                        and e.get("lane") == "planning" and e["t"] >= 5
                                                        for e in r.events))], seconds=9),
-    Scenario("s2-slow", "interaction decider slower than its deadline: escalated to planning", [
+    Scenario("s2-slow", "interaction decider slower than its deadline: the robot holds and says so, planning never "
+             "answers the change", [
         "--interaction", "rules", "--interaction-delay", "1.6", "--interaction-timeout", "1.0", "--say", "5:wait"],
              [("interaction timeout", lambda r: first(r, "interaction timeout") is not None),
-              ("planning answered the change", lambda r: any(e.get("lane") == "planning" and e["t"] >= 6
-                                                             and e["kind"] in ("reaffirm", "continue", "command")
-                                                             for e in r.events))], seconds=10),
-    Scenario("s2-fail", "interaction decider fails: escalated to planning at once", [
+              ("unanswered hold said", lambda r: any(u["template"] == "unanswered" for u in r.summary["said"])),
+              ("planning never answered the change", lambda r: not any(
+                  e.get("lane") == "planning" and e.get("trigger") == "instruction" for e in r.events)),
+              ("holding after the timeout", lambda r: holding_after(r, 6.5, 2.0))], seconds=10),
+    Scenario("s2-fail", "interaction decider fails: the robot holds at once and says so", [
         "--interaction", "rules", "--interaction-fail", "--say", "5:wait"],
              [("failure recorded", lambda r: first(r, "decision failed") is not None),
-              ("planning answered within 1 s", lambda r: any(e.get("lane") == "planning" and 5 <= e["t"] <= 6
-                                                             and e["kind"] in ("reaffirm", "continue", "command")
-                                                             for e in r.events))], seconds=9),
+              ("unanswered hold within 1 s", lambda r: any(e["kind"] == "unanswered" and 5 <= e["t"] <= 6
+                                                           for e in r.events)),
+              ("planning never answered the change", lambda r: not any(
+                  e.get("lane") == "planning" and e.get("trigger") == "instruction" for e in r.events)),
+              ("holding after the failure", lambda r: holding_after(r, 6.0, 2.0))], seconds=9),
     Scenario("s1-slow", "S1 latency 0.9 s: floor and lead time follow the measured latency", [
         "--latency", "0.9"],
              [("floor ≥ 2·latency/dt + 1", lambda r: (r.summary["s1_floor_last"] or 0) >= 37),
@@ -174,7 +179,7 @@ def run_case(s: Scenario, out: Path, extra: list[str]) -> dict:
     if proc.returncode != 0:
         return {"name": s.name, "ok": False, "error": proc.stderr[-2000:], "cmd": cmd}
     run = Run.load(run_dir)
-    invariants = check(run)
+    invariants = check(run, PANDA_OMRON)
     expectations = {}
     for label, fn in s.expect:
         try:

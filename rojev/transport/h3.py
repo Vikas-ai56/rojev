@@ -25,6 +25,7 @@ import datetime
 import functools
 import ssl
 import threading
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -215,13 +216,15 @@ class H3Transport:
         self._thread = threading.Thread(target=self._loop.run_forever, name="h3-client", daemon=True)
         self._thread.start()
 
-    def request(self, method: str, path: str, body: bytes = b"") -> bytes:
+    def request(self, method: str, path: str, body: bytes = b"", timeout_s: float | None = None) -> bytes:
+        """`timeout_s` bounds the whole call, retry included; past it the request is abandoned (`TimeoutError`)."""
         request_id = new_request_id()
+        deadline = time.monotonic() + (self.timeout_s if timeout_s is None else timeout_s)
         try:
-            return self._call(method, path, body, request_id)
+            return self._call(method, path, body, request_id, deadline)
         except ConnectionLost:
             self._drop()
-            return self._call(method, path, body, request_id)
+            return self._call(method, path, body, request_id, deadline)
 
     def health(self) -> str:
         return self.request("GET", "/health").decode()
@@ -236,9 +239,16 @@ class H3Transport:
         if self._holder is not None:
             await self._holder
 
-    def _call(self, method: str, path: str, body: bytes, request_id: str) -> bytes:
+    def _call(self, method: str, path: str, body: bytes, request_id: str, deadline: float) -> bytes:
+        budget = deadline - time.monotonic()
+        if budget <= 0:
+            raise TimeoutError(f"{method} {path}: deadline passed before sending")
         future = asyncio.run_coroutine_threadsafe(self._send(method, path, body, request_id), self._loop)
-        status, data = future.result(self.timeout_s)
+        try:
+            status, data = future.result(budget)
+        except TimeoutError as e:
+            future.cancel()
+            raise TimeoutError(f"{method} {path}: no answer within {budget:.2f} s") from e
         if status != 200:
             raise ServiceError(f"{method} {path}: HTTP/3 status {status}")
         return data

@@ -71,22 +71,25 @@ class TruthSequence:
 
 
 class AlwaysContinue:
-    """Interaction-lane baseline: whatever changed, keep the current step (the owner reaffirms it under the new
-    instruction). What Jev's interaction acts must beat on the revision benchmark."""
+    """Interaction-lane baseline (re-prompting S1): whatever the user said becomes the task text and the current step
+    goes on under it (the owner reaffirms it). What Jev's interaction acts must beat on the revision benchmark."""
 
     name = "always-continue"
 
     def decide(self, s: ObservationSnapshot) -> Verdict:
-        return Verdict(Operation(OpKind.CONTINUE), f"{s.trigger}: keep the current step")
+        said = s.latest_utterance if s.trigger == "instruction" else None
+        return Verdict(Operation(OpKind.CONTINUE), f"{s.trigger}: keep the current step", task=said or None)
 
 
 class NativePlanner:
-    """One moving command without a subtask; S1 plans its own subtasks from the instruction (π0.5²'s language head).
-    After an instruction change the owner revokes it and this issues a new one under the new instruction."""
+    """One moving command without a subtask; S1 plans its own subtasks from the task text (π0.5²'s language head). Asked
+    to answer a change itself (one lane, or the revoke baseline), it re-prompts S1: what the user said becomes the task
+    text."""
 
     name = "native"
 
     def decide(self, s: ObservationSnapshot) -> Verdict:
+        said = (s.latest_utterance or None) if s.trigger == "instruction" else None
         if s.active_operation is None or s.active_operation.kind != OpKind.SWITCH_TO:
-            return Verdict(_step(None), "hand the instruction to S1's own planner")
-        return Verdict(Operation(OpKind.CONTINUE), "S1 plans its own subtasks")
+            return Verdict(_step(None), "hand the task to S1's own planner", task=said)
+        return Verdict(Operation(OpKind.CONTINUE), "S1 plans its own subtasks", task=said)

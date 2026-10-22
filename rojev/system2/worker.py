@@ -78,7 +78,7 @@ class DecisionWorker:
                                 snap.active_cmd, 0, v.operation, v.scores, v.preconditions,
                                 self.now() + self.proposal_ttl_s,
                                 {**v.evidence, "reason": v.reason, "trigger": snap.trigger, "decide_ms": round(ms, 1),
-                                 "decider": self.decider.name})
+                                 "decider": self.decider.name}, v.task)
 
     def _run(self) -> None:
         while True:

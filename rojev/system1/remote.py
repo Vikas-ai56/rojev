@@ -24,15 +24,15 @@ class RemotePolicy(Policy):
     def health(self) -> str:
         return self.transport.health()
 
-    def act(self, obs: Observation, subtask: str) -> ActionChunk:
-        return self.act_samples(obs, subtask, 1)[0]
+    def act(self, obs: Observation, subtask: str, timeout_s: float | None = None) -> ActionChunk:
+        return self.act_samples(obs, subtask, 1, timeout_s)[0]
 
-    def act_samples(self, obs: Observation, subtask: str, k: int) -> list[ActionChunk]:
+    def act_samples(self, obs: Observation, subtask: str, k: int, timeout_s: float | None = None) -> list[ActionChunk]:
         """Per chunk: the service's stage times plus `network` = round trip − those stages, `round_trip` and
         `request_kb` of the one shared request."""
         body = wire.encode_request(obs, subtask, k, self.codec)
         t0 = time.perf_counter()
-        chunks = wire.decode_response(self.transport.request("POST", "/act", body))
+        chunks = wire.decode_response(self.transport.request("POST", "/act", body, timeout_s))
         rtt = (time.perf_counter() - t0) * 1000
         if len(chunks) != k:
             raise ValueError(f"asked the service for {k} samples, got {len(chunks)}")

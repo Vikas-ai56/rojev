@@ -28,6 +28,17 @@ first due time. A deviation observed under another command (an older one, or non
 
 A derived floor above the chunk's length means even the whole chunk cannot cover two latencies: commitment cannot keep
 up with the policy and the robot will starve between chunks. Each such request is counted (`floor_over_chunk`).
+
+Each request has a deadline: the duration of the last chunk (its horizon × dt). A chunk's actions are placed at its
+observation's time, so an answer older than that is entirely in the past and useless; waiting longer only starves the
+robot (a stalled connection once held it for 105 s). On `TimeoutError` the request is abandoned, counted (`timeouts`)
+and the next one is made at once on the newest observation, with no back-off. Before the first chunk the horizon is
+unknown and the policy's own timeout applies (a cold first request is slow).
+
+When the command leaves the subtask to S1 (`operation.subtask` None, the policy plans its own steps) and the policy
+reports the subtask it chose (`ActionChunk.info["subtask"]`), a change from one chunk to the next under the same
+command means S1 considers the previous subtask done: it is posted as a `StepEvent` (source `s1-planner`) through
+`on_step`, so the owner records the progress and asks the planning lane.
 """
 import dataclasses
 import math
@@ -38,7 +49,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from rojev.control import ExecutionRuntime
-from rojev.protocol import Capture, TimedChunk
+from rojev.protocol import AcceptedGoal, Capture, StepEvent, TimedChunk
 
 from .commit import CommitPolicy, FixedCommit
 from .policy import Policy
@@ -50,7 +61,9 @@ class S1Stats:
     the policy reported (e.g. the subtask its own planner chose); `committed` the committed length per request,
     `commit_reasons` how often each commitment rule fired, `forced` the requests made by `refill_now`,
     `refill_ignored` the refills refused because they named another command than the one being supplied, `floors` the
-    floor passed with each request, and `floor_over_chunk` the requests whose measured floor exceeded the chunk."""
+    floor passed with each request, `floor_over_chunk` the requests whose measured floor exceeded the chunk, and
+    `planner_steps` the subtask switches of S1's own planner posted as step events, `timeouts` the requests abandoned at
+    their deadline."""
 
     requests: int = 0
     accepted: int = 0
@@ -65,16 +78,22 @@ class S1Stats:
     refill_ignored: int = 0
     floors: list[int] = field(default_factory=list)
     floor_over_chunk: int = 0
+    planner_steps: int = 0
+    timeouts: int = 0
 
 
 class S1Runner:
     def __init__(self, runtime: ExecutionRuntime, policy: Policy, latest: Callable[[], Capture],
                  now: Callable[[], float], refill_s: float, poll_s: float = 0.005, error_backoff_s: float = 0.5,
-                 commit: CommitPolicy | None = None, latency_window: int = 20):
+                 commit: CommitPolicy | None = None, latency_window: int = 20,
+                 on_step: Callable[[StepEvent], None] | None = None):
         self.runtime, self.policy, self.latest, self.now = runtime, policy, latest, now
         self.refill_s, self.poll_s, self.error_backoff_s = refill_s, poll_s, error_backoff_s
         self.commit = commit or FixedCommit()
+        self.on_step = on_step
         self.stats = S1Stats()
+        self._planned: tuple[int, str] | None = None
+        self._horizon_s: float | None = None
         self._latency: deque[float] = deque(maxlen=latency_window)
         self._refill_lock = threading.Lock()
         self._refill_cmd: int | None = None
@@ -108,6 +127,10 @@ class S1Runner:
             return horizon
         return math.ceil(2 * latency / self.runtime.spec.dt) + 1
 
+    def deadline_s(self) -> float | None:
+        """How long a request may take before its answer is useless: the last chunk's duration (None before one)."""
+        return self._horizon_s
+
     def refill_now(self, cmd_id: int | None) -> bool:
         """Request the next chunk for `cmd_id` at once, on the newest observation, whatever is queued (thread-safe).
         Taken only if `cmd_id` is the command being supplied (`runtime.target()`); otherwise ignored and counted in
@@ -139,9 +162,14 @@ class S1Runner:
         if goal.instruction:
             observation = dataclasses.replace(observation, task=goal.instruction)
         subtask = goal.operation.subtask or ""
+        deadline = self.deadline_s()
         try:
-            chunks = (self.policy.act_samples(observation, subtask, self.commit.samples) if self.commit.samples > 1
-                      else [self.policy.act(observation, subtask)])
+            chunks = (self.policy.act_samples(observation, subtask, self.commit.samples, deadline)
+                      if self.commit.samples > 1 else [self.policy.act(observation, subtask, deadline)])
+        except TimeoutError as e:
+            self.stats.timeouts += 1
+            self.stats.last_error = f"TimeoutError: {e}"
+            return True
         except Exception as e:
             self.stats.errors += 1
             self.stats.last_error = f"{type(e).__name__}: {e}"
@@ -149,6 +177,7 @@ class S1Runner:
             return True
         infer_ms = (time.perf_counter() - w0) * 1000
         horizon = min(len(c.actions) for c in chunks)
+        self._horizon_s = horizon * self.runtime.spec.dt
         floor = self.floor(horizon)
         self.stats.floors.append(floor)
         self.stats.floor_over_chunk += floor > horizon
@@ -161,12 +190,26 @@ class S1Runner:
                            commitment.actions, {**chunk.timings_ms, "s1_wall": round(infer_ms, 1)})
         if chunk.info:
             self.stats.info.append({"t": round(capture.t, 3), "cmd": goal.cmd_id, **chunk.info})
+        if goal.operation.subtask is None:
+            self._planner_moved_on(goal, capture, chunk.info.get("subtask"))
         now = self.now()
         if self.runtime.submit(timed, now):
             self.stats.accepted += 1
         self.stats.obs_age_s.append(now - capture.t)
         self._latency.append(now - capture.t)
         return True
+
+    def _planner_moved_on(self, goal: AcceptedGoal, capture: Capture, subtask: str | None) -> None:
+        """Post a step event when S1's own planner switches subtask under the same command (see module docstring)."""
+        if not subtask:
+            return
+        previous, self._planned = self._planned, (goal.cmd_id, subtask)
+        if previous is None or previous[0] != goal.cmd_id or previous[1] == subtask:
+            return
+        self.stats.planner_steps += 1
+        if self.on_step is not None:
+            self.on_step(StepEvent(goal.epoch, goal.cmd_id, capture.t, "s1-planner", previous[1],
+                                   {"next": subtask, "obs_id": capture.obs_id}))
 
     def _refill_for(self, cmd_id: int) -> bool:
         """Whether a refill is pending for `cmd_id`; one taken for a command no longer supplied is dropped (counted)."""

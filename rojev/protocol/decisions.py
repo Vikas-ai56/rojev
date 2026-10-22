@@ -11,7 +11,8 @@ from .observation import Capture
 
 @dataclass(frozen=True)
 class UserInstruction:
-    """A new or revised user instruction; the owner bumps `instruction_rev`."""
+    """Something the user said. The owner bumps `instruction_rev` and adds it to the dialogue; it changes the task text
+    S1 is conditioned on only when an accepted decision adopts new task text (`DecisionProposal.task`)."""
 
     text: str
 
@@ -44,16 +45,20 @@ class Keyframe:
 
 @dataclass(frozen=True)
 class StepEvent:
-    """Evidence that the running step may be done, posted to the owner by whoever observes it (spec §4 step-completion
-    events): a postcondition watcher (MJev, a sensor), S1's own planner moving on to another subtask, a phase boundary.
-    `cmd_id` is the command the evidence is about; `source` names the observer; `detail` is what it saw. The owner asks
-    the planning lane at once and, if the step is then left, records `source` and `detail` as the keyframe's evidence."""
+    """Evidence that a step of the running command is done, posted to the owner by whoever observes it (spec §4
+    step-completion events): an end-state check (MJev, a sensor) or S1's own planner moving on to another subtask.
+    `cmd_id` is the command the evidence is about; `step` the step judged done; `source` names the observer; `detail`
+    is what it saw; `checked` is True when an end-state check found the step done (a claim, such as S1's planner moving
+    on, is not). The owner asks the planning lane at once and, when the step is then left (or, for S1's own steps, when
+    the event is checked), records `source` and `detail` as the keyframe's evidence."""
 
     epoch: int
     cmd_id: int | None
     t: float
     source: str
+    step: str
     detail: dict = field(default_factory=dict)
+    checked: bool = False
 
 
 USER, ROBOT = "user", "robot"
@@ -73,14 +78,15 @@ class Turn:
     objects: tuple[str, ...] = ()
 
 
-ACK = "ack"
+ACK, UNANSWERED = "ack", "unanswered"
 
 
 @dataclass(frozen=True)
 class Utterance:
     """Something the robot says or shows (owner → executor, which renders it as text, speech or a light). `template`
-    is `ACK` the moment an instruction is heard (the fast acknowledgement, before any model answers), or the template
-    of an accepted operation (an ASK question, a report); `cmd_id` is that operation's command."""
+    is `ACK` the moment an instruction is heard (the fast acknowledgement, before any model answers), `UNANSWERED` when
+    no decision answered a change (the robot holds), or the template of an accepted operation (an ASK question, a
+    report); `cmd_id` is that operation's command."""
 
     epoch: int
     t: float
@@ -112,7 +118,8 @@ class DecisionFailure:
 @dataclass(frozen=True)
 class ObservationSnapshot:
     """What a decider sees, frozen when the owner asks: the newest observation (`capture`, a loop `Capture`) plus the
-    owner's state at that moment. `active_cmd` / `active_operation` describe the desired command (pending or active);
+    owner's state at that moment. `instruction` is the task text in force (what S1 is conditioned on); what the user
+    last said is `latest_utterance`. `active_cmd` / `active_operation` describe the desired command (pending or active);
     `active_since` is when its operation started (kept across a reaffirmation; None before); `keyframes` are the steps
     judged done, in order; `trigger` says why the decision was requested; `review` is True while the desired command is
     under review after an instruction change; `deviation` is the latest execution deviation of the desired command;
@@ -135,6 +142,12 @@ class ObservationSnapshot:
     step_event: StepEvent | None = None
     hold: Hold | None = None
     dialogue: tuple[Turn, ...] = ()
+
+    @property
+    def latest_utterance(self) -> str:
+        """The user's most recent words (the newest user turn), "" if none: what a change decider answers. `instruction`
+        is the task text in force, which an utterance alone never replaces."""
+        return next((t.text for t in reversed(self.dialogue) if t.speaker == USER), "")
 
 
 @dataclass(frozen=True)
@@ -165,7 +178,7 @@ class Advice:
 @dataclass(frozen=True)
 class DecisionProposal:
     """Jev's proposal. `base_active_cmd` is the active command the decision assumed; `scores` maps candidate labels
-    to the decision model's probabilities."""
+    to the decision model's probabilities; `task` is new task text to condition S1 on (a revision), None to keep it."""
 
     epoch: int
     request_id: int
@@ -179,4 +192,5 @@ class DecisionProposal:
     preconditions: tuple[Precondition, ...]
     expires_t: float
     evidence: dict = field(default_factory=dict)
+    task: str | None = None
     schema: int = SCHEMA

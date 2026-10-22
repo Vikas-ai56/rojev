@@ -42,7 +42,7 @@ class StandInPolicy(Policy):
     def __init__(self, latency_s: float, horizon: int = 20, fail: bool = False, think=time.sleep):
         self.latency_s, self.horizon, self.fail, self.think, self.calls = latency_s, horizon, fail, think, 0
 
-    def act(self, obs: Observation, subtask: str) -> ActionChunk:
+    def act(self, obs: Observation, subtask: str, timeout_s: float | None = None) -> ActionChunk:
         self.calls += 1
         self.think(self.latency_s)
         if self.fail:
@@ -143,7 +143,7 @@ def test_a_chunk_in_flight_when_revoked_is_rejected():
     sim = Sim(latency_s=0.05, refill_s=0.3)
 
     class RevokesWhileThinking(StandInPolicy):
-        def act(self, obs, subtask):
+        def act(self, obs, subtask, timeout_s=None):
             if self.calls == 1:
                 sim.runtime.revoke(Revoke(1, 1, "user changed mind"), sim.clock.t)
             return super().act(obs, subtask)
@@ -168,7 +168,7 @@ def test_policy_is_conditioned_on_the_commands_instruction_not_the_stale_task():
     seen = []
 
     class Recorder(StandInPolicy):
-        def act(self, obs, subtask):
+        def act(self, obs, subtask, timeout_s=None):
             seen.append((obs.task, subtask))
             return super().act(obs, subtask)
 
@@ -218,7 +218,7 @@ class Ramp(Policy):
     def __init__(self, q0):
         self.q0 = q0
 
-    def act(self, obs, subtask):
+    def act(self, obs, subtask, timeout_s=None):
         q = np.asarray(obs.state, dtype=float)
         steps = np.linspace(0, 1, 30)[:, None]
         target = np.where(np.arange(len(q)) == 0, self.q0[0] + 0.3, self.q0)
@@ -306,3 +306,68 @@ def test_so101_realtime_keeps_its_clock_and_lag_budget():
         period = 1.0 / spec.control_hz
         assert (robot.clock.now() - t0) == pytest.approx(time.perf_counter() - w0, abs=period)
         assert loop.max_lag_s < period and runner.stats.accepted >= 1
+
+
+class PlanningPolicy(StandInPolicy):
+    """Reports the subtask its own planner chose for each chunk, from a script."""
+
+    def __init__(self, subtasks, **kw):
+        super().__init__(0.0, **kw)
+        self.subtasks = list(subtasks)
+
+    def act(self, obs: Observation, subtask: str, timeout_s: float | None = None) -> ActionChunk:
+        chunk = super().act(obs, subtask)
+        return ActionChunk(chunk.actions, {}, {"subtask": self.subtasks.pop(0)})
+
+
+def test_s1s_own_planner_moving_on_is_posted_as_a_step_event():
+    posted = []
+    sim = Sim(0.0, policy=PlanningPolicy(["pick the cube", "pick the cube", "place the cube", "place the cube"]))
+    sim.runner.on_step = posted.append
+    sim.runtime.accept(AcceptedGoal(1, 1, 0, Operation(OpKind.SWITCH_TO), Transition.PAUSE_HOLD, expires_t=100.0),
+                       sim.clock.t)
+    for _ in range(4):
+        sim.runner.refill_now(1)
+        assert sim.runner.step()
+    assert [(e.cmd_id, e.step, e.source, e.detail["next"]) for e in posted] == [
+        (1, "pick the cube", "s1-planner", "place the cube")]
+    assert sim.runner.stats.planner_steps == 1
+
+
+def test_a_named_step_never_posts_planner_events():
+    posted = []
+    sim = Sim(0.0, policy=PlanningPolicy(["a", "b"]))
+    sim.runner.on_step = posted.append
+    sim.go()
+    sim.runner.refill_now(1)
+    sim.runner.step()
+    sim.runner.refill_now(1)
+    sim.runner.step()
+    assert posted == [] and sim.runner.stats.planner_steps == 0
+
+
+class DeadlinePolicy(StandInPolicy):
+    """Records the deadline it is given; raises `TimeoutError` when told to (a stalled connection)."""
+
+    def __init__(self, **kw):
+        super().__init__(0.0, **kw)
+        self.deadlines, self.stall = [], False
+
+    def act(self, obs: Observation, subtask: str, timeout_s: float | None = None) -> ActionChunk:
+        self.deadlines.append(timeout_s)
+        if self.stall:
+            raise TimeoutError("no answer within the deadline")
+        return super().act(obs, subtask, timeout_s)
+
+
+def test_a_request_gets_one_chunk_duration_and_a_timeout_is_retried_at_once():
+    policy = DeadlinePolicy(horizon=20)
+    sim = Sim(0.0, policy=policy)
+    sim.go()
+    assert sim.runner.step()
+    assert policy.deadlines == [None] and sim.runner.deadline_s() == pytest.approx(20 * DT)
+    policy.stall = True
+    sim.runner.refill_now(1)
+    t0 = sim.clock.t
+    assert sim.runner.step() and sim.runner.stats.timeouts == 1 and sim.runner.stats.errors == 0
+    assert sim.clock.t == t0 and policy.deadlines[-1] == pytest.approx(20 * DT)
