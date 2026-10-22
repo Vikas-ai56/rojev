@@ -1,0 +1,10 @@
+{
+  "task": "OpenElectricKettleLid",
+  "instruction": "Press the button to open the lid of the electric kettle.",
+  "subtasks": [
+    "open the cabinet door",
+    "pick up the kettle",
+    "close the electric kettle lid"
+  ],
+  "seed": 0
+}

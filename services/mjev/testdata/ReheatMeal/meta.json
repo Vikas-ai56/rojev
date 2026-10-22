@@ -1,0 +1,10 @@
+{
+  "task": "ReheatMeal",
+  "instruction": "Place the tupperware containing the shrimp and potato meal in the microwave. Close the microwave door and press the start button to reheat the meal.",
+  "subtasks": [
+    "close the microwave door",
+    "press the start button",
+    "place the tupperware in the microwave"
+  ],
+  "seed": 0
+}

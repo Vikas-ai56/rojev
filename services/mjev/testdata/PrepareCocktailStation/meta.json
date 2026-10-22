@@ -1,0 +1,10 @@
+{
+  "task": "PrepareCocktailStation",
+  "instruction": "There is a bowl on the dining counter. Grab a lemon wedge from the fridge and place it in the bowl. Then get the liquor bottle and glass cup from the cabinet and place them next to the bowl.",
+  "subtasks": [
+    "open the refrigerator door",
+    "open the cabinet door",
+    "place the lemon wedge in the bowl"
+  ],
+  "seed": 0
+}
