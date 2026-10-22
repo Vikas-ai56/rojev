@@ -56,7 +56,7 @@ ACKs                 runtime outbox → owner (drained every owner tick); nothin
 
 ## State owner (`owner/state_owner.py`, `StateOwner`)
 - Single writer of instruction + revision, desired command, active record, keyframes, hold, dialogue. One thread: event queue + tick every `period_s` (heartbeat, ACK drain, interaction deadline, hold upkeep, heartbeat decision every `decide_every_s` = 1 s unless holding).
-- Instruction: revision + 1, `complete` cleared, user `Turn` added, `ACK` utterance at once (`say`), then a decision (`instruction`). Moving command: `review` (default) → `runtime.review`, lease shrinks to `review_s` (1 s); `revoke` (or a refused review) → revoked at once (stop-and-go baseline).
+- Instruction: revision + 1, `complete` cleared, user `Turn` added, `ACK` utterance at once (`say`), then a decision (`instruction`). The task text is unchanged until an accepted decision adopts new text (`DecisionProposal.task`); review lasts until the interaction deadline (`review_window_s`). Moving command: `review` (default) → `runtime.review`, lease shrinks to `review_s` (1 s); `revoke` (or a refused review) → revoked at once (stop-and-go baseline).
 - Proposal refused (logged with the reason) unless: same epoch, same revision, newer than the last applied request, a request this owner made, not a planning proposal while an interaction request pends, not a superseded interaction request, about the current desired command, not a routine planning proposal while a hold stands, not expired, no preconditions (unchecked until step 6).
 - CONTINUE or the same operation renews the lease (`lease_s` 3 s) and ends review; if the desired command predates the current revision and moves, it is **reaffirmed**: same operation, new command id, new instruction, always `immediate`, no pause. The `continue` event records `renewed`. COMPLETE sets `complete` (no more heartbeat decisions) and holds; anything else = new command.
 - Transition: configured one between two moving commands; `pause_hold` into or out of a hold.
@@ -72,8 +72,8 @@ ACKs                 runtime outbox → owner (drained every owner tick); nothin
 
 ### Two lanes (step 4.4)
 - `interaction=None` → one lane. Given: triggers `instruction`, `deviation`, `hold` → interaction worker; heartbeat, `step` and failed / expired / dropped commands → planning.
-- Priority: while an interaction request pends, planning requests are deferred (the latest is sent once the interaction decision is applied; an escalation replaces it) and planning proposals refused.
-- Release by its proposal, its `DecisionFailure`, or `interaction_timeout_s` (1 s); on failure, timeout or refusal the same trigger escalates to planning, so every change is answered.
+- Priority: while an interaction request pends, planning requests are deferred (the latest is sent once the interaction decision is applied; an unanswered change drops it) and planning proposals refused.
+- Release by its proposal, its `DecisionFailure`, or `interaction_timeout_s` (1 s); on failure, timeout or refusal the robot holds (`UNANSWERED`, said) and the interaction lane is asked again on the hold recheck; planning never answers a change, so an unread "stop" cannot move the robot.
 
 ### Progress keyframes (always on)
 - Recorded when an accepted SWITCH_TO to another subtask, or COMPLETE, moves past the step that is actually running; with the observation the decision used.
@@ -95,7 +95,8 @@ ACKs                 runtime outbox → owner (drained every owner tick); nothin
 ## v1 role split (decided 2026-10-21) and what is planned
 - v1 = plan Route A: π0.5² picks the next step and moves; Jev answers only changes (continue / revise / wait / ask / abort) and ambiguous checks; MJev checks end states and grounds objects. Helix-type route B (small S1 on a learned Jev latent, trained) = v2.
 - **Built 2026-10-22:** step-completion events (`StepEvent` → planning lane; end-state checks in `features/jev-interaction.md`); Jev v1 interaction decider (same doc).
-- **Planned:** π0.5²'s planner switching subtask (`ActionChunk.info`) and phase boundaries as step-event sources; heartbeat slowed to just under the lease once events cover steps; precondition checks.
+- **Built 2026-10-22:** π0.5²'s planner switching subtask as a step event (keyframe in native mode); heartbeat 0.8 × lease when events cover progress (`realtime.py`). Phase boundaries rejected as a source.
+- **Waiting for perception:** precondition checks (proposals carrying preconditions stay refused).
 
 ## Tests (no models; `uv run pytest`, re-run 2026-10-22: 74 passed, 2 `timing` deselected)
 | File | Tests | Pins |

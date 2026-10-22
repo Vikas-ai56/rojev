@@ -25,7 +25,7 @@ owner. Robot specifics enter only as an `ActionSpec` and an `EffectModel` (`exec
 - `RoboCasaBackend` = the `Backend` (`observe`, `step`); the loop steps it at k·dt, paced to the wall clock.
 - `ExecutionRuntime(PANDA_OMRON, epoch=1, last=START, blend_s, stop_s)`, `Guard(runtime)`.
 - `ExecutionMonitor(PandaOmronEffect(), …, on_deviation)` runs inside the loop's `on_tick`.
-- `S1Runner(runtime, RecordingPolicy(make_policy(a)), loop.latest, loop.now, refill_s, commit)` (`realtime.py:355`).
+- `S1Runner(runtime, RecordingPolicy(make_policy(a)), loop.latest, loop.now, refill_s, commit)` (`realtime.py:370`).
 - Flags: `--policy remote|skills|wiggle`, `--commit-policy fixed|phase`, `--speculative-predict --samples K`,
   `--execution-monitor M.json`, `--refill`, `--blend`, `--stop-s`, `--lease`.
 - Outputs: `ticks.jsonl` (one line per tick), `s1_requests.jsonl`, `commits.jsonl`, summary S1 stats.
@@ -55,7 +55,7 @@ owner. Robot specifics enter only as an `ActionSpec` and an `EffectModel` (`exec
   non-moving command, paused, held. Actions already due are skipped. A chunk for the pending command splices in at its
   first due time; one for the active command replaces its own future queue.
 - `target()` (`:267`): the command that needs chunks: pending, else the active one while moving (or starved).
-- `tick(now)` (`:287`), in order:
+- `tick(now)` (`:292`), in order:
   1. lease expiry;
   2. skip past-due actions;
   3. the due action: the first one of the pending command activates it (`activated` ACK);
@@ -64,22 +64,29 @@ owner. Robot specifics enter only as an `ActionSpec` and an `EffectModel` (`exec
   6. otherwise the hold, with a decelerating ramp;
   7. irreversible switches frozen outside a running, unreviewed chunk;
   8. projection onto the bounds.
-- `last_action()` (`:277`): copy of the last applied action (the commitment policy's switch state in effect).
-- ACKs are an outbox the owner drains (`drain_acks`, `:382`); `seq` strictly increases.
+- `last_action()` (`:282`): copy of the last applied action (the commitment policy's switch state in effect);
+  `active_goal()` (`:277`): the active command under the lock (the step watcher's read).
+- ACKs are an outbox the owner drains (`drain_acks`, `:387`); `seq` strictly increases.
 
 ## 5. S1 runner (`system1/runner.py`); supply
-- `step` (`:123`), on its own thread every `poll_s`:
+- `step` (`:133`), on its own thread every `poll_s`:
   1. `goal = runtime.target()`; none → nothing to do (holding, or no command).
   2. Request only if a refill is pending for this command, or less than `lead_s()` is queued (`queued_until`).
   3. `capture = latest()`; observation task = `goal.instruction`; subtask = `goal.operation.subtask` ("" = π0.5²
      plans its own).
   4. `policy.act` (or `act_samples(K)` for consensus): one request, one upload.
-  5. `floor(horizon)` (`:104`) = ⌈2L/dt⌉ + 1 (whole chunk before the first measurement); `floor_over_chunk` counted.
+  5. `floor(horizon)` (`:114`) = ⌈2L/dt⌉ + 1 (whole chunk before the first measurement); `floor_over_chunk` counted.
   6. `commit.plan(candidates, spec, floor, runtime.last_action())` → the committed prefix.
   7. `TimedChunk(epoch, cmd_id, obs_id, t_start = capture.t, dt, actions)` → `runtime.submit`.
   8. L = now − capture.t into the latency window (the max of the last 20 is the estimate).
-- `lead_s` (`:99`) = max(`refill_s`, L + dt): request before the queue runs out.
-- `refill_now(cmd_id)` (`:111`): a fresh chunk at once, taken only for the command being supplied (else counted in
+  9. If the command has no subtask (π0.5² plans its own) and the chunk reports a different subtask than the previous
+     one, `_planner_moved_on` posts an unchecked `StepEvent(source="s1-planner", step=previous)` through `on_step`:
+     to the step watcher as a claim when one runs (confirmed by one check before it counts), else to the owner.
+- `lead_s` (`:109`) = max(`refill_s`, L + dt): request before the queue runs out.
+- `deadline_s()`: each request is abandoned after one chunk duration (horizon × dt of the last chunk; an older answer
+  is entirely in the past); `TimeoutError` → `timeouts` + an immediate new request, no back-off. The transport bounds
+  the whole call, retry included, and closes the connection past it. (Live: one 105 s network stall starved a run.)
+- `refill_now(cmd_id)` (`:121`): a fresh chunk at once, taken only for the command being supplied (else counted in
   `refill_ignored`).
 
 ## 6. Commitment (`system1/commit.py`)
@@ -114,7 +121,7 @@ owner. Robot specifics enter only as an `ActionSpec` and an `EffectModel` (`exec
   2. over a window: measured change vs a linear map of this and the previous window's commands;
   3. directions never exercised in calibration are not scored;
   4. score > conformal threshold → one `Deviation(epoch, cmd_id, t, score, threshold)` per excursion.
-- `realtime.on_deviation` (`:330`): `owner.post(d)` (S2 decides) and `runner.refill_now(d.cmd_id)` (S1 replans at once).
+- `realtime.on_deviation` (`:345`): `owner.post(d)` (S2 decides) and `runner.refill_now(d.cmd_id)` (S1 replans at once).
 - Contact-blind: deliberate contact and a blocked arm look alike (`blocked` scenario fails).
 
 ## 9. Messages on this side
@@ -126,6 +133,7 @@ owner. Robot specifics enter only as an `ActionSpec` and an `EffectModel` (`exec
 | `Capture` | loop → runner, owner, watcher | obs_id, t, observation (images, state, task) |
 | `TickRecord` | loop → monitor, logs | guard result, before / after capture, step_ms, lag_s |
 | `Deviation` | monitor → owner (+ runner refill) | cmd_id, t, score, threshold |
+| `StepEvent` | runner → owner (π0.5² switched subtask) | cmd_id, step done, source `s1-planner`, next subtask |
 | wire v2 request / response | runner ↔ GPU service | observation, subtask, K / K chunks, timings, info |
 
 ## 10. Timeline: a new command until steady supply (fixed commitment, π0.5² remote; latencies from the 2026-10-21 live run)
@@ -142,9 +150,9 @@ The cold first request took 3.96 s in the live run; requests after it were p50 6
 ## 11. Evidence (2026-10-22)
 | Suite | Result |
 |---|---|
-| core `uv run pytest -q` (runtime, runner, commitment, monitor, transport, owner, S2) | 265 passed, 1 skipped, 2 timing deselected |
+| core `uv run pytest -q` (runtime, runner, commitment, monitor, transport, owner, S2) | 297 passed, 1 skipped, 2 timing deselected |
 | `-m timing` (pacing, SO-101 real-time budget) | 2 passed (one earlier failure under machine load) |
-| executor tests (harness, serve) | 9 passed |
+| executor tests (harness, serve) | 10 passed |
 | scenario matrix, scripted S1 | 17/19 (`blocked` contact-blind; `step-events` needs an S1 that completes steps) |
 | π0.5² live, 30 s (2026-10-21) | real-time factor 0.971, 0 starved, 9 continuous overshoot ticks |
 
@@ -157,5 +165,5 @@ The cold first request took 3.96 s in the live run; requests after it were p50 6
   - K-sample latency, draw diversity and memory on the GPU;
   - whether the real adapter accepts a K-row batch;
   - the contact-aware monitor;
-  - phase-boundary and π0.5² subtask-switch step events (S1 info is logged but not yet posted to the owner);
+  - π0.5²'s subtask-switch step events are built but not yet run with π0.5² (phase boundaries rejected as a source);
   - a native control core is needed only above ~100–200 Hz (research brief 2026-10-22).

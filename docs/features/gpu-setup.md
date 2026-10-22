@@ -78,3 +78,8 @@
 - `--dry-run` against `lambda` (A100, set up by hand): driver, packages, uv, vendors, envs, torch ×3 `ok`; code / assets / prepare-remote / tokens / JSON `would`; all three services reported `blocked: foreign process`; nothing written on the box. Pinned S2 weights confirmed in its HF cache.
 - 2026-10-22, first real run on a fresh box (`lambda`: A100 SXM4 40 GB, Ubuntu 24.04 without a driver, Phoenix AZ): driver install, packages, envs, weights, tokens, the OneJev and MJev units came up healthy; the π0.5² unit died at import because the hook did not ship `embodiment.py` (imported by `serve.py` since the 2026-10-21 switch mapping) → added to `files()` and re-run (idempotent). Not yet exercised: memory refusal.
 - `lambda` was terminated after a backup on 2026-10-21 (`results/gpu-backups/lambda-v1-test-20261021-1456/`); the WAN transport numbers in [`remote-models.md`](remote-models.md) come from it.
+
+## After setup: the GPU test suite
+- `cd executors/robocasa-pi052 && uv run python gpu_suite.py --service ~/.config/rojev/services/<host>.json [--only …] [--quick]`.
+- Steps, sequential on purpose (one GPU; π0.5²'s service serves one request at a time, parallel runs would measure each other): `baseline` (π0.5² native per task), `k_samples` (K = 1 / 3 / 5 latency, draw spread, GPU memory), `jev` (OneJev latency; live wait / stop / ask runs with the deadline set to 1.5 × the slowest measured decision; calibration cases recorded), `mjev` (oracle arm + MJev step watcher; P(done) vs truth per check), `t8a_gate` (commitment ablation + gate run with video).
+- Output `results/gpu-suite/<stamp>/{<step>/…, suite.json, suite.md}`; a failed step is recorded and the suite goes on.

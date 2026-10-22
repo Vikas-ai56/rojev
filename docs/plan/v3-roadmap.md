@@ -61,8 +61,8 @@ Caveat: π0.5² is Panda/RoboCasa → model results may not transfer to SO-101.
   calibrated on stand-in runs that move one axis; recalibrate on clean π0.5² runs (all arm axes) before T8
 - [ ] T1.15 Step-completion events → planning lane (postcondition watchers, S1 planner subtask switch, phase
   boundary); heartbeat demoted to liveness + lease renewal (spec §4, step 6) (2026-10-22: `StepEvent` + owner +
-  `StepWatcher` with MJev end-state checks built; S1-planner switch and phase boundary sources, MJev thresholds (T6)
-  and the slower heartbeat open)
+  `StepWatcher` with MJev end-state checks, π0.5² subtask switch as a source, heartbeat 0.8 × lease with events;
+  phase boundaries rejected as a source; MJev thresholds (T6) open)
 - [ ] T1.16 Jev v1 interaction lane (spec §9) (2026-10-22: `rojev/system2/jev` built + standing holds, dialogue,
   utterances in the owner; open: labelled calibration set + temperature fit (GPU), live OneJev latency vs
   `interaction_timeout_s`, ASK templates with object ids after perception)

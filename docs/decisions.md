@@ -582,3 +582,69 @@
 **Why:** `RemotePolicy(codec="raw")` contradicted the 2026-10-21 decision.
 **Rejected alternatives:** Codec only in the service JSON (two sources of truth).
 **Risks / edge cases found:** Codec check rests on 8 frames (recheck in T8a).
+
+## [2026-10-22] An unanswered change holds the robot; it never escalates to planning (reverses the 2026-10-21 escalation)
+**Decision:** Interaction failure, timeout or refused proposal → GUARDED_WAIT `UNANSWERED` as a standing hold (interrupted step kept), said to the user; the interaction lane is asked again on the hold recheck and Jev decides the original change then; the planning lane never answers a change.
+**Why:** Escalation let a planner (e.g. π0.5² re-prompted with "stop") answer an instruction it cannot read as an act, so an unread "stop" could move the robot.
+**Rejected alternatives:** Escalating with planning limited to non-moving answers (a filter on the planner, not a rule about authority); waiting longer without holding (the robot keeps moving on an unread change).
+**Risks / edge cases found:** A permanently failing or too-slow interaction lane keeps the robot held; `interaction_timeout_s` must be set above Jev's measured latency (D6, GPU); `--hold-recheck` must be set for the re-ask.
+
+## [2026-10-22] π0.5²'s own subtask switch is a step event; phase boundaries are not
+**Decision:** `S1Runner` posts `StepEvent(source="s1-planner", step=previous subtask)` when the policy's reported subtask changes under a command without a subtask; `StepEvent` gains `step`; when S1 plans its own steps the event itself is the keyframe; `realtime.py` heartbeat defaults to 0.8 × lease when step events cover progress (verifier on, or native π0.5²), else 1 s.
+**Why:** Native mode had no progress record and no event source; π0.5²'s switch is its own completion judgement.
+**Rejected alternatives:** Phase boundaries (motion slowing) as completion events (a slowdown is not completion; one planning request per chunk); parsing `ActionChunk.info` in the owner (S1 detail does not belong there).
+**Risks / edge cases found:** A switch may mean "abandoned", not "done" (π0.5² does not say which); the planner's subtask text is free text, not a skill id.
+
+## [2026-10-22] Jev calibration: T by NLL, margin by target accuracy, cases recorded from live runs
+**Decision:** `fit_margin` = smallest margin whose decided cases reach `target_accuracy` (else 1.0: always abstain), `fit_calibration` = T + margin + coverage; `--record-interaction DIR` saves each Jev model decision (cameras, situation, legal options) with a `labels.jsonl` line to fill; `calibrate_jev.py` re-scores labelled cases with OneJev and writes the `Calibration` JSON.
+**Why:** The margin was a declared constant; it decides when Jev acts alone, so it must come from measured accuracy, and cases must be the exact inputs Jev sees.
+**Rejected alternatives:** Fitting the margin by NLL (NLL does not say when to abstain); synthetic cases without scenes (OneJev reads the images).
+**Risks / edge cases found:** Labels are human judgements; few cases per act make the margin noisy; re-scoring needs the GPU.
+
+## [2026-10-22] Harness invariants read the robot's switches from its ActionSpec; `dropped` ends a command
+**Decision:** `switches_held(run, spec)` replaces the Panda-indexed gripper check; `no_stale_action` treats `dropped` like revoked / expired.
+**Why:** The gripper index (6) was PandaOmron's; any robot plugs in through its `ActionSpec`.
+**Rejected alternatives:** A per-robot invariant module.
+**Risks / edge cases found:** Records must come from the same spec the run used (scenarios pass `PANDA_OMRON`).
+
+## [2026-10-22] Precondition checks, contact-aware monitor and object-naming questions wait for perception
+**Decision:** Not built now: proposals carrying preconditions stay refused; the monitor stays contact-blind; ASK keeps one generic template.
+**Why:** Each needs object identity or contact evidence (tracker / force), which does not exist yet; building them now would be untestable code without a real signal.
+**Rejected alternatives:** MJev-only precondition checks inside the owner (the owner never waits for a model); contact phases from hand-written rules.
+**Risks / edge cases found:** `blocked` keeps failing; Jev cannot ask "which object?" by name.
+
+## [2026-10-22] Revision-benchmark scorecard (T8)
+**Decision:** `rojev/eval/scorecard.py` scores runs from the owner, tick, decision and summary records against authored injections (time, kind, expected act, goal text): answer / execution latency, act correctness, wrong-goal commitments, wasted motion (ticks), pause, ask precision, act ECE; aggregated per arm; `RecordingDecider` logs `scores` so ECE is computable.
+**Why:** T8 needs one robot-agnostic definition for every arm; the owner's events with their `trigger` are the only authoritative record of what answered a change.
+**Rejected alternatives:** Arm path length from tick actions (commanded deltas, robot-specific dims); classifying acts from decider reason text; counting heartbeat decisions as answers.
+**Risks / edge cases found:** Subtask-less arms (native, Jev + `S1Replans`) get no goal metrics; `task_success` measures the starting task; a resume scores as revise; no live scored run yet.
+
+## [2026-10-22] The review window is the interaction deadline (live bug: every change went unanswered)
+**Decision:** With an interaction lane, a command under review keeps its lease until `interaction_timeout_s` (`StateOwner.review_window_s`); `review_s` applies only without one.
+**Why:** GPU suite 2026-10-22: OneJev answered in 1.15 s, the 1 s review lease had already expired, the answer was refused as stale and the robot held "unanswered"; two deadlines for one wait cannot disagree if there is only one.
+**Rejected alternatives:** Raising `review_s` by hand (drifts from the deadline again); accepting answers about an expired command (the robot may already be doing something else).
+**Risks / edge cases found:** The deadline must stay above Jev's measured latency (1.1–1.5 s over the WAN; suite sets 1.5 × the slowest measured).
+
+## [2026-10-22] An utterance never becomes the task text; only an accepted decision adopts new task text
+**Decision:** `UserInstruction` joins the dialogue and bumps `instruction_rev`; the task text S1 is conditioned on (`snapshot.instruction`, `AcceptedGoal.instruction`) changes only when an accepted proposal carries `task` (`Verdict.task`): Jev's REVISE (the `Reviser` returns operation + task text), and baselines that re-prompt S1 (native, always-continue) say so explicitly; deciders read `snapshot.latest_utterance`.
+**Why:** GPU suite 2026-10-22: "wait" and "go on" became π0.5²'s task text (in native mode its whole plan).
+**Rejected alternatives:** Concatenating task and utterance (a heuristic merge); keeping the utterance as task (the bug).
+**Risks / edge cases found:** A REVISE adopts the user's words verbatim ("actually, put the steak on the plate") and loses context from the original task; a generative rewrite would be better (not v1).
+
+## [2026-10-22] An S1 request's deadline is one chunk duration
+**Decision:** `S1Runner` passes `timeout_s` = the last chunk's horizon × dt to `Policy.act/act_samples`; `RemotePolicy` hands it to the transport, which bounds the whole call (retry included), closes the connection past it and raises `TimeoutError`; the runner counts it (`timeouts`) and re-requests at once on the newest observation; before the first chunk the transport's own timeout applies.
+**Why:** A chunk is placed at its observation's time, so an answer older than its duration is entirely in the past; a 105 s network stall starved the robot for the rest of a run (and run shutdown waited for it).
+**Rejected alternatives:** A fixed short timeout (wrong for slow policies or K samples); k × measured latency (abandons answers still useful); retrying the same request (stale observation).
+**Risks / edge cases found:** The server may still run an abandoned request (its answer is discarded); a policy slower than its own chunk duration times out every time (that is the floor-over-chunk condition, already counted).
+
+## [2026-10-22] π0.5²'s subtask switch is a claim; it counts as progress only when a check confirms it
+**Decision:** `StepEvent.checked`; with a verifier the runner's switch goes to `StepWatcher.claim`, one end-state check of the step it left, posted as checked only if P(done) ≥ threshold (else `unconfirmed`); without one the owner gets the unchecked event (planning asked, no keyframe); native-mode keyframes only from checked events.
+**Why:** GPU suite: π0.5²'s planner switched freezer ↔ fridge 18 times in 60 s, each switch recorded as progress.
+**Rejected alternatives:** Debouncing switches by time (a heuristic, still not evidence); dropping the source (native mode would have no event at all).
+**Risks / edge cases found:** Confirmation costs one MJev check (~0.46 s) per switch; MJev's positives are still unmeasured (T6).
+
+## [2026-10-22] Jev accuracy: wording first, then calibration, then compute (adaptive depth / LEV) only if T9 says so
+**Decision:** Order: (1) the model told what the user just said apart from the task (done: `task` / `user_just_said` in the situation) and act options worded as what the user wants (next, measured on held-out cases); (2) labelled cases → `calibrate_jev.py`; (3) T9 split of the remaining errors into evidence errors (the model lacked information) vs compute errors (a bigger model or more depth fixes them); adaptive depth / LEV only for the second kind; training (S2-B…) last.
+**Why:** GPU suite: OneJev chose "continue" 8/8 for "put the steak on the plate" while picking (the continue option read as compatible), but "revise" p 0.87 in the gate run where the situation was described differently: a wording/inputs failure first, not shown to be a depth failure.
+**Rejected alternatives:** LEV first (no evidence the errors are compute-bound); training first (no labelled set yet).
+**Risks / edge cases found:** Prompt tuning on 14 cases overfits; wording changes need a held-out set.

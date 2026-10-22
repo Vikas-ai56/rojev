@@ -78,8 +78,9 @@ Step 6 adds (✓ 2026-10-22):
 
 ## 4. State owner (`rojev/owner/state_owner.py`)
 Only writer of instruction revision, desired command, active record (from ACKs), progress; never blocks on inference.
-- **Instruction change (step 4, replaces revoke):** `instruction_rev += 1`; the moving command enters **review**
-  (lease shortened to `review_s`, irreversible switches frozen); ask the **interaction lane**.
+- **Instruction change (step 4, replaces revoke):** `instruction_rev += 1`; the utterance joins the dialogue (the task
+  text changes only when an accepted decision adopts new text, e.g. REVISE); the moving command enters **review**
+  (lease until the interaction deadline, irreversible switches frozen); ask the **interaction lane**.
   - CONTINUE under the new revision → **reaffirm**: same operation as a new command carrying the new instruction,
     `immediate` (S1 re-conditioned, no pause).
   - SWITCH_TO → new command, `immediate` (blended handover).
@@ -97,8 +98,9 @@ Only writer of instruction revision, desired command, active record (from ACKs),
 - **Two lanes (✓ 4.4):** interaction lane (instruction / deviation triggers) and planning lane (everything else);
   separate S2 workers, one owner. Priority: while an interaction request is pending, planning requests are deferred
   (the latest is sent once the interaction decision is applied) and planning proposals refused; released by its
-  proposal, `DecisionFailure` or `interaction_timeout_s`; on failure, timeout or refusal the trigger goes to the
-  planning lane. No interaction worker = one lane.
+  proposal, `DecisionFailure` or `interaction_timeout_s`; on failure, timeout or refusal the robot holds (GUARDED_WAIT
+  `UNANSWERED`, said) and the interaction lane is asked again on the hold recheck; the planning lane never answers a
+  change (2026-10-22). No interaction worker = one lane.
 - **Progress keyframes (✓ 4.4):** when an accepted proposal moves past a running step (SWITCH_TO another subtask, or
   COMPLETE) the step becomes a `Keyframe` with the observation the decision used; snapshots carry all keyframes,
   kept across repairs and revisions. Evidence = the decider's judgement until postconditions (step 6). Always on (the
@@ -106,11 +108,11 @@ Only writer of instruction revision, desired command, active record (from ACKs),
 - ACK: active only on `activated` with newer `seq`; rejected / expired / dropped → fall back to the running command,
   ask again; `chunk_rejected` → logged only. Reaffirm is always `immediate`.
 - Step done: postconditions hold (MJev / sensors; OneJev for ambiguous ones, step 6); sim truth = evaluation only.
-- **Step-completion events (step 6; ✓ owner + `StepWatcher` with end-state checks 2026-10-22):** the planning lane is
-  asked when a step may be done, not on a timer. Sources:
-  postcondition watchers (MJev / sensors on the running step's postconditions), π0.5²'s own planner switching subtask
-  (`ActionChunk.info`), a phase boundary where motion slows. The heartbeat (`decide_every_s`) stays only as liveness
-  and lease renewal, slowed to just under the lease (until step 6 it is the 1 s stand-in for these events).
+- **Step-completion events (step 6; ✓ 2026-10-22):** the planning lane is asked when a step may be done, not on a
+  timer. Sources: end-state checks (`StepWatcher`, MJev / sensors) and π0.5²'s own planner switching subtask
+  (`ActionChunk.info` → `S1Runner.on_step`; in native mode the event is the keyframe). Phase boundaries are not a
+  source (a slowdown is not completion). The heartbeat stays for liveness and lease renewal: 0.8 × lease when events
+  cover progress, else 1 s.
 - Heartbeat to the guard every tick; restart → new epoch, new command.
 
 ## 5. Execution runtime (`rojev/control/execution.py`)

@@ -21,14 +21,14 @@ Dependencies: protocol, transport, observability ← system2; owner → control 
 imports S1 or control: it reaches the robot only through the owner.
 
 ## 1. Entrypoint (`realtime.py`)
-- Planning worker: `DecisionWorker(RecordingDecider(make_planner(a)))` (`realtime.py:358`); arms `fixed`, `scripted`,
+- Planning worker: `DecisionWorker(RecordingDecider(make_planner(a)))` (`realtime.py:374`); arms `fixed`, `scripted`,
   `oracle`, `revisable(-truth)`, `native`.
-- Interaction worker (`:361`), if `--interaction` is given: `continue` (baseline), `rules` (keyword spoof) or `jev`
+- Interaction worker (`:377`), if `--interaction` is given: `continue` (baseline), `rules` (keyword spoof) or `jev`
   (`make_jev`: `--chooser onejev|keywords`, `--reviser s1|rewrite`, `--max-asks`, `--jev-calibration`).
 - `StateOwner(runtime, guard, planning, …, interaction, interaction_timeout_s, say=Speaker.say, hold_recheck_s)`
-  (`:364`).
-- `StepWatcher(make_verifier(a), lambda: runtime.active, loop.latest, owner.post, …)` (`:368`) with `--verify mjev|truth`.
-- User speech: `--say T:TEXT` → `owner.post(UserInstruction)` (`:399`). Robot speech: `Speaker.say` prints and logs
+  (`:380`).
+- `StepWatcher(make_verifier(a), runtime.active_goal, loop.latest, owner.post, …)` (`:384`) with `--verify mjev|truth`.
+- User speech: `--say T:TEXT` → `owner.post(UserInstruction)` (`:415`). Robot speech: `Speaker.say` prints and logs
   `utterances.jsonl`.
 
 ## 2. Messages
@@ -68,25 +68,26 @@ StepWatcher (runtime.active + latest capture) ─StepEvent─▶ owner
 ABORT, WAIT and ASK activate at once as holds; `target()` is then None, so S1 is no longer asked.
 
 ## 3. State owner (`owner/state_owner.py`)
-- `handle` (`:152`): routes instruction, deviation, step event, failure or proposal; one thread, one queue, never
+- `handle` (`:155`): routes instruction, deviation, step event, failure or proposal; one thread, one queue, never
   waits for a model.
-- `tick` (`:164`), every 50 ms:
+- `tick` (`:167`), every 50 ms:
   - heartbeat to the guard;
   - drain ACKs;
-  - an interaction request past its deadline escalates to planning;
+  - an interaction request past its deadline → `_unanswered` (hold, said; never planning);
   - a standing hold → `_keep_hold`, and no heartbeat;
   - else a planning heartbeat every `decide_every_s`.
-- `request_decision` (`:181`):
+- `request_decision` (`:184`):
   - lane from the trigger: `instruction` / `deviation` / `hold` → interaction; heartbeat / `step` / `cmd N
     rejected|expired|dropped` → planning;
   - planning deferred while interaction is pending (the latest trigger is replayed once that decision is applied);
   - routine planning blocked while a hold stands;
   - freezes the snapshot.
-- `_on_instruction` (`:217`): rev + 1; user `Turn`; `ACK` utterance at once; the moving command under review (keeps
-  moving, switches frozen, lease 1 s); asks the interaction lane.
-- `_on_deviation` (`:236`), `_on_step` (`:246`): only about the active command, else logged stale; ask at once
+- `_on_instruction`: rev + 1; user `Turn`; `ACK` utterance at once; the task text is NOT changed (only an accepted
+  `DecisionProposal.task` does); the moving command under review until the interaction deadline (`review_window_s`;
+  `review_s` without an interaction lane); asks the interaction lane.
+- `_on_deviation` (`:239`), `_on_step` (`:249`): only about the active command, else logged stale; ask at once
   (deviation → interaction, step → planning).
-- `_on_proposal` (`:266`), refusal chain (first match):
+- `_on_proposal` (`:272`), refusal chain (first match):
   1. epoch;
   2. revision;
   3. not newer than the last applied request;
@@ -98,21 +99,23 @@ ABORT, WAIT and ASK activate at once as holds; `target()` is then None, so S1 is
   9. expired;
   10. preconditions.
 
-  A refused interaction answer escalates its trigger to planning.
-- `_apply` (`:302`):
-  - same operation under a newer instruction → **reaffirm**: a new command, always `immediate`;
+  A refused interaction answer → `_unanswered` (`:334`): GUARDED_WAIT `UNANSWERED` as a standing hold, said to the
+  user, decided again on the hold recheck; the planning lane never answers a change.
+- `_apply`:
+  - `p.task` set → it becomes the task text; the same operation under new task text → **reaffirm**: a new command
+    carrying it, always `immediate`;
   - CONTINUE → renew the lease (`renewed` logged);
   - else keyframe → hold update → `_issue`.
-- `_update_hold` (`:334`) / `_keep_hold` (`:347`):
+- `_update_hold` (`:350`) / `_keep_hold` (`:363`):
   - ABORT, WAIT or ASK answering a change = a standing `Hold{operation, since, interrupted}`;
   - the owner keeps its command leased;
   - every `hold_recheck_s` it asks the interaction lane again (trigger `hold`);
   - released only by a moving operation or COMPLETE answering a change.
-- `_record_progress` (`:359`): a keyframe when a running step is moved past; evidence = the step event about it, else
+- `_record_progress` (`:375`): a keyframe when a running step is moved past; evidence = the step event about it, else
   the decider's reason.
-- `_issue` (`:376`): new `AcceptedGoal`; transition = configured between moving commands, `pause_hold` into or out of a
+- `_issue` (`:395`): new `AcceptedGoal`; transition = configured between moving commands, `pause_hold` into or out of a
   hold; a templated operation → `Utterance` + robot `Turn`.
-- `_on_ack` (`:398`): the only source of "active"; `rejected` / `expired` / `dropped` → fall back to the command still
+- `_on_ack` (`:417`): the only source of "active"; `rejected` / `expired` / `dropped` → fall back to the command still
   running and ask again.
 
 ## 4. Decision worker (`system2/worker.py`)
@@ -149,13 +152,18 @@ ABORT, WAIT and ASK activate at once as holds; `target()` is then None, so S1 is
    - continue → CONTINUE;
    - resume → the interrupted step;
    - retry → RETRY of the running step;
-   - revise → `Reviser` (default `S1Replans` = `SWITCH_TO(None)`: π0.5² re-plans under the new instruction);
+   - revise → `Reviser`: operation + new task text (default `S1Replans` = `SWITCH_TO(None)` with the user's words as
+     the task: π0.5² re-plans from them); the only act that changes the task text;
    - wait → GUARDED_WAIT;
    - ask → ASK(`clarify`);
    - abort → ABORT.
 
-**Calibration:** `fit_temperature` (`calibration.py:36`) is an offline NLL fit on labelled cases; at runtime only
-`apply` runs. Today T = 1 and margin 0.2 are declared constants (no labelled set yet).
+**Calibration (offline; at runtime only `apply`):** `fit_temperature` (`calibration.py:50`, NLL), `fit_margin`
+(`:68`, smallest margin whose decided cases reach a target accuracy), `fit_calibration` (`:83`). Cases come from
+`realtime.py --record-interaction DIR` (exact model inputs + `labels.jsonl` to fill); `calibrate_jev.py` re-scores the
+labelled cases with OneJev and writes the JSON. Today T = 1 and margin 0.2 are declared constants (no labelled set yet).
+
+On a `hold` recheck of an `UNANSWERED` hold, Jev skips the wait-budget rule and decides the original change.
 
 ## 7. Verifier (`system2/verify/`)
 - `StepWatcher.check_once` (`watcher.py:54`), every 1 s:
@@ -164,7 +172,10 @@ ABORT, WAIT and ASK activate at once as holds; `target()` is then None, so S1 is
   - after 2 consecutive P(done) ≥ 0.7 → one `StepEvent` per command;
   - failures are counted, never posted.
 - The owner asks planning (trigger `step`); the event becomes the keyframe's evidence.
-- Native mode (subtask None) is not checked.
+- Native mode (subtask None) is not checked periodically; π0.5²'s own subtask switch is a claim
+  (`S1Runner._planner_moved_on`) that `StepWatcher.claim` / `confirm` checks once; only a checked event becomes the
+  keyframe (live: π0.5² oscillated freezer ↔ fridge 18 times in 60 s).
+- The watcher reads the active command through `ExecutionRuntime.active_goal` (under the runtime's lock).
 
 ## 8. Timeline: "wait", then "go on" (designed sequence, unit-tested; not yet run live with OneJev)
 | t | What happens |
@@ -175,14 +186,14 @@ ABORT, WAIT and ASK activate at once as holds; `target()` is then None, so S1 is
 | 5.0 + d | Jev: {continue, revise, wait, ask, abort} → wait → GUARDED_WAIT cmd 2 (`pause_hold`), active at once; `Hold(interrupted = pick)`; `target()` = None |
 | 6–9 | No heartbeats; the owner renews cmd 2's lease; the robot holds |
 | 9.0 | "go on": snapshot carries `hold.interrupted = pick` → resume → cmd 3 `SWITCH_TO(pick)`; hold released; S1 supplies cmd 3 |
-d = OneJev latency (unmeasured). d > 1 s → the change escalates to planning instead (risk D6).
+d = OneJev latency (unmeasured). d > `interaction_timeout_s` → the robot holds (`UNANSWERED`) and the change is
+decided on the hold recheck (risk D6: set the timeout above the measured latency).
 
 ## 9. Evidence (2026-10-22)
 | Suite | Result |
 |---|---|
-| `test_owner` 39, `test_system2_jev` 15, `test_system2_verify` 5, `test_control_execution` 33, architecture | 94 passed |
-| core suite overall | 265 passed, 1 skipped |
-| executor `test_harness` (Jev with keyword scores = the rules) | passed (9 executor tests) |
+| core suite overall (owner 41, Jev 17, verify 5, runner 16, …) | 297 passed, 1 skipped |
+| executor tests (harness incl. calibration cases, serve) | 10 passed |
 | matrix: `stop-stays`, `jev-wait-resume`, `jev-ask-answer`, `jev-wait-budget` | pass (17/19 overall) |
 | live OneJev / MJev in the loop | not run (GPU session next) |
 
@@ -196,10 +207,9 @@ d = OneJev latency (unmeasured). d > 1 s → the change escalates to planning in
 - Declared tuned constants: T = 1, margin 0.2, P(done) ≥ 0.7 × 2 checks, dwell 1 s, 2 questions, 8 dialogue turns,
   hold recheck.
 - Open:
-  - **Planning can override a stop:** an escalated "stop" (interaction lane failed) answered by planning can move the
-    robot.
-  - **Native mode has no step events:** π0.5²'s subtask switch is not yet a `StepEvent`.
-  - **Unlocked read:** the watcher reads `runtime.active` without the lock.
+  - **An unanswered change holds the robot** until the interaction lane answers on a recheck; a permanently failing
+    lane keeps it held (safe, but needs `--hold-recheck` and a timeout above Jev's latency).
+  - **Preconditions:** proposals carrying them stay refused until perception can check them.
   - **`say` runs on the owner's thread** and must stay fast.
   - **ASK has one generic template** until perception supplies object ids.
   - **OneJev latency vs the 1 s deadline is unmeasured.**
