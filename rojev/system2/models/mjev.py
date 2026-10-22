@@ -1,12 +1,14 @@
-"""MJev-Spatial evidence over HTTPS (server: `services/mjev/serve_mjev.py`). Images are sent losslessly as PNG."""
+"""MJev-Spatial evidence over one kept connection (`rojev.transport`; server: `services/mjev/serve_mjev.py`). Images
+are sent losslessly as PNG. An `/ask` is a pure function of its images and questions, so a transport retry is safe."""
 import base64
 import io
 import json
 import time
-import urllib.request
 
 import numpy as np
 from PIL import Image
+
+from rojev.transport import open_transport
 
 
 def png_b64(image: np.ndarray) -> str:
@@ -16,13 +18,11 @@ def png_b64(image: np.ndarray) -> str:
 
 
 class RemoteMJev:
-    def __init__(self, url: str, token: str, timeout_s: float = 120.0):
-        self.url, self.token, self.timeout_s = url.rstrip("/"), token, timeout_s
+    def __init__(self, url: str, token: str, timeout_s: float = 120.0, cert_pem: str | None = None):
+        self.transport = open_transport(url, token, cert_pem, timeout_s)
 
     def health(self) -> str:
-        req = urllib.request.Request(self.url + "/health", headers={"Authorization": f"Bearer {self.token}"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return r.read().decode()
+        return self.transport.health()
 
     def ask(self, images: list[np.ndarray], questions: list[dict]) -> dict:
         """`questions`: [{"id", "question", "answer_space"}]; every question sees every image.
@@ -30,13 +30,12 @@ class RemoteMJev:
         Returns {"answers": {id: {...}}, "timings_ms": {"mjev": server ms, "network": …, "round_trip": …}}.
         """
         body = json.dumps({"images": [png_b64(i) for i in images], "questions": questions}).encode()
-        req = urllib.request.Request(self.url + "/ask", data=body, method="POST",
-                                     headers={"Authorization": f"Bearer {self.token}",
-                                              "Content-Type": "application/json"})
         t0 = time.perf_counter()
-        with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
-            out = json.loads(r.read())
+        out = json.loads(self.transport.request("POST", "/ask", body))
         rtt = (time.perf_counter() - t0) * 1000
         out["timings_ms"].update(network=round(rtt - out["timings_ms"]["mjev"], 1), round_trip=round(rtt, 1),
                                  request_kb=round(len(body) / 1024, 1))
         return out
+
+    def close(self) -> None:
+        self.transport.close()
