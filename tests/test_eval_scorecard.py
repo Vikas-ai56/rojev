@@ -139,14 +139,28 @@ def test_ask_precision_counts_stray_asks_as_misses():
     assert aggregate([r])[0].ask_precision.value == pytest.approx(1 / 3)
 
 
-def test_unanswered_fallback_hold_is_a_wait_and_counted():
+def test_the_owners_safety_hold_for_an_unanswered_change_is_no_decision():
     events = [START, said(4.0, 1, "wait"),
               {"t": 5.0, "kind": "unanswered", "request": 6, "trigger": "instruction", "why": "timeout"},
               cmd(5.0, 2, "guarded_wait", decider=None)]
     run = records(events, ticks((0, 5.0, "chunk", 1), (5.0, 10, "hold", 2)))
-    s = score_run(Case("c", "a", (Injection(4.0, "stop", "wait"),)), run).injections[0]
-    assert (s.act, s.correct, s.unanswered, s.answer_decider) == ("wait", True, 1, None)
+    score = score_run(Case("c", "a", (Injection(4.0, "pause", "wait"),)), run)
+    s = score.injections[0]
+    assert (s.act, s.correct, s.unanswered, s.answer_decider) == ("unanswered", False, 1, None)
     assert s.answer_latency_s == pytest.approx(1.0)
+    [arm] = aggregate([score])
+    assert arm.act_accuracy.value == 0.0 and arm.unanswered_rate.value == 1.0
+
+
+def test_pause_is_judged_apart_for_changes_that_should_and_should_not_stop_the_robot():
+    events = [START, said(2.0, 1, "nice work"), cmd(2.0, 2, "switch_to", kind="reaffirm"),
+              said(6.0, 2, "stop"), cmd(6.0, 3, "abort")]
+    run = records(events, ticks((0, 3.0, "chunk", 1), (3.0, 4.0, "hold", 2), (4.0, 6.0, "chunk", 2),
+                                (6.0, 10, "hold", 3)))
+    case = Case("c", "a", (Injection(2.0, "harmless", "continue"), Injection(6.0, "stop", "abort")))
+    [arm] = aggregate([score_run(case, run)])
+    assert arm.pause_when_moving.n == 1 and 0.0 < arm.pause_when_moving.value < 1.0
+    assert arm.hold_when_asked.n == 1 and arm.hold_when_asked.value == pytest.approx(1.0)
 
 
 def test_no_answer_near_the_run_end_is_not_judged():

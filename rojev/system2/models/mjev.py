@@ -1,20 +1,13 @@
 """MJev-Spatial evidence over one kept connection (`rojev.transport`; server: `services/mjev/serve_mjev.py`). Images
 are sent losslessly as PNG. An `/ask` is a pure function of its images and questions, so a transport retry is safe."""
-import base64
-import io
 import json
 import time
 
 import numpy as np
-from PIL import Image
 
 from rojev.transport import open_transport
 
-
-def png_b64(image: np.ndarray) -> str:
-    buf = io.BytesIO()
-    Image.fromarray(image).save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode()
+from .images import png_b64
 
 
 class RemoteMJev:

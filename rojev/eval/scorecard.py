@@ -7,17 +7,21 @@ for a swap, the text naming the goal before and after). Each injection is judged
 to the next injection or the run end. Times are the robot clock.
 
 Definitions. "Applied answer" = the first owner event of kind `command`, `reaffirm` or `continue` inside the window
-whose `trigger` is the change's (`instruction` for speech, `deviation` for a deviation).
+whose `trigger` is the change's (`instruction` for speech, `deviation` for a deviation) and that a decider made; the
+owner's own hold for an unanswered change counts only if no decider's answer follows it in the window (an answer
+past the interaction deadline is applied late, noted).
   change time        speech: the owner's first `instruction` event at or after `Injection.t`; deviation: `Injection.t`
                      itself (fault onset, so the monitor's detection time counts as reaction time)
   success            summary `task_success` (the simulator's check of the task the run started with); None if absent
-  answer latency     applied answer t − change time
+  answer latency     applied answer t − change time (robot clock: one control tick of resolution, so an answer within
+                     the tick of the change reads 0)
   execution latency  first tick whose `cmd` is the answer's new command − change time; None for a `continue` answer
                      (no new command) or when the command never reached a tick inside the window
   act                class of the applied answer: `continue` / `reaffirm` → continue; command op switch_to / retry →
                      revise (a resume of the interrupted step is a switch_to: revise); guarded_wait → wait; ask → ask;
                      abort → abort; any other op keeps its own name and never matches. The owner's own hold for an
-                     unanswered change (decider None, counted in `unanswered`) is a wait like any other
+                     unanswered change (no decider, after an `unanswered` event) is no decision: act `unanswered`,
+                     never correct, counted in the arm's unanswered rate (a safe fallback is not a right answer)
   act correct        act == expected; with no applied answer: False, or None when less than `answer_window_s` of the
                      window remained (cannot be judged)
   wrong-goal commitments  `command` / `reaffirm` events inside the window whose operation moves the robot and whose
@@ -27,13 +31,15 @@ whose `trigger` is the change's (`instruction` for speech, `deviation` for a dev
                      Ticks carry commanded actions, not measured poses, and which action dims are arm motion is the
                      robot's knowledge, so a robot-agnostic path length is not computable from these records
   pause              hold ticks in [change, change + `pause_window_s`) clipped to the window, and their share of the
-                     ticks there
+                     ticks there. Aggregated apart by what the change asked for: `pause_when_moving` over changes whose
+                     expected act keeps the robot moving (continue, revise: any pause is the freeze T8 looks for),
+                     `hold_when_asked` over changes expecting wait, ask or abort (holding is the right answer)
   asks               `command` events with op ask inside the window. Ask precision = asks inside windows whose expected
                      act is ask / all asks of the run (asks outside every window count as misses)
   act ECE            per injection, the first interaction-lane decision inside the window with the change's trigger and
                      a `scores` map (act label → calibrated probability, summing to 1). Labels map to classes as their
-                     operations do (continue; revise, retry, resume → revise; wait; ask; abort); a class's probability
-                     is the sum of its labels'. Confidence = top class probability, correct = top class == expected.
+                     operations do (continue; revise, resume, and retry in runs recorded before 2026-10-24 →
+                     revise; wait; ask; abort); a class's probability is the sum of its labels'. Confidence = top class probability, correct = top class == expected.
                      ECE = Σ_k (n_k / N) |accuracy_k − mean confidence_k| over `bins` equal-width bins [k/B, (k+1)/B)
                      (the last closed), pooled over all runs of an arm; None without scored decisions
 The goal metrics need both goal texts and subtask text on every command they judge (an arm whose S1 plans its own
@@ -44,14 +50,18 @@ from dataclasses import asdict, dataclass, field
 from statistics import fmean
 
 from rojev.protocol import Operation, OpKind
-from rojev.system2.jev import ABORT, ASK, CONTINUE, RESUME, RETRY, REVISE, WAIT
+from rojev.system2.jev import ABORT, ASK, CONTINUE, RESUME, REVISE, WAIT
 
 ACTS = (CONTINUE, REVISE, WAIT, ASK, ABORT)
-KINDS = ("goal_swap", "object_swap", "stop", "ambiguous", "harmless", "deviation")
+MOVING_ACTS = (CONTINUE, REVISE)
+UNANSWERED = "unanswered"
+KINDS = ("goal_swap", "object_swap", "stop", "pause", "resume", "ambiguous", "harmless", "deviation")
 ANSWER_KINDS = ("command", "reaffirm", "continue")
 OP_ACT = {OpKind.SWITCH_TO.value: REVISE, OpKind.RETRY.value: REVISE, OpKind.GUARDED_WAIT.value: WAIT,
           OpKind.ASK.value: ASK, OpKind.ABORT.value: ABORT, OpKind.CONTINUE.value: CONTINUE}
-LABEL_ACT = {CONTINUE: CONTINUE, REVISE: REVISE, RETRY: REVISE, RESUME: REVISE, WAIT: WAIT, ASK: ASK, ABORT: ABORT}
+RECORDED_RETRY = "retry"
+LABEL_ACT = {CONTINUE: CONTINUE, REVISE: REVISE, RECORDED_RETRY: REVISE, RESUME: REVISE, WAIT: WAIT, ASK: ASK,
+             ABORT: ABORT}
 INSTRUCTION_MATCH_S = 1e-3
 PROBABILITY_SUM_TOL = 1e-3
 
@@ -165,7 +175,9 @@ class ArmScore:
     act_accuracy: Stat
     wrong_goal_commitments: Stat
     wasted_motion_s: Stat
-    pause_fraction: Stat
+    pause_when_moving: Stat
+    hold_when_asked: Stat
+    unanswered_rate: Stat
     ask_precision: Stat
     act_ece: Stat
 
@@ -211,13 +223,14 @@ def render_json(arms: list[ArmScore], runs: list[RunScore] = ()) -> dict:
 
 def render_markdown(arms: list[ArmScore], runs: list[RunScore] = ()) -> str:
     """The per-arm table (each cell `value (n)`) and, when runs are given, one row per injection."""
-    head = ("| arm | runs | changes | missed | success | answer s | execution s | act acc | wrong-goal | wasted s "
-            "| pause | ask precision | act ECE |")
+    head = ("| arm | runs | changes | missed | success | answer s | execution s | act acc | unanswered "
+            "| wrong-goal | wasted s | pause when moving | hold when asked | ask precision | act ECE |")
     lines = [head, "|" + "---|" * (head.count("|") - 1)]
     for a in arms:
         cells = [a.arm, str(a.runs), str(a.changes), str(a.missed)] + [_cell(s) for s in (
-            a.success, a.answer_latency_s, a.execution_latency_s, a.act_accuracy, a.wrong_goal_commitments,
-            a.wasted_motion_s, a.pause_fraction, a.ask_precision, a.act_ece)]
+            a.success, a.answer_latency_s, a.execution_latency_s, a.act_accuracy, a.unanswered_rate,
+            a.wrong_goal_commitments, a.wasted_motion_s, a.pause_when_moving, a.hold_when_asked, a.ask_precision,
+            a.act_ece)]
         lines.append("| " + " | ".join(cells) + " |")
     if runs:
         row_head = ("| case | arm | t | kind | phase | expected | act | answer s | execution s | wrong-goal "
@@ -243,9 +256,18 @@ def _score_injection(inj: Injection, stop: float, records: RunRecords, pause_win
                               None, None, 0, None, None, (why,))
     notes: list[str] = []
     window = [e for e in records.events if change <= e["t"] < stop]
-    answer = next((e for e in window if e["kind"] in ANSWER_KINDS and e.get("trigger") == inj.trigger), None)
+    answers = [e for e in window if e["kind"] in ANSWER_KINDS and e.get("trigger") == inj.trigger]
+    decided = next((e for e in answers if e.get("decider") is not None), None)
+    answer = decided or (answers[0] if answers else None)
     act = correct = answer_latency = execution_latency = None
-    if answer is not None:
+    unanswered = sum(1 for e in window if e["kind"] == "unanswered" and e.get("trigger") == inj.trigger)
+    if decided is not None and unanswered:
+        notes.append("answered late, after the owner's safety hold")
+    if answer is not None and unanswered and answer.get("decider") is None:
+        act, correct = UNANSWERED, False
+        answer_latency = answer["t"] - change
+        notes.append("no decider answered: the owner's safety hold")
+    elif answer is not None:
         act = CONTINUE if answer["kind"] in ("reaffirm", "continue") else OP_ACT.get(answer["op"], answer["op"])
         correct = act == inj.expected
         answer_latency = answer["t"] - change
@@ -255,7 +277,6 @@ def _score_injection(inj: Injection, stop: float, records: RunRecords, pause_win
     else:
         correct = False
         notes.append("no applied answer")
-    unanswered = sum(1 for e in window if e["kind"] == "unanswered" and e.get("trigger") == inj.trigger)
     wrong, wasted = _goal_metrics(inj, window, change, stop, records, notes)
     hz = records.summary.get("control_hz")
     wasted_s = None if wasted is None or not hz else wasted / hz
@@ -352,7 +373,9 @@ def _arm_score(arm: str, group: list[RunScore], bins: int) -> ArmScore:
         _mean(None if s.correct is None else float(s.correct) for s in changes),
         _mean(s.wrong_goal_commitments for s in changes),
         _mean(s.wasted_motion_s for s in changes),
-        _mean(s.pause_fraction for s in changes),
+        _mean(s.pause_fraction for s in changes if s.injection.expected in MOVING_ACTS),
+        _mean(s.pause_fraction for s in changes if s.injection.expected not in MOVING_ACTS),
+        _mean(float(s.unanswered > 0) for s in changes),
         Stat(sum(r.asks_expected for r in group) / asks if asks else None, asks),
         Stat(expected_calibration_error(pairs, bins), len(pairs)))
 

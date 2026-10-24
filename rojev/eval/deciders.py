@@ -2,7 +2,7 @@
 
   scripted  ScriptedSequence  each authored subtask for a fixed time, in order (open loop, no perception)
   oracle    TruthSequence     next = after the latest subtask whose simulator truth holds now (evaluation ceiling)
-  native    NativePlanner     one command with no subtask: S1 (π0.5²) plans its own subtasks from the instruction
+  native    NativePlanner     one command with no subtask: S1 plans its own steps from the instruction (XR-1, π0.5²)
   continue  AlwaysContinue    interaction lane: every change (instruction, deviation) is answered with CONTINUE, i.e.
                               keep the current step under the new instruction (the reaffirm baseline for Jev's acts)
 
@@ -82,7 +82,8 @@ class AlwaysContinue:
 
 
 class NativePlanner:
-    """One moving command without a subtask; S1 plans its own subtasks from the task text (π0.5²'s language head). Asked
+    """One moving command without a subtask; S1 plans its own steps from the task text (XR-1 inside the model, π0.5²
+    through its language head). Asked
     to answer a change itself (one lane, or the revoke baseline), it re-prompts S1: what the user said becomes the task
     text."""
 

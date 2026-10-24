@@ -33,14 +33,16 @@ class Deviation:
 @dataclass(frozen=True)
 class Keyframe:
     """Progress: step `subtask` (command `cmd_id`, under instruction revision `instruction_rev`) was judged done on
-    `capture` (the observation the judgement used). `evidence` names who judged it (a decider moving on until
-    postconditions are checked in step 6). Kept across repairs and revisions, so a decider never redoes a done step."""
+    `capture` (the observation the judgement used). `evidence` names who judged it; `checked` is True when that was a
+    confirmed end-state check (a checked `StepEvent`), False when a decider moved on by its own judgement. Kept across
+    repairs and revisions, so a decider never redoes a done step."""
 
     cmd_id: int
     subtask: str
     instruction_rev: int
     capture: Capture
     evidence: str
+    checked: bool = False
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,17 @@ class StepEvent:
     step: str
     detail: dict = field(default_factory=dict)
     checked: bool = False
+
+
+@dataclass(frozen=True)
+class PlannedSubtask:
+    """S1's own planner chose `subtask` for command `cmd_id` (a command without a subtask) at `t`: a proposal from S1,
+    which a planning decider may commit the robot to (`SWITCH_TO` that text)."""
+
+    epoch: int
+    cmd_id: int
+    t: float
+    subtask: str
 
 
 USER, ROBOT = "user", "robot"
@@ -123,8 +136,9 @@ class ObservationSnapshot:
     `active_since` is when its operation started (kept across a reaffirmation; None before); `keyframes` are the steps
     judged done, in order; `trigger` says why the decision was requested; `review` is True while the desired command is
     under review after an instruction change; `deviation` is the latest execution deviation of the desired command;
-    `step_event` the latest step-completion evidence about it; `hold` the interaction hold that stands, if any;
-    `dialogue` the latest turns between user and robot, oldest first (bounded by the owner)."""
+    `step_event` the latest step-completion evidence about it; `planned` the latest subtask S1's own planner chose
+    for it; `hold` the interaction hold that stands, if any; `dialogue` the latest turns between user and robot,
+    oldest first (bounded by the owner)."""
 
     epoch: int
     request_id: int
@@ -140,6 +154,7 @@ class ObservationSnapshot:
     review: bool = False
     deviation: Deviation | None = None
     step_event: StepEvent | None = None
+    planned: PlannedSubtask | None = None
     hold: Hold | None = None
     dialogue: tuple[Turn, ...] = ()
 
