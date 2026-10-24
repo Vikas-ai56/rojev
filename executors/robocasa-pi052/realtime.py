@@ -1,24 +1,33 @@
 """RoboCasa in real time under the v3 runtime: every part on its own thread, nothing waits for a model.
+`--interactive` puts a person in the loop: each line typed while the run goes is a user instruction (as `--say`), `quit`
+ends the run; `--instruction TEXT` gives the overall task (default: the environment's own sentence).
+`--lockstep` instead stops simulated time while any model thinks: one thread alternates S1 supply and one control tick,
+and does not tick while an S2 decision is in flight (planning or interaction lane), so model computation takes no
+simulated time and deadlines in simulated seconds do not depend on how fast the simulator runs. The setting benchmarks
+are scored in; it separates the models' own skill from the cost of real-time execution.
 
   control loop   env.step at 20 Hz (wall clock) ← guard ← execution runtime
   S1 runner      keeps the command that needs actions supplied with chunks from the S1 policy
   S2 workers     planning lane (the arm's decider) and, optionally, the interaction lane
   state owner    turns proposals and user instructions into commands; ACKs say what is active
 
-S1 (`--policy`): `remote` π0.5² on a GPU (`--service` JSON {url, token}) · `skills` scripted reach / grasp / place /
+S1 (`--policy`): `remote` a model on a GPU, `--s1 pi052|xr1` (π0.5² or Xiaomi-Robotics-1; `--service` JSON with its
+entry) · `skills` scripted reach / grasp / place /
 press from simulator poses (harness/skills.py; a declared spoof) · `wiggle` hand back and forth (plumbing only).
 Planning arms (`--arm`): `fixed` one command · `scripted` authored sequence on a time budget · `oracle` authored
 sequence switched by simulator truth · `revisable` / `revisable-truth` the same, rewritten to the destination the
-current instruction names · `native` π0.5² plans its own subtasks. Authored sequences are in tasks.py.
+current instruction names · `native` π0.5² plans its own subtasks · `commit` π0.5² plans, each planned subtask is
+committed until the verifier confirms it (`CommitVerifyPlanner`, `--max-commit`). Authored sequences are in tasks.py.
 Interaction lane (`--interaction`): `none` (one lane) · `continue` (always-continue baseline) · `rules` (keyword
 stand-in for Jev's acts) · `jev` (Jev v1, `rojev.system2.jev`: `--chooser onejev` scores acts with OneJev from the
-service JSON, `--chooser keywords` with the keyword stand-in; `--reviser s1|rewrite`, `--max-asks`,
-`--jev-calibration`);
+service JSON, `--chooser keywords` with the keyword stand-in; `--reviser canonical|rewrite`: a new task is one of the
+trained task sentences S1 can run here (the run's instruction plus `--skills FILE`, one per line), never the user's
+words; `--max-asks`, `--jev-calibration` (JSON {"act": …, "task": …} from calibrate_jev.py));
 `--hold-recheck S` asks the lane again while a hold stands; `--record-interaction DIR` saves Jev's model decisions as
 calibration cases; `--interaction-delay` / `--interaction-fail` inject S2
 faults on that lane. Step-completion events (`--verify mjev|truth`): end-state checks of the running step
 (`rojev.system2.verify`; `truth` = simulator truth of authored steps, a declared spoof), posted to the owner; with
-`--arm native --policy remote` π0.5²'s own subtask switches are step events too: claims the step watcher confirms
+`--arm native --policy remote --s1 pi052` π0.5²'s own subtask switches are step events too (XR-1 reports none): claims the step watcher confirms
 with one check when `--verify` is on (only confirmed ones are progress), else unchecked events. The planning heartbeat defaults to
 1 s, or 0.8 × lease when step events cover progress. What the robot says is printed and logged (utterances.jsonl).
 `--say T:TEXT` (repeatable) sends a user instruction T seconds in; `--on-change review|revoke`.
@@ -30,26 +39,31 @@ Phoenix (`make phoenix`).
   uv run python realtime.py --task LoadCondimentsInFridge --arm revisable --policy skills --interaction rules \\
       --say "8:wait" --say "11:go on" --viewer --trace rojev-live
 Outputs: <out>/{config.json, ticks.jsonl, owner.jsonl, s1_requests.jsonl, commits.jsonl, decisions.jsonl,
-utterances.jsonl, verify_checks.jsonl (with --verify: each check with simulator truth), summary.json, view.mp4 (with
---video: three cameras + command / lane / decision panel, 10 fps)}.
+utterances.jsonl, verify_checks.jsonl (with --verify: each check with simulator truth), frames/ (with --record-frames
+S: every S seconds the cameras and the simulator state, for `sam_check.py track`; harness/tracking.py), summary.json,
+view.mp4 (with --video: three cameras + command / lane / decision panel, 10 fps)}.
 After setup the process freezes the objects it built (`gc.freeze`), so a full garbage collection never walks them
 during the run (measured 45–96 ms per full pass otherwise: docs/research/2026-10-22-native-runtime.md).
 """
 import argparse
 import gc
 import json
+import queue
+import sys
 import threading
 import time
 from pathlib import Path
 
 import numpy as np
 from lerobot.envs.robocasa import RoboCasaEnv
-from qev import Client
 
-from embodiment import ARM_DIMS, PANDA_OMRON, PandaOmronEffect
-from harness import (FailingDecider, InteractionCases, KeywordChooser, MirrorPublisher, RecordingCommit,
-                     RecordingDecider, RecordingPolicy, RecordingVerifier, RevisableSequence, RewriteReviser,
-                     RuleBasedInteraction, SkillScriptPolicy, SlowDecider, TruthVerifier, VideoRecorder)
+from embodiment import ARM_DIMS, PANDA_OMRON, PandaOmronEffect, to_action_space
+from harness import (FailingDecider, FrameCheck, FrameRecorder, InteractionCases, KeywordChooser, LiveView,
+                     MirrorPublisher, RecordingCommit, RecordingDecider, RecordingPolicy, RecordingVerifier,
+                     RevisableSequence, RewriteReviser, RuleBasedInteraction, SkillScriptPolicy, SlowDecider,
+                     TruthVerifier, VideoRecorder)
+from history import FrameHistory, HistoryPolicy
+import render_context
 from rojev.control import ControlLoop, ExecutionRuntime, Guard, TickRecord
 from rojev.eval import AlwaysContinue, NativePlanner, ScriptedSequence, TruthSequence
 from rojev.owner import INSTRUCTION_CHANGE_MODES, INTERACTION_TRIGGERS, StateOwner
@@ -57,10 +71,10 @@ from rojev.protocol import (ACK, Deviation, Observation, ObservationSnapshot, Op
                             Utterance)
 from rojev.system1 import (COMMIT_POLICIES, ActionChunk, ExecutionMonitor, MonitorModel, Policy, RemotePolicy, S1Runner,
                            make_commit_policy)
-from rojev.system2 import DecisionWorker, Verdict
-from rojev.system2.jev import TEMPLATES, Calibration, JevInteraction, OneJevChooser, S1Replans
-from rojev.system2.models import RemoteMJev
-from rojev.system2.verify import MJevVerifier, StepWatcher
+from rojev.system2 import CommitVerifyPlanner, DecisionWorker, Verdict
+from rojev.system2.jev import TEMPLATES, Calibration, CanonicalTask, JevInteraction, OneJevChooser
+from rojev.system2.models import RemoteMJev, onejev
+from rojev.system2.verify import MJevVerifier, OneJevVerifier, StepWatcher
 from tasks import TASKS
 from workflow import CAMS, service_addresses
 
@@ -75,13 +89,16 @@ PANEL_FPS = int(PANDA_OMRON.control_hz // VIDEO_EVERY)
 class RoboCasaBackend:
     """The LeRobot RoboCasa environment as a runtime `Backend`. `success` latches RoboCasa's own task check; `read`
     evaluates a function of the kitchen between two steps (never during one); `publisher` mirrors each step to the
-    live viewer."""
+    live viewer. Render contexts of replaced simulators are freed in their own GL context (`render_context`), else a
+    garbage collection corrupts every later camera image."""
 
     def __init__(self, task: str, seed: int, horizon: int, blocked: tuple[float, float] | None = None):
+        render_context.install()
         self.env = RoboCasaEnv(task=task, split="pretrain", obj_registries=("objaverse", "lightwheel"),
                                terminate_on_success=False, horizon=horizon)
         self.raw, _ = self.env.reset(seed=seed)
         self.success = False
+        self.success_now = False
         self.success_t: float | None = None
         self.steps = 0
         self.blocked = blocked
@@ -112,7 +129,8 @@ class RoboCasaBackend:
             self.steps += 1
             if self.publisher is not None:
                 self.publisher.publish(self.kitchen.sim.data._data)
-        if info.get("is_success", False) and not self.success:
+        self.success_now = bool(info.get("is_success", False))
+        if self.success_now and not self.success:
             self.success, self.success_t = True, self.steps / PANDA_OMRON.control_hz
         return self.observe()
 
@@ -182,31 +200,58 @@ def parse(argv=None) -> argparse.Namespace:
     p.add_argument("--task", default="LoadCondimentsInFridge")
     p.add_argument("--seed", type=int, default=1000)
     p.add_argument("--seconds", type=float, default=20.0)
-    p.add_argument("--arm", choices=["fixed", "scripted", "oracle", "revisable", "revisable-truth", "native"],
+    p.add_argument("--arm", choices=["fixed", "scripted", "oracle", "revisable", "revisable-truth", "native", "commit"],
                    default="fixed")
+    p.add_argument("--max-commit", type=float, default=25.0,
+                   help="commit: release an unverified committed subtask after this long (s; ≈ 2 × p75 demo subtask)")
     p.add_argument("--subtask", help="fixed arm: text for S1 (default: the task instruction)")
     p.add_argument("--policy", choices=["remote", "skills", "wiggle"], default="skills")
     p.add_argument("--service", help="remote: JSON file with {url, token} (or `kaggle`)")
+    p.add_argument("--s1", choices=["pi052", "xr1"], default="pi052",
+                   help="remote S1: π0.5² (lerobot/pi052_robocasa) or Xiaomi-Robotics-1 RoboCasa365 "
+                        "(4 frames, 2 apart)")
     p.add_argument("--latency", type=float, default=0.3, help="skills / wiggle: simulated inference time (s)")
     p.add_argument("--sample-noise", type=float, default=0.0, help="skills / wiggle: per-sample noise (m / rad)")
     p.add_argument("--interaction", choices=["none", "continue", "rules", "jev"], default="none")
     p.add_argument("--chooser", choices=["onejev", "keywords"], default="onejev", help="jev: who scores the acts")
-    p.add_argument("--reviser", choices=["s1", "rewrite"],
-                   help="jev: REVISE = S1 re-plans (default with --policy remote) or the step rewritten (default else)")
+    p.add_argument("--reviser", choices=["canonical", "rewrite"],
+                   help="jev: REVISE = one of S1's trained task sentences (default with --policy remote) or the "
+                        "step rewritten for the scripted S1 (default else)")
     p.add_argument("--max-asks", type=int, default=2)
-    p.add_argument("--jev-calibration", type=Path, help="jev: Calibration JSON (default: T=1, declared margin)")
+    p.add_argument("--jev-calibration", type=Path,
+                   help="jev: {act, task} Calibration JSON from calibrate_jev.py (default: T=1, declared margin)")
+    p.add_argument("--skills", type=Path,
+                   help="jev --reviser canonical: trained task sentences S1 can run in this scene, one per line "
+                        "(added to the run's instruction)")
     p.add_argument("--hold-recheck", type=float, help="ask the interaction lane again after a hold stood this long (s)")
     p.add_argument("--record-interaction", type=Path,
                    help="jev: save each model decision as a calibration case here (calibrate_jev.py)")
-    p.add_argument("--verify", choices=["none", "mjev", "truth"], default="none",
-                   help="step-completion events from MJev, or from simulator truth (spoof)")
+    p.add_argument("--verify", choices=["none", "mjev", "onejev", "truth"], default="none",
+                   help="step-completion events from MJev or OneJev end-state checks, or simulator truth (spoof)")
     p.add_argument("--verify-every", type=float, default=1.0)
+    p.add_argument("--lockstep", action="store_true",
+                   help="simulated time stops while any model thinks (S1 supply, S2 decisions), then one control "
+                        "tick (how benchmarks are scored; --seconds is simulated time)")
+    p.add_argument("--frame-check-every", type=float, default=1.0, metavar="S",
+                   help="sample the camera frames every S seconds; a run with noise / blank frames is not scored")
+    p.add_argument("--record-frames", type=float, metavar="S",
+                   help="every S seconds save the cameras and the simulator state to <out>/frames (sam_check.py track)")
     p.add_argument("--done-threshold", type=float, default=0.7)
     p.add_argument("--confirmations", type=int, default=2)
     p.add_argument("--interaction-timeout", type=float, default=1.0)
     p.add_argument("--interaction-delay", type=float, default=0.0, help="fault: interaction-lane decider latency (s)")
     p.add_argument("--interaction-fail", action="store_true", help="fault: interaction-lane decider raises")
     p.add_argument("--say", type=utterance, action="append", default=[], help="T:TEXT user instruction at T seconds")
+    p.add_argument("--interactive", action="store_true",
+                   help="read user instructions from the terminal while the run goes (`quit` ends it)")
+    p.add_argument("--input-file", type=Path,
+                   help="interactive: read user instructions appended to this file instead of the terminal")
+    p.add_argument("--live-view", type=float, metavar="S",
+                   help="write <out>/live/now.png + status.json every S simulated seconds (what a watcher sees)")
+    p.add_argument("--max-wall", type=float, metavar="S", help="end the run after S wall-clock seconds")
+    p.add_argument("--end-after-success", type=float, metavar="S",
+                   help="end the run S simulated seconds after the task's own check first holds")
+    p.add_argument("--instruction", help="the overall task given by the user (default: the environment's sentence)")
     p.add_argument("--on-change", choices=list(INSTRUCTION_CHANGE_MODES), default="review")
     p.add_argument("--review-s", type=float, default=1.0)
     p.add_argument("--stop-s", type=float, default=0.3)
@@ -233,13 +278,15 @@ def parse(argv=None) -> argparse.Namespace:
         p.error("--policy remote needs --service")
     if (a.interaction_delay or a.interaction_fail) and a.interaction == "none":
         p.error("interaction faults need an interaction lane (--interaction continue|rules|jev)")
-    needs_service = (a.interaction == "jev" and a.chooser == "onejev") or a.verify == "mjev"
+    needs_service = (a.interaction == "jev" and a.chooser == "onejev") or a.verify in ("mjev", "onejev")
     if needs_service and not a.service:
-        p.error("--chooser onejev and --verify mjev need --service with onejev / mjev entries")
-    a.reviser = a.reviser or ("s1" if a.policy == "remote" else "rewrite")
+        p.error("--chooser onejev and --verify mjev|onejev need --service with onejev / mjev entries")
+    if a.arm == "commit" and (a.verify == "none" or a.policy != "remote"):
+        p.error("--arm commit needs a verifier (--verify mjev|onejev|truth) and S1's own planner (--policy remote)")
+    a.reviser = a.reviser or ("canonical" if a.policy == "remote" else "rewrite")
     if a.record_interaction and a.interaction != "jev":
         p.error("--record-interaction needs --interaction jev")
-    step_events = a.verify != "none" or (a.arm == "native" and a.policy == "remote")
+    step_events = a.verify != "none" or (a.arm in ("native", "commit") and a.policy == "remote")
     a.decide_every = a.decide_every or (0.8 * a.lease if step_events else 1.0)
     try:
         a.commit = make_commit_policy(a.commit_policy, a.speculative_predict, **{
@@ -249,9 +296,14 @@ def parse(argv=None) -> argparse.Namespace:
     return a
 
 
-def make_policy(a, backend: RoboCasaBackend) -> Policy:
+XR1_HISTORY = (4, 2)
+
+
+def make_policy(a, backend: RoboCasaBackend, history: FrameHistory) -> Policy:
+    """`history` feeds a policy that conditions on past frames (Xiaomi-Robotics-1: 4 frames 2 ticks apart)."""
     if a.policy == "remote":
-        return RemotePolicy(**service_addresses(a.service, "serve")["pi052"])
+        remote = RemotePolicy(**service_addresses(a.service, "serve")[a.s1])
+        return remote if a.s1 == "pi052" else HistoryPolicy(remote, history, *XR1_HISTORY, to_action_space)
     if a.policy == "skills":
         return SkillScriptPolicy(backend.read, a.latency, a.sample_noise, seed=a.seed)
     return WigglePolicy(a.latency, noise=a.sample_noise, seed=a.seed)
@@ -263,6 +315,8 @@ def make_planner(a, backend: RoboCasaBackend):
         return FixedCommand(a.subtask or backend.env.task_description), []
     if a.arm == "native":
         return NativePlanner(), []
+    if a.arm == "commit":
+        return CommitVerifyPlanner(a.max_commit), []
     spec = TASKS.get(a.task)
     if spec is None:
         raise SystemExit(f"arm {a.arm} needs an authored sequence in tasks.py; available: {sorted(TASKS)}")
@@ -278,18 +332,31 @@ def make_planner(a, backend: RoboCasaBackend):
             "revisable-truth": lambda: RevisableSequence(seq, is_done=is_done)}[a.arm](), steps
 
 
-def make_jev(a) -> JevInteraction:
-    chooser = (OneJevChooser(Client(base_url=service_addresses(a.service, "serve")["onejev"]["url"]), list(CAMS))
+def skills(a, instruction: str) -> list[str]:
+    """The trained task sentences a revision may choose: the run's instruction, then `--skills` (one per line)."""
+    extra = [line.strip() for line in a.skills.read_text().splitlines() if line.strip()] if a.skills else []
+    return list(dict.fromkeys([instruction, *extra]))
+
+
+def calibrations(a) -> dict[str, Calibration]:
+    """Per question (`act`, `task`): the fitted calibration from `--jev-calibration`, else the declared defaults."""
+    fitted = json.loads(a.jev_calibration.read_text()) if a.jev_calibration else {}
+    return {q: Calibration.from_json(json.dumps(fitted[q])) if q in fitted else Calibration() for q in ("act", "task")}
+
+
+def make_jev(a, instruction: str) -> JevInteraction:
+    chooser = (OneJevChooser(onejev.KeptClient(service_addresses(a.service, "serve")["onejev"]["url"]), list(CAMS))
                if a.chooser == "onejev" else KeywordChooser())
-    calibration = Calibration.from_json(a.jev_calibration.read_text()) if a.jev_calibration else Calibration()
-    reviser = S1Replans() if a.reviser == "s1" else RewriteReviser()
-    return JevInteraction(chooser, calibration, reviser, max_asks=a.max_asks)
+    calibration = calibrations(a)
+    reviser = (CanonicalTask(chooser, skills(a, instruction), calibration["task"]) if a.reviser == "canonical"
+               else RewriteReviser())
+    return JevInteraction(chooser, reviser, calibration["act"], max_asks=a.max_asks)
 
 
-def make_interaction(a):
+def make_interaction(a, instruction: str):
     if a.interaction == "none":
         return None
-    decider = {"continue": AlwaysContinue, "rules": RuleBasedInteraction, "jev": lambda: make_jev(a)}[a.interaction]()
+    decider = {"continue": AlwaysContinue, "rules": RuleBasedInteraction, "jev": lambda: make_jev(a, instruction)}[a.interaction]()
     if a.record_interaction:
         run = f"{a.task}-s{a.seed}-{time.strftime('%H%M%S')}"
         decider = InteractionCases(decider, list(CAMS), a.record_interaction, run)
@@ -307,9 +374,56 @@ def make_verifier(a, backend: RoboCasaBackend, steps, now) -> RecordingVerifier:
     def truth(step: str) -> bool | None:
         return backend.truth(checks[step]) if step in checks else None
 
-    inner = MJevVerifier(RemoteMJev(**service_addresses(a.service, "serve")["mjev"])) if a.verify == "mjev" \
-        else TruthVerifier(truth)
+    if a.verify == "mjev":
+        inner = MJevVerifier(RemoteMJev(**service_addresses(a.service, "serve")["mjev"]))
+    elif a.verify == "onejev":
+        inner = OneJevVerifier(onejev.KeptClient(service_addresses(a.service, "serve")["onejev"]["url"]))
+    else:
+        inner = TruthVerifier(truth)
     return RecordingVerifier(inner, truth, now)
+
+
+class Console:
+    """A person in the loop: lines typed on the terminal (or appended to `follow`, a file read as it grows), read on a
+    daemon thread, become user instructions in the order typed (`drain`, on the run loop's thread); `quit` (or end of
+    terminal input) asks the run to stop."""
+
+    def __init__(self, follow: Path | None = None):
+        self.lines: queue.SimpleQueue[str] = queue.SimpleQueue()
+        self.quit = threading.Event()
+        self.log: list[dict] = []
+        self.follow = follow
+        threading.Thread(target=self._read, name="console", daemon=True).start()
+        where = f"append lines to {follow}" if follow else "type an instruction and Enter at any time"
+        print(f"[you] {where}; `quit` ends the run", flush=True)
+
+    def _source(self):
+        if self.follow is None:
+            yield from sys.stdin
+            return
+        self.follow.touch()
+        with self.follow.open() as f:
+            while True:
+                line = f.readline()
+                if line:
+                    yield line
+                else:
+                    time.sleep(0.2)
+
+    def _read(self) -> None:
+        for line in self._source():
+            text = line.strip()
+            if text.lower() == "quit":
+                break
+            if text:
+                self.lines.put(text)
+        self.quit.set()
+
+    def drain(self) -> list[str]:
+        out = []
+        while not self.lines.empty():
+            out.append(self.lines.get())
+        return out
 
 
 class Speaker:
@@ -327,6 +441,21 @@ class Speaker:
         print(f"[robot] {u.t:6.2f}s {text}", flush=True)
 
 
+def watch(owner: StateOwner, backend: RoboCasaBackend, speaker: "Speaker") -> dict:
+    """The live status a watcher reads (`LiveView`): the task in force, what the robot does, what it said."""
+    op = owner.desired.operation if owner.desired is not None else None
+    return {"task": owner.instruction, "doing": None if op is None else op.kind.value,
+            "step": None if op is None else op.subtask,
+            "holding": None if owner.hold is None else owner.hold.operation.kind.value,
+            "robot_said": [u["text"] for u in speaker.log[-3:]],
+            "task_check_now": backend.success_now, "task_done_at": backend.success_t}
+
+
+def planner_of(worker: DecisionWorker):
+    """The planning decider inside its recording wrapper."""
+    return worker.decider.inner
+
+
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(r, default=str) + "\n" for r in rows))
 
@@ -341,7 +470,7 @@ def main(argv=None) -> int:
     if a.viewer:
         backend.publisher = MirrorPublisher(backend.kitchen.sim.model._model, backend.kitchen.sim.data._data)
         backend.publisher.launch()
-    instruction = backend.env.task_description
+    instruction = a.instruction or backend.env.task_description
     runtime = ExecutionRuntime(PANDA_OMRON, epoch=1, last=START.copy(), blend_s=a.blend, stop_s=a.stop_s)
     guard = Guard(runtime)
     log = (out / "ticks.jsonl").open("w")
@@ -357,7 +486,10 @@ def main(argv=None) -> int:
     monitor = (ExecutionMonitor(PandaOmronEffect(), 1, model, on_deviation, record=a.monitor_record is not None)
                if model is not None or a.monitor_record is not None else None)
 
+    history = FrameHistory((XR1_HISTORY[0] - 1) * XR1_HISTORY[1] + 1)
+
     def on_tick(r: TickRecord) -> None:
+        history.add(r.after.observation)
         t = r.tick
         if monitor is not None:
             monitor.observe(r)
@@ -371,15 +503,17 @@ def main(argv=None) -> int:
         if video is not None and t.index % VIDEO_EVERY == 0:
             video.add([backend.raw["pixels"][c] for c in CAMS], panel(t, owner))
 
-    loop = ControlLoop(backend, guard, PANDA_OMRON, realtime=True, on_tick=on_tick)
-    policy = RecordingPolicy(make_policy(a, backend), loop.now)
+    loop = ControlLoop(backend, guard, PANDA_OMRON, realtime=not a.lockstep, on_tick=on_tick)
+    history.add(loop.latest().observation)
+    policy = RecordingPolicy(make_policy(a, backend, history), loop.now)
     commit = RecordingCommit(a.commit, loop.now)
     runner = S1Runner(runtime, policy, loop.latest, loop.now, refill_s=a.refill, commit=commit,
-                      on_step=lambda e: watcher.claim(e) if watcher is not None else owner.post(e))
+                      on_step=lambda e: watcher.claim(e) if watcher is not None else owner.post(e),
+                      on_plan=lambda e: owner.post(e), deadline=not a.lockstep)
     planner, steps = make_planner(a, backend)
     planning = RecordingDecider(planner, loop.now, "planning")
     worker = DecisionWorker(planning, lambda prop: owner.post(prop), loop.now, name="planning")
-    responder_decider = make_interaction(a)
+    responder_decider = make_interaction(a, instruction)
     interaction = RecordingDecider(responder_decider, loop.now, "interaction") if responder_decider else None
     responder = (DecisionWorker(interaction, lambda prop: owner.post(prop), loop.now, name="interaction")
                  if interaction is not None else None)
@@ -392,7 +526,7 @@ def main(argv=None) -> int:
                            list(CAMS), every_s=a.verify_every, done_threshold=a.done_threshold,
                            confirmations=a.confirmations)
                if a.verify != "none" else None)
-    config = {"task": a.task, "instruction": instruction, "arm": a.arm, "planner": planner.name,
+    config = {"task": a.task, "instruction": instruction, "arm": a.arm, "planner": planner.name, "s1": a.s1,
               "interaction": interaction.name if interaction else None, "policy": a.policy, "seed": a.seed,
               "sequence": [s.subtask for s in steps], "say": a.say, "latency_s": a.latency, "sample_noise": a.sample_noise,
               "seconds": a.seconds, "refill_s": a.refill, "blend_s": a.blend, "lease_s": a.lease,
@@ -402,25 +536,63 @@ def main(argv=None) -> int:
               "chooser": a.chooser if a.interaction == "jev" else None,
               "reviser": a.reviser if a.interaction == "jev" else None, "max_asks": a.max_asks,
               "jev_calibration": str(a.jev_calibration) if a.jev_calibration else None,
+              "skills": skills(a, instruction) if a.interaction == "jev" and a.reviser == "canonical" else None,
               "hold_recheck_s": a.hold_recheck,
               "verify": None if watcher is None else {"every_s": a.verify_every, "done_threshold": a.done_threshold,
                                                       "confirmations": a.confirmations},
               "execution_monitor": str(a.execution_monitor) if a.execution_monitor else None,
               "blocked": {"at": a.block_at, "s": a.block_s} if a.block_at is not None else None,
               "control_hz": PANDA_OMRON.control_hz}
+    frames = (FrameRecorder(loop.latest, backend.read, list(CAMS), out / "frames", every_s=a.record_frames)
+              if a.record_frames else None)
+    config["record_frames_s"] = a.record_frames
+    frame_check = FrameCheck(loop.latest, list(CAMS), every_s=a.frame_check_every)
+    config["lockstep"] = a.lockstep
+    config["interactive"] = a.interactive or a.input_file is not None
+    config.update({"input_file": str(a.input_file) if a.input_file else None, "live_view_s": a.live_view,
+                   "max_wall_s": a.max_wall, "end_after_success_s": a.end_after_success})
+    config["frame_check_every_s"] = a.frame_check_every
     (out / "config.json").write_text(json.dumps(config, indent=2))
-    threads = (loop, runner, worker, owner) + tuple(t for t in (responder, watcher) if t is not None)
+    driven = () if a.lockstep else (loop, runner)
+    threads = driven + (worker, owner, frame_check) + tuple(t for t in (responder, watcher, frames) if t is not None)
     pending = sorted(a.say)
+    console = Console(a.input_file) if a.interactive or a.input_file else None
+    live = LiveView(out / "live", a.live_view) if a.live_view else None
+    ended = "seconds"
     gc.collect()
     gc.freeze()
     t0_ns, w0 = time.time_ns(), time.perf_counter()
     for th in threads:
         th.start()
     try:
-        while time.perf_counter() - w0 < a.seconds and loop.error is None:
+        while (loop.now() if a.lockstep else time.perf_counter() - w0) < a.seconds and loop.error is None:
             while pending and loop.now() >= pending[0][0]:
                 owner.post(UserInstruction(pending.pop(0)[1]))
-            time.sleep(0.01)
+            if console is not None:
+                for text in console.drain():
+                    console.log.append({"t": round(loop.now(), 3), "text": text})
+                    owner.post(UserInstruction(text))
+                if console.quit.is_set():
+                    ended = "quit"
+                    break
+            if a.max_wall is not None and time.perf_counter() - w0 >= a.max_wall:
+                ended = "wall"
+                break
+            if a.end_after_success is not None and backend.success_t is not None \
+                    and loop.now() >= backend.success_t + a.end_after_success:
+                ended = "success"
+                break
+            if live is not None and live.due(loop.now()):
+                capture = loop.latest()
+                live.write(loop.now(), [capture.observation.images[c] for c in CAMS], watch(owner, backend, speaker))
+            if a.lockstep:
+                if any(lane is not None and lane.busy for lane in (worker, responder)):
+                    time.sleep(0.002)
+                    continue
+                runner.step()
+                loop.run_ticks(1)
+            else:
+                time.sleep(0.01)
     finally:
         for th in reversed(threads):
             th.stop()
@@ -437,10 +609,19 @@ def main(argv=None) -> int:
     write_jsonl(out / "commits.jsonl", commit.log)
     write_jsonl(out / "decisions.jsonl", decisions)
     write_jsonl(out / "utterances.jsonl", speaker.log)
+    if console is not None:
+        write_jsonl(out / "typed.jsonl", console.log)
     if watcher is not None:
         write_jsonl(out / "verify_checks.jsonl", watcher.verifier.log)
+    if frames is not None:
+        frames.save()
     summary = summarize(a, config, out, loop, runtime, runner, owner, worker, responder, monitor, model, backend,
-                        steps, wall, watcher)
+                        steps, wall, watcher, frames)
+    summary["frame_check"] = frame_check.report()
+    summary["ended"] = "error" if loop.error is not None else ended
+    if not summary["frame_check"]["valid"]:
+        print(f"[realtime] WARNING: camera frames not real ({summary['frame_check']}); this run is not scored",
+              flush=True)
     (out / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
     if monitor is not None and monitor.recording is not None:
         monitor.recording.conditions = {"realtime_factor": summary["realtime_factor"], "policy": a.policy,
@@ -465,7 +646,7 @@ def main(argv=None) -> int:
 
 
 def summarize(a, config, out, loop, runtime, runner, owner, worker, responder, monitor, model, backend, steps,
-              wall, watcher) -> dict:
+              wall, watcher, frames) -> dict:
     rows = [json.loads(line) for line in (out / "ticks.jsonl").read_text().splitlines()]
     chunk_ticks = sum(r["source"] == "chunk" for r in rows)
     step_ms = sorted(r["step_ms"] for r in rows)
@@ -496,11 +677,15 @@ def summarize(a, config, out, loop, runtime, runner, owner, worker, responder, m
                 "checks": watcher.stats.checks, "errors": watcher.stats.errors, "events": watcher.stats.events,
                 "claims": watcher.stats.claims, "unconfirmed": watcher.stats.unconfirmed,
                 "last_error": watcher.stats.last_error},
+            "frames_recorded": None if frames is None else len(frames.states),
             "truth_now": {s.subtask: backend.truth(s.done) for s in steps},
             "s1_requests": st.requests, "s1_accepted": st.accepted, "s1_errors": st.errors, "s1_last_error": st.last_error,
             "s1_latency_est_s": None if runner.latency_s() is None else round(runner.latency_s(), 3),
             "s1_floor_last": st.floors[-1] if st.floors else None, "s1_commit_reasons": st.commit_reasons,
             "s1_forced": st.forced, "s1_planner_steps": st.planner_steps, "s1_timeouts": st.timeouts,
+            "commit": None if not isinstance(planner_of(worker), CommitVerifyPlanner) else {
+                "reentries": planner_of(worker).reentries, "expired": planner_of(worker).expired,
+                "verified": sum(k.checked for k in owner.keyframes)},
             "monitor": None if monitor is None or model is None else {
                 "threshold": round(model.threshold, 3), "max_score": round(monitor.max_score, 3),
                 "uncovered_ticks": monitor.uncovered,

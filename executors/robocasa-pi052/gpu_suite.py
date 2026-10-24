@@ -14,6 +14,10 @@ a time, so parallel runs would measure each other's load.
                  with the step watcher on MJev; per check P(done) vs truth
   5 t8a_gate     commitment ablation with π0.5² (fixed, phase, consensus K = 3 / 5, consensus + phase), then the v1 gate
                  run: π0.5² + Jev + step events + a change of mind, with video
+  done_check     MJev vs OneJev on "is this step done?" over frames the simulator labelled (done_check_ab.py build
+                 output, `--done-frames DIR`): balanced accuracy, false "done", recall, per step type
+  commit_ab      π0.5² alone vs commit and verify (checker MJev, then OneJev) on two tasks: subtask flips, re-entries
+                 of verified steps, verified steps, expired commitments, task success
 
   uv run python gpu_suite.py --service ~/.config/rojev/services/lambda.json [--only baseline jev] [--quick]
 Writes results/gpu-suite/<stamp>/{<step>/…, suite.json, suite.md}; a step that fails is recorded and the suite goes on.
@@ -28,12 +32,12 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-from qev import Client
 
 from realtime import RoboCasaBackend
 from rojev.protocol import Capture, Deviation, ObservationSnapshot, Operation, OpKind
 from rojev.system1 import RemotePolicy
-from rojev.system2.jev import JevInteraction, OneJevChooser
+from rojev.system2.jev import CanonicalTask, JevInteraction, OneJevChooser
+from rojev.system2.models import onejev
 from tasks import TASKS
 from workflow import CAMS, service_addresses
 
@@ -127,7 +131,8 @@ def mean_pairwise(chunks: list[np.ndarray]) -> float:
 def jev(out: Path, service: Path, quick: bool) -> dict:
     capture = frame(MAIN_TASK)
     url = service_addresses(str(service), "serve")["onejev"]["url"]
-    decider = JevInteraction(OneJevChooser(Client(base_url=url), list(CAMS)))
+    chooser = OneJevChooser(onejev.KeptClient(url), list(CAMS))
+    decider = JevInteraction(chooser, CanonicalTask(chooser, [capture.observation.task]))
     step = Operation(OpKind.SWITCH_TO, subtask="pick up the steak")
     snaps = {"instruction": ObservationSnapshot(1, 1, 5.0, capture, 1, "actually, put the steak on the plate", 1,
                                                 step, 0.0, (), "instruction"),
@@ -190,7 +195,36 @@ def t8a_gate(out: Path, service: Path, quick: bool) -> dict:
     return {"ablation": ablation, "gate": gate}
 
 
-STEPS = {"baseline": baseline, "k_samples": k_samples, "jev": jev, "mjev": mjev, "t8a_gate": t8a_gate}
+def done_check(out: Path, service: Path, quick: bool, frames: Path | None = None) -> dict:
+    from done_check_ab import score
+
+    if frames is None:
+        raise ValueError("done_check needs --done-frames (done_check_ab.py build output)")
+    score(frames, service)
+    return json.loads((frames / "report.json").read_text())
+
+
+def commit_ab(out: Path, service: Path, quick: bool, frames: Path | None = None) -> dict:
+    seconds = 30 if quick else 60
+    runs = {}
+    for task in ([MAIN_TASK] if quick else [MAIN_TASK, "MoveFridgeToFreezer"]):
+        runs[f"{task}/native"] = realtime(out / task / "native", service, ["--task", task, "--arm", "native"], seconds)
+        for checker in ("mjev", "onejev"):
+            runs[f"{task}/commit-{checker}"] = realtime(out / task / f"commit-{checker}", service,
+                                                        ["--task", task, "--arm", "commit", "--verify", checker],
+                                                        seconds)
+    for name, r in runs.items():
+        summary = out / name / "summary.json"
+        if summary.exists():
+            s = json.loads(summary.read_text())
+            r["commit"] = s.get("commit")
+            r["commands"] = len(s["commands"])
+    return runs
+
+
+STEPS = {"baseline": baseline, "k_samples": k_samples, "jev": jev, "mjev": mjev, "t8a_gate": t8a_gate,
+         "done_check": done_check, "commit_ab": commit_ab}
+DEFAULT_STEPS = ("baseline", "k_samples", "jev", "mjev", "t8a_gate")
 
 
 def markdown(results: dict) -> str:
@@ -206,18 +240,20 @@ def main() -> int:
     p.add_argument("--service", type=Path, required=True)
     p.add_argument("--only", nargs="*", choices=list(STEPS))
     p.add_argument("--quick", action="store_true", help="shorter runs, one task (smoke test of the suite)")
+    p.add_argument("--done-frames", type=Path, help="done_check: frames built by done_check_ab.py build")
     p.add_argument("--out", type=Path)
     a = p.parse_args()
     out = a.out or REPO / "results/gpu-suite" / time.strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
     results = {}
-    for name in a.only or list(STEPS):
+    for name in a.only or list(DEFAULT_STEPS):
         step_out = out / name
         step_out.mkdir(exist_ok=True)
         print(f"[suite] {name} …", flush=True)
         w0 = time.perf_counter()
         try:
-            results[name] = {"ok": True, "result": STEPS[name](step_out, a.service.expanduser(), a.quick)}
+            extra = {"frames": a.done_frames} if name in ("done_check", "commit_ab") else {}
+            results[name] = {"ok": True, "result": STEPS[name](step_out, a.service.expanduser(), a.quick, **extra)}
         except Exception as e:
             results[name] = {"ok": False, "error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-3000:]}
         results[name]["minutes"] = round((time.perf_counter() - w0) / 60, 1)

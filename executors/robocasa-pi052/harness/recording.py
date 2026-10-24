@@ -4,9 +4,10 @@ The runtime keeps aggregate stats; tracing needs one record per call. Each wrapp
 what it wraps (`Policy`, `CommitPolicy`, `Decider`) and only appends a dict to its `log`, so the core runs unchanged.
 Times are the robot clock (`now`).
 
-`InteractionCases` saves every Jev decision that asked the model as a calibration case (`<dir>/<case>/case.json` +
-one PNG per camera, the exact model inputs and legal options) and appends a line to `<dir>/labels.jsonl` with the
-predicted act and `"label": null` for a person to fill in; `calibrate_jev.py` fits the `Calibration` from them.
+`InteractionCases` saves every question a Jev decision asked the model as a calibration case (`<dir>/<case>/case.json`
++ one PNG per camera: the exact model inputs, the question and its options; `question` is `act`, or `task` for the
+second question of a revision) and appends a line to `<dir>/labels.jsonl` with the predicted option and
+`"label": null` for a person to fill in; `calibrate_jev.py` fits one `Calibration` per question from them.
 """
 import json
 import time
@@ -18,30 +19,39 @@ from PIL import Image
 
 from rojev.protocol import ObservationSnapshot
 from rojev.robot import ActionSpec
-from rojev.system1 import ActionChunk, CommitPolicy, Commitment, Policy
+from rojev.system1 import ActionChunk, CommitPolicy, Commitment, Continuation, Policy
 from rojev.system2 import Verdict
 from rojev.system2.jev import JevInteraction
 from rojev.system2.jev.chooser import situation
 
 
 class RecordingPolicy(Policy):
+    """Logs each request of `inner` (and whether it carried a continuation); accepts a continuation exactly when
+    `inner` does and forwards it."""
+
     def __init__(self, inner: Policy, now: Callable[[], float]):
         self.inner, self.now, self.log = inner, now, []
+        self.accepts_continuation = inner.accepts_continuation
 
-    def act(self, obs, subtask: str, timeout_s: float | None = None) -> ActionChunk:
-        return self.act_samples(obs, subtask, 1, timeout_s)[0]
+    def act(self, obs, subtask: str, timeout_s: float | None = None,
+            continuation: Continuation | None = None) -> ActionChunk:
+        return self.act_samples(obs, subtask, 1, timeout_s, continuation)[0]
 
-    def act_samples(self, obs, subtask: str, k: int, timeout_s: float | None = None) -> list[ActionChunk]:
+    def act_samples(self, obs, subtask: str, k: int, timeout_s: float | None = None,
+                    continuation: Continuation | None = None) -> list[ActionChunk]:
         t0, w0 = self.now(), time.perf_counter()
+        extra = (continuation,) if continuation is not None else ()
         try:
-            chunks = (self.inner.act_samples(obs, subtask, k, timeout_s) if k > 1
-                      else [self.inner.act(obs, subtask, timeout_s)])
+            chunks = (self.inner.act_samples(obs, subtask, k, timeout_s, *extra) if k > 1
+                      else [self.inner.act(obs, subtask, timeout_s, *extra)])
         except Exception as e:
             self.log.append({"t_start": t0, "t_end": self.now(), "subtask": subtask, "samples": k,
                              "error": f"{type(e).__name__}: {e}"})
             raise
         self.log.append({"t_start": t0, "t_end": self.now(), "wall_ms": round((time.perf_counter() - w0) * 1000, 1),
                          "subtask": subtask, "samples": k, "instruction": obs.task,
+                         "continuation": None if continuation is None else {
+                             "steps": len(continuation.actions), "delay_steps": continuation.delay_steps},
                          "info": {key: v for key, v in chunks[0].info.items() if key != "sample"}})
         return chunks
 
@@ -72,7 +82,7 @@ class RecordingDecider:
         self.name = inner.name
 
     def decide(self, snapshot: ObservationSnapshot) -> Verdict:
-        t0 = self.now()
+        t0, w0 = self.now(), time.perf_counter()
         try:
             v = self.inner.decide(snapshot)
         except Exception as e:
@@ -83,7 +93,8 @@ class RecordingDecider:
                          "trigger": snapshot.trigger, "op": v.operation.kind.value, "subtask": v.operation.subtask,
                          "reason": v.reason, "instruction_rev": snapshot.instruction_rev,
                          "keyframes": len(snapshot.keyframes), "review": snapshot.review,
-                         "deviation": snapshot.deviation is not None, "scores": v.scores})
+                         "deviation": snapshot.deviation is not None, "scores": v.scores,
+                         "decide_ms": round((time.perf_counter() - w0) * 1000, 1), "task": v.task})
         return v
 
 
@@ -103,25 +114,28 @@ class InteractionCases:
 
     def decide(self, snapshot: ObservationSnapshot) -> Verdict:
         v = self.inner.decide(snapshot)
-        options = v.evidence.get("options")
-        if options:
-            self._save(snapshot, options, v)
+        if v.evidence.get("options"):
+            self._save(snapshot, "act", v.evidence, v.scores)
+        task = v.evidence.get("task")
+        if task and task.get("options"):
+            self._save(snapshot, "task", task, task.get("scores") or {})
         return v
 
-    def _save(self, s: ObservationSnapshot, options: dict[str, str], v: Verdict) -> None:
-        case = f"{self.run}-r{s.request_id}"
+    def _save(self, s: ObservationSnapshot, question: str, asked: dict, scores: dict[str, float]) -> None:
+        case = f"{self.run}-r{s.request_id}-{question}"
         folder = self.out / case
         folder.mkdir(exist_ok=True)
         for cam in self.cameras:
             Image.fromarray(s.capture.observation.images[cam]).save(folder / f"{cam}.png")
-        predicted = max(v.scores, key=v.scores.get) if v.scores else None
+        predicted = max(scores, key=scores.get) if scores else None
         (folder / "case.json").write_text(json.dumps({
-            "case": case, "t": s.now, "trigger": s.trigger, "instruction": s.instruction, "cameras": self.cameras,
-            "situation": situation(s, self.cameras), "options": options, "raw": v.evidence.get("raw"),
-            "predicted": predicted}, indent=1, default=str))
+            "case": case, "question": question, "question_text": asked.get("question"), "t": s.now,
+            "trigger": s.trigger, "instruction": s.instruction, "cameras": self.cameras,
+            "situation": situation(s, self.cameras), "options": asked["options"], "raw": asked.get("raw"),
+            "effects": asked.get("effects"), "predicted": predicted}, indent=1, default=str))
         with (self.out / "labels.jsonl").open("a") as f:
-            f.write(json.dumps({"case": case, "instruction": s.instruction, "trigger": s.trigger,
-                                "predicted": predicted, "label": None}) + "\n")
+            f.write(json.dumps({"case": case, "question": question, "instruction": s.instruction, "trigger": s.trigger,
+                                "said": s.latest_utterance, "predicted": predicted, "label": None}) + "\n")
         self.saved += 1
 
 

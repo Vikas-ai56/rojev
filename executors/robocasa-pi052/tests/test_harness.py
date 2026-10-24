@@ -59,7 +59,8 @@ def test_jev_with_keyword_scores_and_the_rewrite_reviser_answers_like_the_rules(
     revised = jev.decide(snap("no, on the plate", PLACE)).operation
     assert revised == Operation(OpKind.SWITCH_TO, subtask="place the steak on the plate")
     unsure = JevInteraction(KeywordChooser(confidence=0.3), reviser=RewriteReviser())
-    assert unsure.decide(snap("hmm", PICK)).operation == Operation(OpKind.ASK, template=CLARIFY)
+    assert not unsure.decide(snap("hmm", PICK)).operation.moves_robot()
+    assert jev.decide(snap("x", PICK, trigger="deviation")).operation == Operation(OpKind.GUARDED_WAIT)
 
 
 def test_revisable_sequence_follows_the_instruction_and_its_budget():
@@ -104,9 +105,46 @@ def test_jev_decisions_become_calibration_cases_a_person_can_label(tmp_path):
                                 tmp_path, "run1")
     assert recorder.decide(s).operation.kind == OpKind.ABORT and recorder.saved == 1
     lines = (tmp_path / "labels.jsonl").read_text().splitlines()
-    assert json.loads(lines[0])["predicted"] == "abort" and json.loads(lines[0])["label"] is None
+    row = json.loads(lines[0])
+    assert row["predicted"] == "abort" and row["label"] is None and row["question"] == "act"
     assert labelled(tmp_path) == []
     (tmp_path / "labels.jsonl").write_text(lines[0].replace('"label": null', '"label": "abort"') + "\n")
     [(case, label)] = labelled(tmp_path)
     assert label == "abort" and "abort" in case["options"] and case["situation"]["user_just_said"] == "stop now"
-    assert [i[0, 0, 0] for i in images(tmp_path, case)] == [0, 9]
+    assert [i[0, 0, 0] for i in images(tmp_path, case)] == [0, 9] and labelled(tmp_path, "task") == []
+
+
+class TaskStub:
+    """Scores a revision, then the trained sentence "put the steak on the plate"."""
+
+    name = "stub"
+
+    def choose(self, s, options, question=None):
+        best = "put the steak on the plate" if "put the steak on the plate" in [o.label for o in options] else "revise"
+        return {o.label: (0.9 if o.label == best else 0.1 / (len(options) - 1)) for o in options}
+
+
+def test_a_revision_records_both_questions_as_cases(tmp_path):
+    from harness.recording import InteractionCases
+    from rojev.system2.jev import CanonicalTask
+
+    cams = {"left": np.zeros((4, 4, 3), np.uint8)}
+    s = ObservationSnapshot(1, 8, 3.0, Capture(5, 3.0, Observation(cams, np.zeros(16), "task")), 1, "task", 1,
+                            PICK, 0.0, (), "instruction", dialogue=(Turn(3.0, USER, 1, text="plate pls"),))
+    stub = TaskStub()
+    decider = JevInteraction(stub, CanonicalTask(stub, ["put the steak in the microwave", "put the steak on the plate"]))
+    v = InteractionCases(decider, ["left"], tmp_path, "run1").decide(s)
+    assert v.task == "put the steak on the plate"
+    rows = [json.loads(line) for line in (tmp_path / "labels.jsonl").read_text().splitlines()]
+    assert [(r["question"], r["predicted"]) for r in rows] == [("act", "revise"), ("task", "put the steak on the plate")]
+    case = json.loads((tmp_path / "run1-r8-task" / "case.json").read_text())
+    assert "none" in case["options"] and case["question_text"].startswith("The user asked the robot for a new task")
+
+
+def test_a_calibration_is_judged_on_the_cases_it_decides():
+    from calibrate_jev import decided_accuracy
+    from rojev.system2.jev import Calibration
+
+    rows = [{"a": 0.9, "b": 0.1}, {"a": 0.9, "b": 0.1}, {"a": 0.55, "b": 0.45}]
+    assert decided_accuracy(rows, ["a", "b", "b"], Calibration(margin=0.5)) == (0.5, 2 / 3)
+    assert decided_accuracy(rows, ["a", "a", "b"], Calibration(margin=0.95)) == (None, 0.0)

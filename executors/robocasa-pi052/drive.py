@@ -11,7 +11,7 @@ One tick = one action dispatched = one env step (ctrl_hz=0: no wall-clock catch-
 between action chunks (synchronous, timing variant T1).
 Writes <out>/{run_config.json,episode.json} and an annotated mp4.
 
-  MUJOCO_GL=egl uv run python drive.py --env-task CloseFridge --instruction "close the fridge" --planner own
+  MUJOCO_GL=egl uv run python drive.py --env-task CloseFridge --planner own   (instruction: the env's own sentence)
 """
 import argparse
 import json
@@ -71,7 +71,7 @@ class RecordingBackend(RoboCasaSimBackend):
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--env-task", default="CloseFridge", help="RoboCasa task class (scene)")
-    p.add_argument("--instruction", default="close the fridge")
+    p.add_argument("--instruction", help="task text (default: the environment's own sentence, as lerobot-eval sends)")
     p.add_argument("--planner", choices=["own", "direct"], default="own")
     p.add_argument("--split", default="pretrain")
     p.add_argument("--obj-registries", default="objaverse,lightwheel")
@@ -84,12 +84,12 @@ def main() -> int:
     p.add_argument("--out", type=Path, required=True)
     a = p.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
-    (a.out / "run_config.json").write_text(json.dumps({**vars(a), "out": str(a.out), "policy": POLICY}, indent=2))
-
     t0 = time.perf_counter()
     env, obs = create_sim_env(task=a.env_task, split=a.split, seed=a.seed,
                               obj_registries=[r for r in a.obj_registries.split(",") if r])  # before CUDA init
     t_env = time.perf_counter() - t0
+    a.instruction = a.instruction or str(env.get_attr("task_description")[0])
+    (a.out / "run_config.json").write_text(json.dumps({**vars(a), "out": str(a.out), "policy": POLICY}, indent=2))
     policy, pre, post = load_policy(a.device, a.tokenizer_dir)
     t_load = time.perf_counter() - t0 - t_env
     gen = GenerationConfig(enable_memory=False, enable_subtask=a.planner == "own", chunks_per_regen=a.chunks_per_gen)
