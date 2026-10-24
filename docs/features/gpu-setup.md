@@ -35,7 +35,7 @@
 - `packages` (build-essential git rsync curl) → `uv` (≥ the Mac's version).
 - `code:core` (rojev/ + root pyproject/uv.lock/README; only with an executor) → `code:shared` (config/, scripts/) → `code:<n>` (hook files + gpu/). Trees mirrored with `--delete`, compared by checksum.
 - `vendor:<dir>`: clone + checkout of `config/*.commit` pins (core OneJev + each hook's vendors, deduplicated).
-- Per component: `env:<n>` (`uv sync --frozen`, uv-managed Python) → `assets:<n>` → `prepare-remote:<n>` → `torch:<n>` (CUDA visible).
+- Per component: `env:<n>` (`uv sync --frozen`, uv-managed Python) → `assets:<n>` → `prepare-remote:<n>` → `torch:<n>` (CUDA visible). All components' chains run at once (one background job each, 2026-10-24); their logs print after all finish; a failure in any stops the setup; restart marks are passed back to the main run.
 - `service-json` → `token:<key>` (auth=token only) → `service:<n>` per component (start sequentially, each waits for `GET /health`) → `tunnel:<key>`.
 - Restart scope: a component's service restarts only when its own steps changed (its code, env, assets, weights, token), or a shared step changed (driver, packages, uv, config/scripts, vendors); `code:core` restarts only the executor.
 
@@ -82,4 +82,5 @@
 ## After setup: the GPU test suite
 - `cd executors/robocasa-pi052 && uv run python gpu_suite.py --service ~/.config/rojev/services/<host>.json [--only …] [--quick]`.
 - Steps, sequential on purpose (one GPU; π0.5²'s service serves one request at a time, parallel runs would measure each other): `baseline` (π0.5² native per task), `k_samples` (K = 1 / 3 / 5 latency, draw spread, GPU memory), `jev` (OneJev latency; live wait / stop / ask runs with the deadline set to 1.5 × the slowest measured decision; calibration cases recorded), `mjev` (oracle arm + MJev step watcher; P(done) vs truth per check), `t8a_gate` (commitment ablation + gate run with video).
+- Opt-in steps: `done_check` (MJev vs OneJev on simulator-labelled frames, `--done-frames DIR` from `done_check_ab.py build`) and `commit_ab` (π0.5² alone vs commit and verify with each checker).
 - Output `results/gpu-suite/<stamp>/{<step>/…, suite.json, suite.md}`; a failed step is recorded and the suite goes on.

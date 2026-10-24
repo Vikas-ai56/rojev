@@ -104,6 +104,14 @@ Caveat: π0.5² is Panda/RoboCasa → model results may not transfer to SO-101.
 
 ### v2 — Helix-type route B (training; after v1 results)
 - [ ] Small fast S1 (visual encoder + proprioception + projected Jev latent + action head) or π0.5² + trained latent path; compare against v1 route A on T8 (plan p. 5, 9)
+- [ ] Task choice beyond the given list (v1 limit, `task_choice.CanonicalTask`, decision 2026-10-24): REVISE picks only
+      from the trained sentences listed for the run. v2: a new task outside the list → a clean rewrite in S1's
+      trained style (new compositions), confirmed with the user or gated by the feasibility head.
+- [ ] Task feasibility in the current state (v1 limit): a listed task is chosen even if it cannot run now (door
+      already closed, object absent). v2: the critic's Q(s, ℓ) head filters / reranks the list (plan in
+      `docs/research/2026-10-23-v2-plan.md` §3–5).
+- [ ] Task list per scene (v1: hand-written `--skills`): shortlist from the 4,740 trained sentences (RoboCasa365
+      human300 `meta/tasks.parquet`) by the scene's objects and fixtures, then Q(s, ℓ).
 
 ### P5 — Speculation (after T8; no training)
 - [ ] T10 Outatime-style preparation: Jev's next decision before the current step ends + π0.5² first chunks for the

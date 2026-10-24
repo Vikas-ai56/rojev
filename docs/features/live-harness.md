@@ -1,6 +1,6 @@
 # Live harness: RoboCasa runs, scenario matrix, spoofs (step 5a, 2026-10-21)
 
-Code: `executors/robocasa-pi052/` — `realtime.py` (entrypoint), `scenarios.py` (matrix), `harness/` (invariants, skills, deciders, recording, viewer, video), `embodiment.py` (PandaOmron `ActionSpec` + effect model), `tasks.py` (authored steps + truth checks). Tests: `executors/robocasa-pi052/tests/test_harness.py` (5, no simulator).
+Code: `executors/robocasa-pi052/` — `realtime.py` (entrypoint), `scenarios.py` (matrix), `harness/` (invariants, skills, deciders, recording, viewer, video), `embodiment.py` (PandaOmron `ActionSpec` + effect model), `tasks.py` (authored steps + truth checks). Tests: `executors/robocasa-pi052/tests/test_harness.py` (7), `tests/test_scenarios_scorecard.py` (5; no simulator).
 Core it drives: [`v3-runtime.md`](v3-runtime.md). S1 supply / commitment: [`s1-supply-and-commitment.md`](s1-supply-and-commitment.md). Monitor: [`execution-monitor.md`](execution-monitor.md). π0.5² service and transport: [`remote-models.md`](remote-models.md).
 
 ## Rule: the core never bends to the simulator (decisions 2026-10-21)
@@ -18,7 +18,7 @@ Core it drives: [`v3-runtime.md`](v3-runtime.md). S1 supply / commitment: [`s1-s
 | `--policy` | `skills` | `skills` scripted S1 · `remote` π0.5² (`--service` JSON or `kaggle`) · `wiggle` plumbing only |
 | `--latency`, `--sample-noise` | 0.3 s, 0 | skills / wiggle: simulated inference time, per-sample target noise |
 | `--interaction` | `none` | `none` one lane · `continue` (`AlwaysContinue`) · `rules` (keyword spoof) · `jev` (`JevInteraction`); `--interaction-timeout` 1.0 s |
-| `--chooser`, `--reviser`, `--max-asks`, `--jev-calibration` | `onejev`, `s1` (remote) / `rewrite` (else), 2, none | jev: who scores acts (`keywords` = spoof), REVISE mapping, question budget, `Calibration` JSON |
+| `--chooser`, `--reviser`, `--skills`, `--max-asks`, `--jev-calibration` | `onejev`, `canonical` (remote) / `rewrite` (else), none, 2, none | jev: who scores acts (`keywords` = spoof), REVISE = a trained task sentence / the step rewritten, extra trained sentences (one per line; the run's instruction is always one), question budget, `{act, task}` calibration JSON |
 | `--hold-recheck S` | off | ask the interaction lane again while a hold stands (wait budget) |
 | `--verify`, `--verify-every`, `--done-threshold`, `--confirmations` | `none`, 1.0 s, 0.7, 2 | step events from `mjev` end-state checks or `truth` (spoof) |
 | `--interaction-delay`, `--interaction-fail` | 0, off | S2 faults on the interaction lane (need a lane) |
@@ -34,10 +34,37 @@ Core it drives: [`v3-runtime.md`](v3-runtime.md). S1 supply / commitment: [`s1-s
 
 - Setup heap frozen (`gc.collect(); gc.freeze()`) before the threads start (research brief 2026-10-22: full GC pass 45–96 ms).
 
+### Frame check (2026-10-23)
+- Always on: `harness/frame_check.FrameCheck` samples the camera frames every `--frame-check-every` s (default 1); noise (mean neighbour-pixel difference > 25) or blank (std < 3) frames → summary `frame_check.valid` false, a warning, the `frames_real` invariant fails and `scenarios` does not score the run. Thresholds from 963 real frames (difference ≤ 7.4, std ≥ 26.8) and the 2026-10-22 corrupted run.
+
+### Delay and measurement flags (2026-10-22)
+- `--s1 pi052|xr1` (with `--policy remote`): which remote S1; `xr1` wraps it in `history.HistoryPolicy` (4 frames, 2 ticks apart, fed by the tick hook).
+- `--lockstep`: simulated time stops while any model thinks: main thread `runner.step()` then `loop.run_ticks(1)`, and no tick while an S2 lane is busy, so S2 deadlines in simulated seconds do not depend on simulator speed (`--seconds` = simulated time). `--interactive` / `--instruction TEXT`: a person types instructions during the run (`typed.jsonl`); `--input-file F` reads them from a file as it grows (a live user agent); `--live-view S` writes `live/now.png` + `status.json` every S simulated seconds; `--max-wall S` ends the run on wall time; `--end-after-success S` ends it S simulated seconds after the task's own check first holds (summary `ended`: seconds · wall · success · quit · error). Diagnostic only: separates π0.5²'s own skill from the cost of real-time execution. Real time stays the default.
+- `--record-frames S`: `harness/tracking.FrameRecorder` saves cameras + flattened simulator state every S s to `frames/frames.npz`; nothing rendered live (the offscreen renderer returns blank images inside the live process). `sam_check.py track <run>` restores each state in a fresh process, renders truth masks, streams the frames through SAM 2.1 (`frames/tracks.jsonl`, `track_report.json`).
+- `sam_check.py frames <done-check folder>`: SAM 2.1 masks from correct (simulator) points, MJev pointing, 2D "placed inside" on still frames (`sam_report.json`).
+
 ## `scenarios.py`: the matrix (19 cases; 5 added 2026-10-22)
 - Each case = a `realtime.py` subprocess on MicrowaveThawingFridge seed 1000, `revisable` arm, checked against the five invariants and its own expectations.
 - `uv run python scenarios.py` (all, headless, scripted S1) · `--only stop --viewer` · `--policy remote --service S.json` · `--trace PROJECT` · `--monitor M.json` (needed by `blocked`, else skipped) · `--no-video`.
-- Report: `results/scenarios/<stamp>/report.json` (per case: ok, invariant findings, expectations, run dir, real-time factor, starved ticks) + one run directory per case; exit 1 if any case fails.
+- Report: `results/scenarios/<stamp>/report.json` (per case: ok, invariant findings, expectations, run dir, real-time factor, starved ticks, `scorecard`) + one run directory per case; exit 1 if any case fails (scores never change the exit code).
+
+### Scorecard (T8, 2026-10-22): [`scorecard.md`](scorecard.md)
+- `Scenario.changes`: one `Change(kind, expected, goal, old_goal, phase)` per `--say` / `--block-at`, in argument order, declared by the case's design; time = its argument's. `injections()` pairs them (count or trigger mismatch = error); cases without changes are not scored.
+- Arm = the case's `--interaction` value, else its `--arm` (`rules`, `jev`, `revisable` for one-lane).
+- After the matrix: each case with changes and a recorded run is scored (`score_run`), aggregated per arm; `scorecard.md` + `scorecard.json` beside `report.json`; per-injection scores in the case's report entry; per-arm table printed.
+- A run whose summary `say` / `blocked` differs from the scenario's schedule is not scored (`scorecard.skipped` says why, printed as `[score skip]`): past runs of since-edited cases are never scored under the new declaration.
+- `--score-only RUN_DIR`: re-scores an existing matrix directory (its `report.json` + run directories), rewrites `report.json` with the scores, runs nothing.
+
+| Case | Changes declared (t s: kind → expected) |
+|---|---|
+| harmless, revoke-baseline | 5: harmless → continue |
+| revise | 4: goal_swap plate ← microwave → continue (current step unaffected, later step rewritten) · 14: goal_swap microwave ← plate → revise |
+| stop / stop-stays | 6 / 5: stop → abort |
+| wait-resume, jev-wait-resume | 5: pause ("wait") → wait · 9: resume ("go on") → revise (resume = switch_to) |
+| ask, jev-ask-answer | 5: ambiguous → ask · 9: goal_swap plate ← microwave → revise |
+| jev-wait-budget | 5: ambiguous → ask |
+| one-lane, s2-slow, s2-fail | 5: pause ("wait") → wait |
+| blocked | 6: deviation → revise (retry) |
 
 | Case | Setup | Expectations |
 |---|---|---|
@@ -84,6 +111,9 @@ Core it drives: [`v3-runtime.md`](v3-runtime.md). S1 supply / commitment: [`s1-s
 
 ## `tests/test_harness.py` (6; re-run 2026-10-22: 6 passed)
 - Destination parsing and rewrite; utterance → act mapping; wait / ask remember and resume the interrupted step; revisable planner follows instruction and budget; each invariant catches what it promises and passes a clean run.
+
+## `tests/test_scenarios_scorecard.py` (5; 2026-10-22: 5 passed)
+- Every `--say` / `--block-at` has a declared change at its time; swap goal texts appear in their utterance; arm label; a mismatched declaration raises; `--score-only` on a synthetic matrix (scores, skips a schedule mismatch, writes both files).
 
 ## Measured: matrix with scripted S1 (2026-10-21, Mac, no GPU; `results/scenarios/skills-20261021-1335*`)
 - **2026-10-22 (19 cases, scripted S1, `--no-video`, monitor `results/monitor/skills-20261021/monitor.json`): 17/19** (`results/scenarios/20261022-155022`). New `stop-stays`, `jev-wait-resume`, `jev-ask-answer`, `jev-wait-budget` pass. `blocked` fails as before (contact-blind monitor). `step-events` failed for its setup: the watcher ran 38 checks with 0 errors but no step was ever done; the scripted S1 has completed no step in any recorded run (a standalone "press the start button" run left the microwave off). It now runs only with `--policy remote`.

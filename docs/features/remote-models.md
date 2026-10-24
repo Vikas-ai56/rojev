@@ -5,11 +5,12 @@ Code: `rojev/transport/` (`open_transport`, `HttpTransport`, `H3Transport`, `End
 ## Services
 | Service | Role | Endpoints | Auth | Box bind | Client |
 |---|---|---|---|---|---|
-| π0.5² (`serve.py`) | S1 | `POST /act` (wire v2, K samples), `POST /reset`, `GET /health` | `Bearer $ROJEV_TOKEN` (`Endpoint`, before the body) | HTTP/1.1 127.0.0.1:8000; with `--h3-port`: HTTP/3 UDP 0.0.0.0 | `RemotePolicy` over `rojev.transport` |
+| π0.5² (`serve.py`) | S1 | `POST /act` (wire v3, K samples, optional continuation), `POST /reset`, `GET /health` | `Bearer $ROJEV_TOKEN` (`Endpoint`, before the body) | HTTP/1.1 127.0.0.1:8000; with `--h3-port`: HTTP/3 UDP 0.0.0.0 | `RemotePolicy` over `rojev.transport` |
 | MJev (`serve_mjev.py`) | S2 evidence | `POST /ask` (JSON, base64 PNG images + questions), `GET /health` | bearer token | HTTP/1.1 keep-alive, threaded, 127.0.0.1:8001 | `RemoteMJev`, `urllib` (new connection per request) |
-| OneJev (qev) | S2 decision | qev API | none | 127.0.0.1:8002 (`--host 127.0.0.1` mandatory) | qev `Client` |
+| OneJev (qev) | S2 decision | qev API | none | 127.0.0.1:8002 (`--host 127.0.0.1` mandatory) | `onejev.KeptClient` (qev `Client`, one kept connection) |
 - All three reach the Mac through SSH tunnels made by `scripts/gpu_setup.sh`; only π0.5² has an HTTP/3 path.
 - `serve.py`: `--idle-min` (default 30; the GPU hook passes 600) exits after that long without requests; `MAX_BODY` 32 MB → 413 before buffering.
+- `serve.py --planner-memory`: π0.5²'s own memory head on (`GenerationConfig.enable_memory`), reported by `/health`; off by default (A/B 2026-10-22: more subtask switches, false memory notes); on the box via `PI052_SERVE_FLAGS` in the unit environment.
 
 ## Transport (`rojev/transport/`; depends on nothing else in rojev)
 - `open_transport(url, token, cert_pem=None, timeout_s=120)`: `h3://host:port` → `H3Transport` (needs `cert_pem`, else `ValueError`); anything else → `HttpTransport`. Both: `request(method, path, body) → bytes`, `health()`, `close()`.
@@ -30,15 +31,17 @@ Code: `rojev/transport/` (`open_transport`, `HttpTransport`, `H3Transport`, `End
 - `make_certificate(cert, key, days=365)`: self-signed EC P-256 for `rojev-gpu`, key file mode 600; returns the PEM the client pins.
 
 ## Wire format (`wire.py`; numpy only, `allow_pickle=False`)
-- `VERSION` = 2 in request and response; another version (v1 = no `version` key) → `ValueError` (service: 400).
-- Request = compressed `.npz`: per camera `img/<cam>` (uint8 H×W×3) or `webp/<cam>` (WebP bytes); `state` float32; `task`, `subtask` unicode scalars; `samples` K ≥ 1. `decode_request` → `ActRequest(observation, subtask, samples)`.
+- `VERSION` = 3 in request and response (v3 adds the optional continuation); another version (v1 = no `version` key) → `ValueError` (service: 400).
+- Request = compressed `.npz`: per camera `img/<cam>` (uint8 H×W×3) or `webp/<cam>` (WebP bytes); `state` float32; `task`, `subtask` unicode scalars; `samples` K ≥ 1; optional `prefix` float32 n×d + `delay_steps` (the `Continuation`). `decode_request` → `ActRequest(observation, subtask, samples, continuation)`.
 - Response = compressed `.npz`: `actions` float32 K×n×d; `timings_ms`, `info` = JSON lists, one entry per sample. `decode_response` → `list[ActionChunk]`.
 - Codecs (`CODECS`): `raw` lossless (~150 KB for three 256² cameras); `webp90` WebP quality 90, method 4 (~26 KB, ~3 ms encode per camera). `DEFAULT_CODEC` = `webp90`: the one place the default lives (`encode_request`, `RemotePolicy`).
 - `RemotePolicy.act_samples(obs, subtask, k)`: one request; per chunk `network` = round trip − the server's stage times (also contains server decode / encode and lock wait), `round_trip`, `request_kb`; K ≠ returned count → `ValueError`. `act` = `act_samples(…, 1)[0]`.
 
 ## Server side (`serve.py`)
-- `Service(policy, about).handle` = routing only (`/health` without the model lock; `/act`, `/reset` serialized by `lock`; bad wire → 400); `main` wraps it in one `Endpoint(service.handle, $ROJEV_TOKEN, MAX_BODY)` served by `HttpServer` (127.0.0.1) and, with `--h3-port N --cert C --key K` (all three or refused), `H3Server` (0.0.0.0).
+- XR-1 (`executors/robocasa-xr1/serve.py`, port 8004, key `xr1`): the RoboCasa365 checkpoint on the same `PolicyService`; history-encoded observation (`<cam>@k`, k = 0 oldest, + stacked `agent_pos`) → its prompt and processor → 16 × 12 raw actions (the robot side maps switches with `embodiment.to_action_space`); stateless. Measured on the A100: 10.2 GB, ~40 ms preprocess + 275–290 ms inference per query.
+- `rojev.system1.PolicyService(policy, about).handle` (was `serve.Service`) = routing only (`/health` without the model lock; `/act`, `/reset` serialized by `lock`; bad wire → 400); `main` wraps it in one `Endpoint(service.handle, $ROJEV_TOKEN, MAX_BODY)` served by `HttpServer` (127.0.0.1) and, with `--h3-port N --cert C --key K` (all three or refused), `H3Server` (0.0.0.0).
 - `Pi052Policy.act_samples(obs, subtask, k)`: raw observation → `preprocess_observation` → checkpoint preprocessor (once) → subtask: given, or π0.5²'s own planner run once (state kept until the task text changes or `/reset`; returned in each chunk's `info`) → PI052 adapter `select_action` over `Draws(policy, k)` → postprocessor per action → `to_action_space`, per chunk. `act` = K = 1.
+- Real-time chunking (`--rtc H`): a request's `Continuation` (actions the robot runs from the observation's time; `delay_steps` = ⌈L/dt⌉) → checkpoint normalizer (MEAN_STD) → LeRobot RTC guidance (`prev_chunk_left_over`, `inference_delay`, `execution_horizon` = H, EXP prefix schedule) through `Draws`; under `no_grad` (RTC uses autograd), else `inference_mode`. `Service` passes a continuation only to a policy that `accepts_continuation`; `info["rtc"]` says whether it was used. Off by default.
 - `Draws`: the adapter builds the prompt for one observation, then `predict_action_chunk` repeats every conditioned tensor K times along the batch → `sample_actions` draws K independent noises in one forward batch. Prefix (images + prompt) computed per row: LeRobot's `sample_actions` builds the prefix KV cache and the denoising loop in one method, so sharing one prefix would mean re-implementing it in the executor (rejected).
 - Timings (shared by the K chunks): `preprocess`, `plan` (planner; ~0 with a given subtask), `infer` (K draws), `postprocess`.
 - `to_action_space`: every PandaOmron dimension with a threshold (gripper, base mode) → its high value at or above the threshold, else low, as RoboCasa's gym wrapper does; continuous dimensions untouched. Before it, the first live run reported 486 of 600 ticks as violations, all on the two switches (outputs up to 1.018); continuous overshoots are still reported, as they should be.
@@ -80,3 +83,16 @@ Setup (2026-10-21): A100 40 GB box in Ashburn VA (`lambda`, since terminated), M
 - HTTP/3: pinned self-signed certificate (no public CA; no other server can stand in) + bearer token; binds all interfaces, so it needs the cloud firewall's UDP port.
 - HTTP/1.1 services and qev bind loopback only; the SSH tunnel is the only path (qev has no auth).
 - Request size and token: checked by `Endpoint.admit` on the headers, before any body is buffered, on both transports (HTTP/3 also stops a stream once its data passes the limit), so an unauthenticated client on the public HTTP/3 port cannot make the service buffer a body; `serve_mjev.py` checks the size before reading (moves to `Endpoint` with the main session).
+
+## OneJev decision latency (2026-10-24, Mac in India → A100 40 GB box over the SSH tunnel)
+| part (3 cameras, 256 × 256, JPEG q95 ~26 kB each) | ms |
+|---|---|
+| qev server: render + one forward pass (images ~74 tokens / ~20 ms each) | 75–140 |
+| one round trip (kept connection, `/health`) | ~270–345 |
+| image upload (3 images vs none, kept connection) | ~215 |
+| extra round trip of a new connection per request (qev `Client` uses `urlopen`) | ~650 |
+- `KeptClient`: median 1269 → 604 ms per decision, probabilities identical (6 recorded cases).
+- Smaller images rejected: JPEG q85 / q75, WebP q90 / q80 (8–15 kB) changed the top option in 1 / 6 cases; only WebP
+  q80 was clearly faster (428 vs 533 ms). Next: frames sent ahead and referenced by path (qev reads `path` media).
+- Two questions (act, then task) are two requests today (+~1.1 s); qev answers several questions over one shared
+  image prefix in one request.
