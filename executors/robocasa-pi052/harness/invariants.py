@@ -6,6 +6,8 @@
   changes_answered     every user instruction is followed by an applied decision (command, reaffirm or continue)
                        before the next instruction or the run end (when at least `answer_window_s` remains)
   no_violations        no action clamped by the robot's bounds
+  frames_real          every sampled camera frame was a real image (`frame_check` in the summary); a run without the
+                       check has no finding (recorded before the check existed)
 
 Each check returns a list of findings (empty = holds); `check(run, spec)` runs them all for the robot whose
 `ActionSpec` produced the run. Scenario-specific expectations live in scenarios.py.
@@ -80,7 +82,14 @@ def no_violations(run: Run) -> list[str]:
     return [f"tick {t['t']}: {t['violations']}" for t in run.ticks if t["violations"]]
 
 
-RUN_INVARIANTS = (no_stale_action, active_monotonic, changes_answered, no_violations)
+def frames_real(run: Run) -> list[str]:
+    report = run.summary.get("frame_check")
+    if report is None or report["valid"]:
+        return []
+    return [f"bad frames per camera {report['bad']}, first {report['first_bad']}"]
+
+
+RUN_INVARIANTS = (no_stale_action, active_monotonic, changes_answered, no_violations, frames_real)
 
 
 def check(run: Run, spec: ActionSpec) -> dict[str, list[str]]:

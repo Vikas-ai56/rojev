@@ -1,5 +1,6 @@
 """serve.py without the GPU model: `Service` routing behind the transport `Endpoint` with a stand-in policy (K samples in
-one request, one policy call), and `Draws` (the K-row batch the PI052 adapter's prompt is repeated into)."""
+one request, one policy call; a continuation reaches only a policy that accepts one), and `Draws` (the K-row batch the
+PI052 adapter's prompt is repeated into, with the RTC guidance passed through)."""
 import io
 import json
 import threading
@@ -8,9 +9,10 @@ import numpy as np
 import torch
 
 from rojev.protocol import Observation
-from rojev.system1 import ActionChunk, Policy, RemotePolicy, wire
+from rojev.system1 import ActionChunk, Continuation, Policy, RemotePolicy, wire
 from rojev.transport import Endpoint, HttpServer
-from serve import MAX_BODY, Draws, Service
+from rojev.system1 import PolicyService as Service
+from serve import MAX_BODY, Draws
 
 TOKEN = "t0ken"
 
@@ -30,6 +32,15 @@ class StandIn(Policy):
         self.calls.append(("reset", 0))
 
 
+class Continuing(StandIn):
+    accepts_continuation = True
+
+    def act_samples(self, obs: Observation, subtask: str, k: int, timeout_s=None, continuation=None):
+        self.calls.append((subtask, k, None if continuation is None else (continuation.actions.shape,
+                                                                           continuation.delay_steps)))
+        return [ActionChunk(np.zeros((50, 12), np.float32)) for _ in range(k)]
+
+
 def obs():
     return Observation({"cam": np.zeros((8, 8, 3), np.uint8)}, np.zeros(16, np.float32), "task")
 
@@ -45,7 +56,7 @@ def test_service_routes_k_samples_reset_health_and_refuses_another_wire_version(
     assert status == 200 and json.loads(body) == {"policy": "stand-in", "requests": 2}
     legacy = io.BytesIO()
     np.savez_compressed(legacy, state=np.zeros(16), task=np.array("t"), subtask=np.array("pick"))
-    assert service.handle("POST", "/act", {}, legacy.getvalue())[:2] == (400, b"wire version 1, expected 2")
+    assert service.handle("POST", "/act", {}, legacy.getvalue())[:2] == (400, b"wire version 1, expected 3")
     assert service.handle("POST", "/nope", {}, b"")[0] == 404
 
 
@@ -58,6 +69,30 @@ def test_remote_k_samples_reach_the_policy_as_one_call_through_the_endpoint():
     assert len(chunks) == 5 and policy.calls == [("", 5)] and all(c.info == {"subtask": ""} for c in chunks)
     assert remote.act(obs(), "pick").actions.shape == (50, 12) and policy.calls[-1] == ("pick", 1)
     server.shutdown()
+
+
+def test_a_continuation_reaches_only_a_policy_that_accepts_one():
+    continuation = Continuation(np.ones((12, 12), np.float32), 4)
+    body = wire.encode_request(obs(), "pick", 2, continuation=continuation)
+    plain, continuing = StandIn(), Continuing()
+    assert Service(plain, {}).handle("POST", "/act", {}, body)[0] == 200 and plain.calls == [("pick", 2)]
+    assert Service(continuing, {}).handle("POST", "/act", {}, body)[0] == 200
+    assert continuing.calls == [("pick", 2, ((12, 12), 4))]
+
+
+def test_draws_pass_the_rtc_guidance_to_the_policy():
+    seen = {}
+
+    class Model:
+        config = object()
+
+        def predict_action_chunk(self, batch, **kwargs):
+            seen.update(kwargs)
+            return torch.zeros(1, 50, 12)
+
+    Draws(Model(), 1, {"inference_delay": 3, "execution_horizon": 10}).predict_action_chunk(
+        {"observation.state": torch.rand(1, 16)})
+    assert seen == {"inference_delay": 3, "execution_horizon": 10}
 
 
 def test_draws_repeat_every_conditioned_tensor_k_times_along_the_batch():

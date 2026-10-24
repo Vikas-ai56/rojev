@@ -1,175 +1,174 @@
-# Experiments log (exact numbers; newest last)
+# Experiments record (exact numbers; every number cites the file it came from)
 
-Model under test unless stated: OneJev [onejev] 1.5 0.8B Q8_0 GGUF (`mradermacher/OneJev1.5-0.8B-GGUF` @57b376b8e75f) served by qev + llama.cpp 0.6.0 on a MacBook Air M5 16 GB. Single deterministic sample per query (no sampling). "n" = number of frames or episodes.
+## Read this first
+- **Stack now (v3 runtime, v1 loop):** S1 = Xiaomi-Robotics-1 RoboCasa365 (5B, BF16, `XiaomiRobotics/Xiaomi-Robotics-1-RoboCasa365` @3a6d029, `config/xr1_weights.txt`) · S2 = Jev v1 interaction layer on OneJev 1.6 4B (`OmniJev/OneJev1.6-4B` @7d55a87, `config/onejev_weights.txt`, served by qev) + XR-1's native planner (whole-task sentence) · MJev out of the loop since 2026-10-22.
+- **Hardware:** RoboCasa simulator on a MacBook Air M5 (India); models on one A100 40 GB box over SSH tunnels (`docs/features/remote-models.md`, `docs/features/gpu-setup.md`).
+- **Evaluation mode:** lockstep (simulated time stops while S1 or S2 computes); real time reported alongside (`docs/decisions.md` 2026-10-23).
+- **Status column:** `valid` = stands as measured · `superseded by X` = still true, but the design it informed is gone · `withdrawn: corrupted frames` = live `realtime.py` result taken before the 2026-10-22 render-context fix (E22); not evidence until re-run.
+- `docs/decisions.md` is authoritative for status. "n" = frames, lines or episodes.
 
-## E1 — OneJev uses the image (2026-10-16)
-- Setup: Menagerie SO-101 `scene_box.xml`, free camera, 640×480; same request with the green box shown vs hidden (rgba α = 0).
-- P(green box visible): **0.984 shown vs 0.140 hidden**. P(robot arm visible): 0.983 vs 0.986. P(approach_box): 0.934 vs 0.658.
-- Identical repeat → identical probabilities. Latency 195–390 ms per request. Steady-state memory ≈ 1.3 GB (llama-server 1079 MB + qev 245 MB).
-- Source: `docs/features/phase0-install.md`.
+## Index
+| id | date | question | result (one line) | status | source |
+|---|---|---|---|---|---|
+| E1 | 10-16 | Does OneJev 0.8B use the image? | P(green box) 0.984 shown vs 0.140 hidden | superseded by 4B decision (E13) | `docs/features/history/phase0-install.md` |
+| E2 | 10-16 | Does instruction text bias answers? | Instruction raised P(box visible) on hidden-box frames (0.003 → 0.138) | superseded by v3 (task / user line kept apart) | this file, git history |
+| E3 | 10-16 | Prompt variants for a false premise | Two-step (visibility on neutral state → decision) 4/4; option-order debias no effect | superseded by v3 | `playground/archive/e3_prompt_variants.py` |
+| E4 | 10-17 | Does viewpoint change the answer? | Overhead camera: P(box) 0.03, no false approach | superseded by v3 | `docs/features/robot-interface.md` |
+| E5 | 10-16 | OneJev readout mass | 3–8 % on answer letters (image questions); by design, probabilities are relative | valid (applies to all OneJev scores) | this file, git history |
+| E6 | 10-17 | Loopback communication cost | Transport 0.41 ms vs decision 73 ms median | superseded by E14 / E29 (WAN) | `playground/archive/e6_ipc_bench.py` |
+| E7 | 10-17 | SmolVLA as RoboCasa executor | 4/20 after fixing 3 eval mismatches (cameras, split, task names) | superseded by π0.5² → XR-1 | this file, git history |
+| E8 | 10-17 | π0.5² subtask vocabulary | 21,326 distinct subtasks in 32,043 episodes | superseded by v3 (no subtask selection) | `data/vocab/pi052_robocasa_subtasks.json` |
+| E9 | 10-17 | Candidate shortlist coverage@K | Held-out tasks: 25.2 % of needed subtasks never seen as strings; @10 = .398 | superseded by v3 | `results/runs/e9_coverage_20261017-174343/` |
+| E9b | 10-17 | Template + slot-filling builder | Reach 75 → 89 %, ranking +0.7 pt @10; not adopted | superseded by v3 | `results/logs/e9b.log` |
+| E10 | 10-18 | Live workflow, oracle arm E | 0/3; "grasped" ≠ "picked up"; π0.5² dropped the steak | superseded by v3; frames never checked | `results/runs/workflow/` |
+| E11 | 10-18 | MJev bf16 vs fp32 on T4 | Top-1 12/12, max Δp 0.029; 24.5 s / request | superseded by E17 (MJev out) | `results/kaggle/armd_20261018-interactive/` |
+| E12 | 10-18 | MJev speed levers | Slow Conv3d patch embed (20.6 of 23.8 s); as matmul: fp16 1,280 ms (19×) | superseded by E17 | `results/kaggle/armd_20261018-interactive/mjev_speed_patched.json` |
+| E13 | 10-18 | OneJev next-subtask choice, 0.8B vs 4B | 4B 40 % vs 0.8B 22.5 % (n 40); image ablation confounded | superseded by v3; → 4B adopted | `results/runs/e13_onejev_bench_*` |
+| E14 | 10-21 | Remote S1 transport over the WAN | Keep-alive + WebP-90 round trip p50 559 / p90 597 ms; best path | valid | `docs/features/remote-models.md` |
+| E15 | 10-21 | Runtime scenario matrix, stand-in S1 | 13/14 pass; real-time factor 0.954–0.992, 0 starved | valid (stand-in ignores images) | `docs/features/live-harness.md` |
+| E16 | 10-22 | GPU suite, π0.5² + Jev live | Owner bugs found (review lease < Jev latency; utterance became task text), fixed; model behaviour (18 subtask flips in 60 s) | bugs valid; behaviour withdrawn: corrupted frames | `docs/decisions.md` 10-22 entries |
+| E17 | 10-22 | Done-check A/B on simulator-labelled frames | MJev 0.50 / 0.45, OneJev 0.52 / 0.52 balanced accuracy → MJev out | valid (still frames) | `results/done-check/20261022*/` |
+| E18 | 10-22 | Commit-and-verify live | Subtask switches 19 → 2, nothing verified | withdrawn: corrupted frames | `docs/decisions.md` 10-22 |
+| E19 | 10-22 | π0.5² planner memory A/B | Switches 16 / 10 off vs 21 / 11 on, no success | withdrawn: corrupted frames | `results/memory-ab/20261022` |
+| E20 | 10-22 | SAM 2.1 as a completion signal | Still frames: mask IoU 0.64; live tracking IoU 0.86–0.96 | still frames valid; live withdrawn | `docs/decisions.md` 10-22 |
+| E21 | 10-22 | π0.5² on composite tasks (+ oracle) | 0/14 episodes; oracle 0/4 | withdrawn: corrupted frames | `results/delay-ab/` |
+| E22 | 10-22 | Render-context bug; frame check | Live frames were noise (neighbour diff 70–84 vs 5); check added | valid | `docs/decisions.md` 10-22, 10-23 |
+| E23 | 10-22 | XR-1 parity in our harness | 18/20 vs their 20/20; first pre-fix run withdrawn | valid (fixed run) | `results/xr1-parity/20261022-fixed` |
+| E24 | 10-23 | Lockstep vs real time | Lockstep smoke: success 10.5 s; real time: factor 0.81, 651 starved ticks | valid | `results/v1-smoke/`, `results/campaign/20261024-134629/F13` |
+| E25 | 10-23 | Interactive runs 1–5 (XR-1 + Jev) | Remarks became tasks; trained tasks not offered; finished task resumed → v1 testing stopped | valid | `results/v1-interactive/` |
+| E26 | 10-23 | First fitted Jev calibration | T 0.44, margin 0.10 on 30 cases | withdrawn 10-24: no held-out set | `results/jev-calibration/20261023/` |
+| E27 | 10-24 | v1 test campaign (scripted, fuzz, live users) | 82 lines: 55 right, 2 unsafe, 24 safe misses, 1 unanswered | valid | `results/campaign/20261024-134629/analysis.md` |
+| E28 | 10-24 | Effect-based hesitation, offline replay | Unsafe "ruko" now asks; two stops now stop; one regression | valid (offline) | `docs/decisions.md` 10-24 |
+| E29 | 10-24 | OneJev latency breakdown; kept connection | 1269 → 604 ms median, identical probabilities | valid | `docs/features/remote-models.md` |
+| E30 | 10-24 | Live rerun: effect hesitation, kept connection, late answers | stop/go-on ×2 4/4; "ruko" asks; late answers applied; idle connection dropped after ~5 s | valid | `results/campaign/20261024-rerun/` |
 
-## E2 — Instruction text biases OneJev's answers (2026-10-16)
-- Setup: SO-101 scripted trajectory, box hidden, 3 checkpoints, two instructions. n = 3 frames per instruction.
+## E17 — Done-check A/B: neither model can tell a finished step (2026-10-22)
+- Setup: kitchen states set in the simulator (object placed, door closed, appliance on), labelled by the task's own completion test; 2 of 80 states dropped (predicate failed), never relabelled; 222 pairs (108 done, 114 not). Two question forms: "is this step done?" and yes / no postconditions. Still frames, 0 of 444 images corrupt.
 
-| Checkpoint | "Approach the visible green box": P(box) / P(approach) | "Decide the next action from what the image shows": P(box) / P(approach) |
-|---|---|---|
-| home | 0.138 / 0.569 | 0.003 / 0.309 |
-| pickup | 0.064 / 0.228 | 0.001 / 0.058 |
-| home_again | 0.118 / 0.502 | 0.002 / 0.289 |
-
-- Box shown: P(box) 0.980–0.983, P(approach) 0.815–0.868.
-- Finding: the instruction raises both the action answer and the *visibility* answer. Evidence questions must not share the instruction's state.
-
-## E3 — Prompt / protocol variants for the false-premise case (2026-10-16)
-- Setup: `scene_box.xml`, free camera, 640×480; 4 frames (home/pickup pose × box shown/hidden). Correct = `approach_box` iff the box is visible (segmentation ground truth). Phoenix project `critique`, session `critique-183951`. Script: `playground/archive/e3_prompt_variants.py`.
-
-| Variant | Correct /4 | Hidden-box: P(approach) home / pickup | Shown: P(approach) home / pickup |
+| checker (top answer) | "done?" bal. acc / recall / false done | postconditions bal. acc / recall / false done | p50 ms |
 |---|---|---|---|
-| V0 baseline ("Approach the visible green box") | 3 | **0.466** ✗ / 0.227 | 0.876 / 0.775 |
-| V1 V0 + debias=3 (option-order shifts) | 3 | **0.490** ✗ / 0.254 | 0.887 / 0.786 |
-| V2 neutral instruction | 4 | 0.252 / 0.057 | 0.610 / 0.440 |
-| V3 goal instruction, no "visible" wording | 2 | **0.712** ✗ / **0.587** ✗ | 0.896 / 0.829 |
-| V4 V3 + `report_missing` option | 3 | **0.545** ✗ / 0.342 | 0.896 / 0.817 |
-| V5 V4 + preconditions in option text | 3 | **0.405** ✗ / 0.274 | 0.701 / 0.622 |
-| V5 + debias=4 | 3 | **0.373** ✗ / 0.254 | 0.747 / 0.686 |
-| **V6 two-step: visibility on neutral state → fed into decision** | **4** | 0.316 / 0.293 (picks report_missing 0.496 / 0.556) | 0.805 / 0.733 |
+| MJev | 0.50 / 0.00 / 0.00 | 0.45 / 0.22 / 0.32 | 57 |
+| OneJev, views glued | 0.52 / 0.06 / 0.01 | 0.52 / 0.42 / 0.38 | 350 |
+| OneJev, separate views | 0.52 / 0.07 / 0.03 | 0.57 / 0.36 / 0.22 | 142 |
 
-- V6 visibility (neutral state): 0.992 shown vs 0.009 / 0.005 hidden. With the instruction in the state it was 0.06–0.14 (E2).
-- Option-order debiasing barely changes results (0.466 → 0.490) → order bias is not the cause.
-- Small n (4 frames, one scene); evidence, not a benchmark.
+- Meaning: no separation to put a threshold on; MJev never says "done" at all. MJev is not loaded by default; commit-and-verify releases only on its time bound until a measured completion signal exists.
+- Open: 256 × 256 multi-camera views may be the limit, not the models; teleported placements may differ from robot-made ones.
+- Source: `results/done-check/20261022/report{,_post}.json`, `results/done-check/20261022-separate/report{,_post}.json`; `docs/decisions.md` 2026-10-22 "MJev out of the v1 loop".
 
-## E4 — Viewpoint changes the answer (2026-10-17)
-- Same question, SO-101 `scenes/pick_place.xml`, fixed **overhead** sensor camera, box hidden: P(box visible) 0.030 / 0.028 (home / pickup); `next` = observe 0.549 / 0.532, approach 0.224 / 0.257 → no false approach.
-- The E2/E3 false-approach failure was specific to the free-camera view. Source: `docs/features/robot-interface.md`.
+## E21 — π0.5² composite failure and the oracle (2026-10-22) — WITHDRAWN
+- Claimed: π0.5² (`pi052_robocasa`) 0/14 composite episodes (real time, lockstep, full budget); with an oracle planner 0/4 (picks 2/4, places 0/4); compared with RoboCasa365's π0.5 composite rate 7.1 %.
+- Status: withdrawn with every pre-fix `realtime.py` result (memory A/B, delay A/B incl. RTC, full-budget lockstep, oracle, SAM live, XR-1's first run). "The checkpoint is the limit" and "delay is not the cause" are unverified. Not re-run; the switch to XR-1 stands on XR-1's own published number (57.28 % on target50) and E23.
+- Source: `docs/decisions.md` 2026-10-22 "π0.5² … cannot execute our composite tasks (EVIDENCE WITHDRAWN …)".
 
-## E5 — OneJev readout mass (2026-10-16)
-- `allowed_token_mass` (probability on the answer letters before renormalising): 3–8% on image questions; 11–32% on text-only questions with obvious answers.
-- Explained by training: loss is "cross-entropy against a soft target plus a Brier term, both over the K answer slots" (`OneJev train/sft.py:368`). Expected by design, not a fault; probabilities are relative among options.
+## E22 — Render-context bug and the frame-integrity check (2026-10-22 / 23)
+- Cause: robosuite frees a replaced simulator's MuJoCo render context in whatever GL context is current, deleting the live simulator's framebuffer and textures; `realtime.py` runs `gc.collect()` before `gc.freeze()`, so the policy saw noise from the first step. Reproduced with a stand-in policy, no network, lockstep and real time.
+- Signal: neighbour-pixel difference 70–84 on corrupted frames vs 5 on real ones. Still-frame sets (done-check, SAM check) never collect: 0 of 444 images corrupt.
+- Fix: `executors/robocasa-pi052/render_context.py` frees the context in its own GL context (GLFW / CGL only); test `executors/robocasa-pi052/tests/test_render_context.py`.
+- Check on every run (`harness/frame_check.FrameCheck`, every 1 s): noise = neighbour difference > 25, blank = std < 3 → run invalid, not scored. 963 real frames: difference ≤ 7.4, std ≥ 26.8.
+- Source: `docs/decisions.md` 2026-10-22 "Camera images in live runs were corrupted…", 2026-10-23 "Every run checks its camera frames…".
 
-## E6 — Communication cost (2026-10-17)
-- Loopback round trip vs decision (OneJev, image + 1 Choice): transport median 0.41 ms (p95 0.75) vs decision median 73 ms (p95 458) → ~0.6%.
-- IPC for one observation (3 × 256×256 RGB = 590 KB), 300 trials: HTTP + JSON + base64 **2.96 ms**; Unix socket raw **0.44 ms**; shared memory + 1-byte notify **0.07 ms**. Script: `playground/archive/e6_ipc_bench.py`.
-- OneJev median latency 145 ms headless vs 311 ms with the MuJoCo viewer open (GPU contention suspected, untested).
+## E23 — XR-1 parity in our harness (2026-10-22, re-run after the fix)
+- Setup: XR-1's published target50 cases (their seeds and horizons), 4 tasks × 5 seeds, lockstep, refill 0.05 s; 3 atomic-seen + 1 composite-seen task; Composite-Unseen never run here.
 
-## E7 — SmolVLA executor (`lerobot/smolvla_robocasa`) in RoboCasa [shukor2025smolvla, smolvla_robocasa, nasiriany2024robocasa] (2026-10-17)
-- **Three mismatches found in LeRobot's documented eval path**, all of which invalidated early runs:
-  1. Camera mapping: wrist and right camera swapped vs training.
-  2. Scene split `all` vs training `target`.
-  3. Instruction: natural-language sentence vs the task names it was trained on.
-- **Invalid runs** (kept for audit, not results): `g0a_smolvla_closefridge_20261017-140555`; `g0c_20261017-151400` (parallel envs crashed on macOS); `g0c_20261017-151517` and `g0c_20261017-152512` (cameras and/or split wrong); `g0c_20261017-153102` (sentence instruction). "ERROR" rows for OpenCabinet in those runs = runs I interrupted.
-- **A/B instruction test** (cameras + split fixed, seeds 1000–1004, same seeds): task name **1/5** (seed 1002, 245 steps) vs sentence **0/5**. Runs: `rollout_CloseFridge_taskname_20261017-154211`, `rollout_CloseFridge_lang_20261017-154617`.
-- **Corrected setup, 5 episodes per task** (seeds 1000–1004):
-
-| Task | Success | Successful seed (steps) | Objects | Run |
-|---|---|---|---|---|
-| CloseFridge | 1/5 | 1002 (245) | lightwheel | `rollout_CloseFridge_taskname_20261017-154211` |
-| OpenDrawer | 1/5 | 1004 (314) | lightwheel | `rollout_OpenDrawer_taskname_20261017-155446` |
-| TurnOnSinkFaucet | 1/5 | 1004 (423) | lightwheel | `rollout_TurnOnSinkFaucet_taskname_20261017-155842` |
-| TurnOnMicrowave | 1/5 | 1001 (420) | objaverse + lightwheel | `rollout_TurnOnMicrowave_taskname_20261017-160410` |
-
-- TurnOnMicrowave first crashed at reset with lightwheel objects only (no valid object category): `rollout_TurnOnMicrowave_taskname_20261017-155817`.
-- **Total 4/20 (20%)**; each 1/5 has 95% CI ≈ 4–62%. Too unreliable as the executor → switched to π0.5².
-- Speed on M5 (MPS): ~27 steps/s; episode ≈ 58 s; peak RAM 3.39 GB.
-
-## E8 — π0.5² subtask vocabulary [pi052_robocasa] (2026-10-17)
-- Source: `pepijn223/robocasa_pretrain_human300_v4_annotated5` (32,043 episodes; 4,740 task strings), `language_persistent` rows of style `subtask`. Output: `data/vocab/pi052_robocasa_subtasks.json`.
-- **21,326 distinct subtasks.** Episodes per subtask: ≥100: 212 · ≥20: 1,133 · 2–19: 7,415 · 1: 12,778.
-- Top: open the refrigerator door 2,980 · open the cabinet door 2,726 · pick up the bowl 2,359 · close the refrigerator door 1,430.
-- Paraphrases coexist: "open the fridge door" 596; 1,237 fridge-related variants.
-
-## E9 — Candidate-builder coverage@K, exact strings (2026-10-17)
-- Data: 32,043 ordered timelines (`data/vocab/pi052_robocasa_sequences.jsonl`; mean 5.48 subtasks/episode, median 5, max 43). Builder: `rojev/supervisor/candidates.py` (now `rojev/legacy_v2/candidates.py`). Script: `playground/candidates/coverage.py`. Run: `results/runs/e9_coverage_20261017-174343/`.
-- Hit = true next subtask (normalised: lowercase, no punctuation/articles, fridge→refrigerator) is in the top-K shortlist.
-
-| Split | Ceiling (target string exists in fitted vocab) | Variant | @1 | @5 | @10 | @20 | @50 |
-|---|---|---|---|---|---|---|---|
-| episodes held out (3,211 eps) | 92.2% | A transitions | .195 | .385 | .461 | .525 | .588 |
-| | | B similar tasks | .163 | .462 | .584 | .682 | .767 |
-| | | A+B | .277 | .525 | .633 | .724 | .799 |
-| | | A+B+C | .284 | .539 | .630 | .699 | .766 |
-| **tasks held out** (3,460 eps) | **74.8%** | A transitions | .078 | .188 | .237 | .286 | .335 |
-| | | B similar tasks | .085 | .253 | .336 | .409 | .492 |
-| | | A+B | .131 | .293 | .372 | .448 | .541 |
-| | | A+B+C | .142 | .315 | .398 | .471 | .545 |
-
-- **Finding:** for new tasks, 25.2% of needed subtasks never occur as exact strings in training. The most frequent: "place wine bottle next to wine glass", "pick up tea strainer", "place yogurt container on plate", "close electric kettle lid". These are new verb–object combinations of familiar templates. Exact-string retrieval cannot reach the 95% target → next: template + slot-filling builder (E9b).
-- Runtime: both splits, 4 variants, ~33k steps in 47 s on the M5 (pure Python).
-
-## E9b — Template + slot-filling candidate builder (2026-10-17; partial, not adopted)
-- Builder: subtask → verb template + object phrases ("place {} next to {}", ("wine bottle", "wine glass")); verbs learned from subtask/instruction starts; template transitions + similar-task templates; fills from instruction, history, scene evidence; candidates weighted by learned P(phrase source | template, slot). Code: `playground/candidates/templates.py`, `coverage_templates.py`. Log: `results/logs/e9b.log`.
-- Stopped after the held-out-tasks split, no-evidence condition (user: filter is an add-on; pipeline first). Episodes split and oracle-evidence rankings not measured.
-
-| Held-out tasks, no scene evidence (21,171 steps) | @1 | @5 | @10 | @20 | @50 | unseen-string @10 |
-|---|---|---|---|---|---|---|
-| E9 exact A+B+C (reproduced exactly) | .142 | .315 | .398 | .471 | .545 | 0 |
-| exact × grounding | .111 | .272 | .339 | .413 | .510 | 0 |
-| templates × grounding | .041 | .193 | .270 | .357 | .448 | .146 |
-| exact + templates, grounded | .159 | .317 | .405 | .497 | .613 | .108 |
-
-- Ceilings (target reachable at all): exact strings 74.8%; templates 63.0%; either **89.4%**. With oracle scene objects + 2 distractor episodes: templates 90.1%, either **96.7%**.
-- Finding: templates raise what is *reachable* (75% → 89–97%), but ranking stays weak (+0.7 pt @10, +6.8 pt @50). Grounding alone hurts (.398 → .339).
-- Conclusion: keep the E9 builder; the shortlist only needs recall, OneJev handles wording/meaning. Revisit after the pipeline works.
-
-## E10 — Live workflow bring-up, arm E, MicrowaveThawingFridge (2026-10-18)
-- Setup: sim on the Mac (M5, 26.9 steps/s), π0.5² on Kaggle T4 (bf16) via Cloudflare tunnel; seed 1000 (same scene); max 2320 steps; arm E (authored sequence, ground-truth switching). Runs: `results/runs/workflow/MicrowaveThawingFridge_E_s1000_20261018-{134816,135317,135758}/`.
-- Per chunk (median): π0.5² inference 2.40 s, network 0.21 s, request 121 KB; ≈ 4.5 min per 2320-step episode.
-
-| Ep | Oracle version | First lift | Outcome | Stage at fault |
-|---|---|---|---|---|
-| 1 | grasp-only "pick up" check, forward-only | 299 (false: steak still on the plate) | step limit, 0/4 subtasks | ground-truth check (premature switch) |
-| 2 | grasp + off plate/fridge, forward-only | 424; held at steps ~600–750, dropped in transit | step limit, 0/4 | executor (drop) + oracle did not go back |
-| 3 | grasp + off plate/fridge, goes back on undone progress | 794 (brief); held again ~2100, dropped | step limit, 0/4 | executor (grasp reliability) |
-
-- Same seed, different trajectories: π0.5²'s flow sampling is stochastic.
-- Findings: (1) "grasped" ≠ "picked up" (contact fires while the object rests on its plate); (2) a forward-only oracle cannot recover drops; (3) with correct subtasks and switching, π0.5² failed to pick up and hold the steak reliably (~2000 of 2320 steps on "pick up").
-- Invalid as arm comparison (n = 3, oracle changed between episodes); bring-up only.
-
-## E11 — MJev-Spatial bf16 trunk vs fp32, arm-D template, T4 (2026-10-18)
-- Setup: 4 RoboCasa pretrain scenes sampled with seed 0 (PrepareCocktailStation, ReheatMeal, BeverageOrganization, OpenElectricKettleLid), 3 cameras each, top-3 filter subtasks per instruction; question "Robot step: '<s>'. Which is true right now?" → done/possible/blocked. Reference fp32 on CPU; test bf16 trunk + fp32 readout on T4. Files: `results/kaggle/armd_20261018-interactive/`.
-- **Top-1 agreement 12/12; max |Δp| 0.029.** GPU memory 9.0 GB.
-- Latency per request (3 questions, 3 images, 1024 image tokens each): **≈ 24.5 s bf16 on T4**, ≈ 65 s fp32 on CPU.
-- Zero-shot answers lean "possible" (0.65–0.94 in 11 of 12 judgements; ground truth not available for these frames).
-- Consequence: precision OK; latency too high for per-chunk evidence (~8 questions) → speed levers next (image tokens, fp16, fewer images).
-
-## E12 — MJev speed levers on T4 (2026-10-18)
-- Same 4 scenes and fp32 reference as E11; `services/mjev/speed_check.py`; file `results/kaggle/armd_20261018-interactive/mjev_speed.json`.
-
-| Variant | ms / request (3 questions) | top-1 vs fp32 | max \|Δp\| |
-|---|---|---|---|
-| bf16, 1024 image tokens, 3 cams | 24,167 | 12/12 | 0.027 |
-| bf16, 512, 3 cams | 24,135 | 12/12 | 0.027 |
-| fp16, 1024, 3 cams | 22,713 | 12/12 | 0.027 |
-| fp16, 512, 3 cams | 21,713 | 12/12 | 0.027 |
-| fp16, 512, 2 cams | 14,473 | 12/12 | 0.219 |
-
-- Image-token cap irrelevant (256² frames are below both caps); fp16 ≈ −10%; 2 cams change answers (Δp 0.22) → keep 3.
-- Hypothesis: transformers' PyTorch fallback for Gated DeltaNet (no `flash-linear-attention`, FLA).
-- **E12b, FLA installed** (`mjev_speed_fla.json`): bf16 24,397 ms (12/12, Δp 0.023), fp16 21,821 ms (12/12, Δp 0.026) → **no speed-up; hypothesis rejected.** `causal_conv1d` still on its fallback. Next: stage profile of one request (`services/mjev/profile_mjev.py`).
-
-## E12d — Where MJev's time goes (2026-10-18)
-- One request (3 images, 3 questions), bf16, T4: total 23.8 s = vision + embeddings 20.7 s (87%) + language trunk 3.0 s + CPU preprocessing 0.02 s + readout 0.002 s.
-- Inside vision: **patch embedding (one Conv3d, kernel = stride = 2×16×16) 20.6 s of 21.2 s**; 24 transformer blocks ≈ 0.8 s. Input 2304 × 1536 (3 images, 16×16 patch grid each), bf16, cuda, sdpa.
-- Cause: a slow Conv3d path on T4, not the model size.
-- **E12e fix candidates** (same 2304 × 1536 input; `mjev_patch_embed.json`): bf16 Conv3d 21,057 ms · fp32 Conv3d 15.9 ms · **bf16 linear 4.8 ms** · fp32 linear 2.8 ms; max |diff| vs current 0.0078–0.0156 (outputs mean 0.31; = bf16 rounding). Kernel = stride → the conv is exactly a matrix multiply over patches. Adopted: `PatchLinear` in `serve_mjev.py` (checked against the conv at load).
-- **E12f end to end with PatchLinear** (`mjev_speed_patched.json`): bf16 **3,484 ms** (12/12, Δp 0.024) · fp16 **1,280 ms** (12/12, Δp 0.031, no NaN) per 3-question request — 7× and 19× faster than E12. Serving default → fp16.
-
-## E13 — OneJev next-subtask decisions on π0.5² demo frames (2026-10-18)
-- Benchmark: 40 frames from 15 held-out tasks (E9 split), 3 cameras each, true next subtask from the demo annotations; options always contain the truth; correct = same meaning (verb phrase + first object). `playground/onejev_bench/`; runs `results/runs/e13_onejev_bench_*`.
-- Baselines: chance 4.8% (21 options) / 11.1% (9); filter top-1 (no images) 25%; truth in raw top-20 shortlist 67.5%.
-
-| Variant | 0.8B | 4B |
+| task | ours | theirs |
 |---|---|---|
-| V0 arm-D prompt (composite image, task, 20 raw options) | 22.5% | 40.0% |
-| T1 V0 + blank image | 17.5% | 42.5% |
-| T2 V0 without task text | 12.5% | — |
-| T3 ≤ 8 distinct meanings | 30.0% | 40.0% |
-| T4 T3 + 3 separate images | 20.0% | — |
+| CloseToasterOvenDoor | 4/5 | 5/5 |
+| TurnOnElectricKettle | 5/5 | 5/5 |
+| PickPlaceCounterToCabinet | 5/5 | 5/5 |
+| RinseSinkBasin | 4/5 | 5/5 |
+| **total** | **18/20** | **20/20** |
 
-- Findings: 4B ≈ 2× 0.8B on the current prompt; distinct options help 0.8B; separate images do not help; instruction copy rate low (0–17.5%).
-- **Correction (2026-10-19; see `docs/features/v2-selector-approaches.md` (removed 2026-10-22; in git history)):** the option shuffle seed included the variant, so real vs blank image saw different option orders (0/40 identical). Exact choice changed on 25/40 (0.8B) and 15/40 (4B); real-correct/blank-wrong 5 vs 3 (0.8B), 3 vs 4 (4B). ⇒ **no demonstrated accuracy benefit from images** — NOT proof that OneJev ignores them. Metric (verb + first object) can also credit a wrong destination. Re-run with fixed ordering, matched counterfactuals and a destination-aware metric.
-- Caveat: n = 40 (≈ ±15 points); widen before paper claims. Labels are π0.5²'s noisy annotations.
-- Consequence (revised): benchmark must be fixed before conclusions; approaches in `docs/features/v2-selector-approaches.md` (removed 2026-10-22; in git history).
+- XR-1 request wall time (Mac ↔ A100): p50 511 ms, p90 731 ms (1,020 requests); server ~40 ms preprocess + 275–290 ms inference, 10.2 GB.
+- Meaning: our runtime reproduces XR-1's skill to within 2 episodes; S1 can be trusted on these tasks, so loop failures point at S2.
+- Source: `results/xr1-parity/20261022-fixed/*/summary.json`, `s1_requests.jsonl`; `docs/features/system1-map.md` §12; `docs/research/2026-10-23-v2-plan.md`; server numbers `docs/features/remote-models.md`.
 
-## Planned (not yet run)
-- π0.5² language following: no standalone diagnostic; per-subtask success vs the chosen subtask text is logged in the supervisor runs (arms A–E).
-- Progress-value question for OneJev (RECAP-style): Score "how far from finishing <subtask>?" trained on π0.5² demo timestamps + our rollouts; compared with MJev zero-shot done/possible/blocked on held-out tasks.
+## E24 — Lockstep vs real time (2026-10-23 / 24)
+- Lockstep smoke (XR-1 + Jev, CloseToasterOvenDoor s107): with only S1 paused, OneJev's 1.1–1.5 s wall became 1.75–1.85 s simulated against a 1.0 s deadline: both answers late, "go on" revised into the task, no success. With S2 paused too: wait at 3.05 s, resume at 6.05 s, success at 10.5 s.
+- Real time (campaign F13, WashLettuce s1657, 60 s budget): real-time factor 0.806, max lag 10.8 s, 651 of 985 ticks starved, 13 S1 timeouts (deadline 0.80 s), 36 of 64 S1 answers accepted, S1 latency estimate 0.9 s vs a 0.8 s chunk; no success. Jev answered in 0.90 / 0.85 s (both right).
+- Meaning: over this link XR-1 cannot supply chunks in real time; lockstep is the only fair simulator comparison until S1 runs next to the robot. Lockstep hides S1 and S2 latency, so it overstates real-world performance.
+- Source: `results/v1-smoke/20261023-toaster{,-2}/summary.json`; `results/campaign/20261024-134629/F13/summary.json`; `docs/decisions.md` 2026-10-23 "Lockstep also stops simulated time while S2 decides".
+
+## E25 — Interactive runs 1–5 and the stop decision (2026-10-23)
+- Setup: a person typing to XR-1 + Jev (OneJev), PickPlaceCounterToCabinet s407, lockstep, ≤ 120 s simulated; frame check valid in all six summaries.
+
+| run | task success | what it exposed |
+|---|---|---|
+| 1 (+ replay) | 17.1 s (replay 19.05 s) | a remark became the task; a repeated question went unsaid (fixed: owner re-says) |
+| 2 | no | goals outside XR-1's repertoire → erratic motion |
+| 3, 4 | 66.3 s; no | hesitation between equivalent acts; "close the cabinet door" (a trained task) not offered as an option; typos sent raw; "make it fast pls" revised into the task |
+| 5 (E26 calibration) | 36.75 s | after success the robot kept executing, was "resumed" into the finished task, the base circled |
+
+- Decision (2026-10-23): no more v1 test rounds; build the capability signal (REVISE chooses among trained task sentences, built 2026-10-24) and a completion signal first.
+- Source: `results/v1-interactive/run*/summary.json`; `docs/features/system2-map.md` §9; `docs/decisions.md` 2026-10-23 "v1 interactive testing stops…".
+
+## E26 — Jev calibration 2026-10-23: fitted, then withdrawn
+- Fit: T = 0.441, abstain margin 0.103 (target accuracy 0.8), 30 labelled decisions (runs 2–4 + run-1 replay); NLL 0.636 → 0.516; 87 % of decisions kept at 81 % accuracy. Target 0.9 would need margin 0.72 (abstain every other turn).
+- Withdrawn 2026-10-24: accuracy measured on the cases the threshold was fitted on; one scene; the act set changed since. Run 5 showed it made wrong reads decisive. Rule now: one calibration per question, shipped only if held-out runs (split by run / scene) reach the target; until then T = 1, margin 0.2 declared.
+- Source: `results/jev-calibration/20261023/calibration.json`; `docs/decisions.md` 2026-10-23 and 2026-10-24 calibration entries.
+
+## E27 — v1 test campaign (2026-10-24)
+- Setup: XR-1 + Jev (act + task questions, T = 1 / margin 0.2) + native planner, lockstep, 4 runs at a time on one A100; tasks and seeds XR-1 solved in its own evaluation. Each line judged by the robot's state when heard: pass · unsafe (wrong answer that moves the robot) · safe miss · unanswered.
+
+| users | lines | pass | unsafe | safe miss | unanswered |
+|---|---|---|---|---|---|
+| scripted (27 runs) | 39 | 26 | 1 | 11 | 1 (F12, by design) |
+| fuzz (8 runs) | 32 | 24 | 0 | 8 | 0 |
+| live (2 sessions) | 11 | 5 | 1 | 5 | 0 |
+| **all** | **82** | **55 (67 %)** | **2** | **24** | **1** |
+
+| intent | lines | right | main miss |
+|---|---|---|---|
+| stop | 9 | 3 | abort vs wait split → ask ×4; "ruko" → revise (unsafe) |
+| resume | 10 | 7 | after success → resumed the finished task (live, unsafe) |
+| new task (listed) | 7 | 3 | act abstained on clear requests; task question tied on shared words (0.05 apart) |
+| unlisted / gibberish / negation / vague | 8 | 8 | — |
+| pause | 5 | 3 (+1 by design) | a question while pausing → ask |
+| status ("are you done?") | 2 | 0 | → abort (stopped a working robot) |
+
+- Findings: (1) an unknown stop word can start a task: two weak guesses compound (act revise p 0.45, then task p 0.69); (2) completion gap reproduced live; (3) abstaining between two holds asks instead of stopping; (4) no act answers a status question; (5) margin 0.2 loses correct revises (0.48 vs 0.34).
+- Worked: never revised on unlisted, gibberish, negated or vague lines; never sent the user's words to XR-1; typos mapped to the trained sentence; decider failure → safety hold.
+- Jev decision time (wall): one question p50 961 / p90 1191 / max 2104 ms (n 37); two questions p50 2121 ms (n 8). Baselines without speech 4/4. Frames valid in every run.
+- Caveats: one run per scripted case; XR-1 sampling differs run to run, so task success is not comparable across cases; late-answer path not triggered.
+- Source: `results/campaign/20261024-134629/analysis.md`, `report.md`; `docs/features/campaign.md`.
+
+## E28 — Effect-based hesitation, offline replay of E27 (2026-10-24)
+- Change: act probabilities summed per effect (move · hold · switch); abstention compares the top two effects, not labels.
+- Trigger cases: "stop" split abort 0.49 / wait 0.41 → asked although both hold; "ruko" revise 0.45 vs hold 0.38.
+- Replay of all 82 recorded lines: the unsafe "ruko" now asks; two stops now stop; one remark keeps holding; regression: one vague line while already held now stops instead of waiting.
+- Source: `docs/decisions.md` 2026-10-24 "Jev hesitates between effects…".
+
+## E29 — OneJev decision latency and the kept connection (2026-10-24)
+- Setup: Mac in India → A100 over the SSH tunnel; 3 cameras, 256 × 256, JPEG q95 (~26 kB each).
+
+| part | ms |
+|---|---|
+| qev server: render + one forward pass (~74 tokens, ~20 ms per image) | 75–140 |
+| one round trip (kept connection) | ~270–345 |
+| image upload (3 images vs none) | ~215 |
+| extra round trip of a new connection per request | ~650 |
+
+- `KeptClient` (one kept HTTP connection): median 1269 → 604 ms per decision, probabilities identical (6 recorded cases).
+- Rejected: JPEG q85 / q75, WebP q90 / q80 changed the top option in 1 / 6 cases; only WebP q80 clearly faster (428 vs 533 ms).
+- Source: `docs/features/remote-models.md` "OneJev decision latency"; `docs/decisions.md` 2026-10-24 "OneJev over one kept connection".
+
+## E30 — Live rerun 2026-10-24 (effect hesitation, kept connection, late answers)
+- Setup: XR-1 + Jev/OneJev, lockstep, the four cases the hesitation change affects (H05, F06, F08, F10) four at a time;
+  F16 alone in real time with the interaction deadline forced to 0.3 s. `results/campaign/20261024-rerun/report.md`.
+
+| Case | Before (E27) | After |
+|---|---|---|
+| F06 stop / go on ×2 | 2 / 4 (stops asked) | **4 / 4** |
+| F10 "ruko" | revise to the faucet task (unsafe) | **ask** |
+| H05 "stop" | ask | wait (hold 0.94; robot holds, no question; judged a miss: abort expected) |
+| F08 after success: stop, go on | ask, ask | wait, **resume (unsafe: completion gap, open)** |
+| F16 real time, 0.3 s deadline | — | both changes timed out → owner hold → **late answers applied** at +0.7 s / +0.9 s, not re-decided |
+- Jev in the loop with `KeptClient`: 548–1232 ms (median ~930), not the 604 ms of E29: the server drops a connection
+  idle for ~5 s (health 263–302 ms after ≤ 4 s idle, 665–960 ms after 6–10 s), and decisions are seconds apart.
+- Meaning: effect hesitation removes the unsafe "ruko" and the stop/ask splits live; the late-answer rule works;
+  the speed gain needs a longer server keep-alive (open).
+
+## Superseded findings still worth knowing (one line each)
+- E2/E3: an instruction in the prompt raises the model's *visibility* answers; evidence questions must not share the instruction's state (now: `task` and `user_just_said` kept apart).
+- E7: three LeRobot eval mismatches (camera mapping, scene split, task names vs sentences) silently invalidate VLA runs; eval settings must come from the checkpoint.
+- E12: MJev's latency was one Conv3d on T4 (20.6 of 23.8 s), exact as a matrix multiply (fp16 1,280 ms per 3-question request).
+- E13: the image ablation shuffled options per variant, so it shows no image benefit, not that OneJev ignores images.

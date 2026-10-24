@@ -3,9 +3,10 @@ for commands without a step, failures counted; `MJevVerifier` builds one MJev re
 import time
 
 import numpy as np
+import pytest
 
 from rojev.protocol import AcceptedGoal, Capture, Observation, Operation, OpKind, StepEvent, Transition
-from rojev.system2.verify import STATES, MJevVerifier, StepWatcher, question
+from rojev.system2.verify import STATES, MJevVerifier, StepWatcher, placement, question
 
 OBS = Observation({"left": np.zeros((4, 4, 3), np.uint8)}, np.zeros(1, np.float32), "put the cube in A")
 PICK = Operation(OpKind.SWITCH_TO, subtask="pick the cube")
@@ -102,3 +103,55 @@ def test_the_watcher_thread_confirms_claims_between_periodic_checks():
         time.sleep(0.01)
     w.stop()
     assert len(posted) == 1 and posted[0].checked
+
+
+def test_onejev_answers_the_same_question_with_neutral_option_ids(monkeypatch):
+    from types import SimpleNamespace
+
+    from rojev.system2.verify import OneJevVerifier
+    from rojev.system2.verify import checks as checks_module
+
+    asked = []
+
+    def fake_system_one(client, image, state, questions, **kw):
+        asked.append(questions["q0"])
+        return SimpleNamespace(answers={k: SimpleNamespace(probabilities={"o1": 0.7, "o2": 0.2, "o3": 0.1})
+                                        for k in questions})
+
+    monkeypatch.setattr(checks_module.onejev, "system_one", fake_system_one)
+    out = OneJevVerifier(None).check([OBS.images["left"]], ["open the door"])
+    assert out == {"open the door": {"done": 0.7, "possible": 0.2, "blocked": 0.1}}
+    assert asked[0].instructions == question("open the door") and set(asked[0].criteria) == {"o1", "o2", "o3"}
+
+
+def test_postcondition_templates_turn_steps_into_concrete_yes_no_facts():
+    from rojev.system2.verify import fact
+
+    assert fact("place the steak in the microwave") == "Is the steak inside the microwave?"
+    assert fact("put steak on the plate") == "Is the steak on the plate?"
+    assert fact("close the freezer door") == "Is the freezer door closed?"
+    assert fact("pick up the steak") == "Is the robot holding the steak?"
+    assert fact("go to refrigerator") is None
+
+
+def test_mjev_in_postcondition_mode_asks_the_fact_and_cannot_confirm_an_untemplated_step():
+    class YesNoMJev:
+        def __init__(self):
+            self.asked = []
+
+        def ask(self, images, questions):
+            self.asked.append(questions)
+            return {"answers": {q["id"]: {"probabilities": {"yes": 0.8, "no": 0.2}} for q in questions},
+                    "timings_ms": {"mjev": 5.0}}
+
+    mjev = YesNoMJev()
+    out = MJevVerifier(mjev, postconditions=True).check([OBS.images["left"]], ["close the door", "go to the fridge"])
+    assert out["close the door"] == {"done": 0.8, "possible": pytest.approx(0.2), "blocked": 0.0}
+    assert out["go to the fridge"]["done"] == 0.0
+    assert [q["question"] for q in mjev.asked[0]] == ["Is the door closed?"]
+
+
+def test_placement_names_the_object_relation_and_destination_of_placing_steps_only():
+    assert placement("place the chicken drumstick in the freezer") == ("chicken drumstick", "inside", "freezer")
+    assert placement("put steak onto the plate.") == ("steak", "on", "plate")
+    assert placement("close the microwave door") is None

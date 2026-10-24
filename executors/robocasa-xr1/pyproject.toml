@@ -1,0 +1,61 @@
+# Executor environment for Xiaomi-Robotics-1 (RoboCasa365 checkpoint) as a remote S1 service. Pinned to the versions
+# its deployment guide names (python 3.12, torch 2.8.0 cu128, transformers 4.57.1, flash-attn 2.8.3); the RoboCasa
+# simulator side runs in executors/robocasa-pi052 (`realtime.py --s1 xr1`).
+[project]
+name = "rojev-executor-robocasa-xr1"
+version = "0.0.1"
+requires-python = "==3.12.*"
+dependencies = [
+    "flash-attn==2.8.3 ; sys_platform == 'linux'",
+    "numpy",
+    "pillow",
+    "rojev",
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "transformers==4.57.1",
+]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+rojev = { path = "../../", editable = true }
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+
+# rojev's S1 side (protocol, robot, control, system1, transport) is all this service imports; its full dependency list
+# also has the S2 model clients (qev needs transformers >= 5, against this checkpoint's 4.57.1) and tracing, which
+# this environment never imports. Same route as executors/robocasa-pi052's robocasa override.
+[[tool.uv.dependency-metadata]]
+name = "rojev"
+version = "0.0.1"
+requires-dist = ["aioquic>=1.7.0", "mujoco>=3.1.3,<4", "numpy", "pillow", "pyyaml"]
+
+# flash-attn from its PyPI sdist, built against this env's torch with the CUDA compile skipped: its setup.py then
+# downloads the matching prebuilt wheel (torch 2.8 / cu12 / cxx11abi / cp312) and renames it to its own version, so
+# file name and metadata agree (the prebuilt wheel used directly names a local version its metadata lacks, and
+# `uv sync --frozen --check` never passes). No nvcc needed. Metadata declared here so locking on macOS builds nothing.
+# If the download ever fails, setup.py silently builds a kernel-less wheel: gpu/hook.sh check_remote imports the
+# kernels (flash_attn_2_cuda) to catch that.
+[tool.uv.extra-build-dependencies]
+flash-attn = [{ requirement = "torch", match-runtime = true }, "packaging", "psutil", "ninja", "wheel"]
+
+[tool.uv.extra-build-variables]
+flash-attn = { FLASH_ATTENTION_SKIP_CUDA_BUILD = "TRUE" }
+
+[[tool.uv.dependency-metadata]]
+name = "flash-attn"
+version = "2.8.3"
+requires-dist = ["torch", "einops"]

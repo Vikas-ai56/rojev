@@ -14,6 +14,7 @@ dependencies = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["slow: builds a RoboCasa kitchen (tens of seconds)"]
 
 [tool.uv]
 package = false

@@ -392,3 +392,14 @@ def test_an_out_of_range_incoming_action_is_still_reported():
     rt.submit(chunk(1, 0.0, [[1.5, 0, OPEN]]), 0.0)
     r = rt.tick(0.0)
     assert r.action[0] == 1.0 and r.violations and "vx" in r.violations[0]
+
+
+def test_queued_from_returns_the_commands_actions_due_from_a_time_as_the_chunk_gave_them():
+    rt = runtime()
+    rt.accept(goal(1), 0.0)
+    acts = [[0.1 * k, 0.0, OPEN] for k in range(1, 9)]
+    rt.submit(chunk(1, 0.0, acts), 0.0)
+    run(rt, 0.0, 3)
+    left = rt.queued_from(1, 3 * DT)
+    assert np.allclose(left, acts[3:]) and rt.queued_from(2, 0.0) is None
+    assert rt.queued_from(1, 100.0) is None

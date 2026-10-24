@@ -32,6 +32,7 @@
 #   - The public weights (lerobot/pi052_robocasa, ~6.5 GB, and lerobot/fast-action-tokenizer) are pre-downloaded on
 #     the box so the first service start does not spend minutes downloading.
 #   - serve.py exits after IDLE_MIN minutes without requests; re-running gpu_setup.sh starts it again.
+#   - PI052_SERVE_FLAGS (unit environment) passes extra serve.py options, e.g. --planner-memory for an A/B run.
 
 set -euo pipefail
 
@@ -100,7 +101,7 @@ prepare_remote() {
 
 serve() {
   exec uv run --frozen --no-sync python serve.py --tokenizer-dir "$HOME/$TOKENIZER_BOX_DIR" \
-    --port "$REMOTE_PORT" --idle-min "$IDLE_MIN"
+    --port "$REMOTE_PORT" --idle-min "$IDLE_MIN" ${PI052_SERVE_FLAGS:-}
 }
 
 case "${1:-}" in

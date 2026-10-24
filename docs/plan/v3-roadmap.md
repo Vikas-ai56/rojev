@@ -6,8 +6,8 @@ Status: **testing without training** (decision 2026-10-20). Source plan: `docs/p
 
 ## 1. Architecture in one look
 - **S1** (fast): sees cameras, moves the arm. "How do I do the current step?"
-- **Jev(S2)** (slow) = OneJev (typed choices) + MJev (spatial evidence: which object, where, held, done). "Is the goal still
-  right? What next? Do I need to look again or ask?"
+- **Jev(S2)** (slow) = OneJev (typed choices). "Is the goal still right? What next? Do I need to ask?" MJev (spatial
+  evidence) is out of the v1 loop since 2026-10-22 (failed the done-check gate).
 - **State owner**: the only writer of intent. Jev *proposes*; owner *accepts*; command is *active* only after the
   executor's ACK.
 - **Executor + local guard**: timing, chunk validity, limits, stop. Works even if everything above hangs.
@@ -36,7 +36,7 @@ Status: **testing without training** (decision 2026-10-20). Source plan: `docs/p
 ## 3. Test setups
 | Setup | What it is | Tests |
 |---|---|---|
-| **RoboCasa (v1)** | full S1/S2 loop from open-source frozen parts: π0.5² (S1) + OneJev 4B + MJev + SAM 2 tracker + our runtime, real time | everything in v1 (T1–T8) |
+| **RoboCasa (v1)** | full S1/S2 loop from open-source frozen parts: XR-1 (S1; π0.5² earlier) + OneJev 4B + our runtime; lockstep evaluation, real time measured | everything in v1 (T1–T8) |
 | **Offline** | saved frames/decisions | Jev accuracy, candidate recall (T3, T4, T9) |
 | **SO-101 sim (later)** | needs a trained S1 (S1-A); backend + realtime clock ready | after training |
 Caveat: π0.5² is Panda/RoboCasa → model results may not transfer to SO-101.
@@ -104,6 +104,18 @@ Caveat: π0.5² is Panda/RoboCasa → model results may not transfer to SO-101.
 
 ### v2 — Helix-type route B (training; after v1 results)
 - [ ] Small fast S1 (visual encoder + proprioception + projected Jev latent + action head) or π0.5² + trained latent path; compare against v1 route A on T8 (plan p. 5, 9)
+- [ ] Task choice beyond the given list (v1 limit, `task_choice.CanonicalTask`, decision 2026-10-24): REVISE picks only
+      from the trained sentences listed for the run. v2: a new task outside the list → a clean rewrite in S1's
+      trained style (new compositions), confirmed with the user or gated by the feasibility head.
+- [ ] Task feasibility in the current state (v1 limit): a listed task is chosen even if it cannot run now (door
+      already closed, object absent). v2: the critic's Q(s, ℓ) head filters / reranks the list (plan in
+      `docs/research/2026-10-23-v2-plan.md` §3–5).
+- [ ] Status questions ("are you done?", "what are you doing?"): no act answers them in v1 (accepted 2026-10-24); needs
+      an answer act backed by the completion / progress signal.
+- [ ] Language: English only in v1 (accepted 2026-10-24). An utterance Jev cannot read should be asked again, never a
+      new task; v1 handles this only probabilistically (effect hesitation turned "ruko" into a question).
+- [ ] Task list per scene (v1: hand-written `--skills`): shortlist from the 4,740 trained sentences (RoboCasa365
+      human300 `meta/tasks.parquet`) by the scene's objects and fixtures, then Q(s, ℓ).
 
 ### P5 — Speculation (after T8; no training)
 - [ ] T10 Outatime-style preparation: Jev's next decision before the current step ends + π0.5² first chunks for the

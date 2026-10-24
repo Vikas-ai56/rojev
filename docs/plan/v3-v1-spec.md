@@ -207,8 +207,8 @@ and a live flag in `realtime.py`.
    acknowledge) → Jev arm live
 7. π0.5² service: RTC port, FP8, batched K samples → π0.5² live (needs GPU)
 8. T3–T9 runs incl. the revision benchmark → `docs/paper/experiments.md`
-Parameters (`review_s`, `stop_s`, `refill_s`, K, thresholds, `margin`, budgets, timeouts) in `config/runtime.yaml`,
-defaults in `docs/features/v2-levers.md`.
+Parameters (`review_s`, `stop_s`, `refill_s`, K, thresholds, `margin`, budgets, timeouts): `realtime.py` flags and
+constructor defaults, listed with their values in `docs/features/levers.md` (no separate config file).
 
 ## 13. Not in v1
 **v1 = plan Route A** (p. 5): π0.5² picks the next step and moves; Jev only answers changes (continue / revise / wait / ask / abort) and ambiguous checks; MJev checks and grounds. **v2 = Route B, Helix-type:** small fast S1 conditioned on a learned Jev latent (training); promoted only if it beats v1 (plan's rule).

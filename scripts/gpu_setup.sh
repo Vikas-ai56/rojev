@@ -22,6 +22,7 @@
 #   ssh, gpu            reachable with BatchMode (accepts a new host key); an NVIDIA display/3D controller on PCI
 #   local-assets:<n>    hook check_local / prepare_local on this Mac (first, so a missing login fails early)
 #   driver              nvidia-smi works; else install the -server driver branch + utils matching the built module
+#   gpu-mode            MIG partitioning off (MIG on with no instances hides the GPU from CUDA); refused while GPU processes run
 #   packages, uv        build-essential git rsync curl (evdev builds from source); uv >= this Mac's version
 #   code:core           rojev/ pyproject.toml uv.lock README.md (only with an executor: its env depends on the core)
 #   code:shared         config/ (pins) and scripts/ (hf_pins.py)
@@ -31,7 +32,8 @@
 #   assets:<n>          hook assets copied to the box, compared by size + mtime: they are symlinks into the HF cache,
 #                       and macOS openrsync with -c -L checksums the link rather than its target (every file reads as
 #                       changed, exit 23)
-#   prepare-remote:<n>  hook check_remote / prepare_remote on the box (weights pre-download)
+#   prepare-remote:<n>  hook check_remote / prepare_remote on the box (weights pre-download); env, assets and
+#                       prepare-remote run for every component at once, one background job each (logs printed after)
 #   torch:<n>           the component env's torch sees CUDA
 #   service-json        ~/.config/rojev/services/<host>.json {"<key>": {"url", "token"?}}, mode 600; tokens made here;
 #                       other entries in the file are kept
@@ -82,6 +84,11 @@ PENDING=0
 STEP_DETAIL=
 STEP_ITEMS=
 PROJECTED_FREE_MIB=
+JOB_DIR=
+JOB_NAMES=()
+JOB_PIDS=()
+MARKERS=
+SERVICE_WAIT=()
 CONTROL_DIR=
 SSH_OPTS=()
 RSYNC_SSH=
@@ -292,6 +299,19 @@ step_driver() {
   fi
 }
 
+whole_gpu_ready() {
+  box whole_gpu_ready
+}
+
+whole_gpu_apply() {
+  box whole_gpu_apply || die "could not turn MIG off; stop the GPU processes or reset the GPU, then re-run"
+}
+
+step_whole_gpu() {
+  run_step all gpu-mode "turn MIG partitioning off: the services expect the whole GPU (MIG on with no instances hides it)" \
+    whole_gpu_ready whole_gpu_apply
+}
+
 packages_ready() {
   box packages_ready
 }
@@ -461,17 +481,109 @@ torch_cuda() {
   box torch_cuda "$1"
 }
 
-step_components_env() {
-  local i name component
-  for i in "${!COMPONENTS[@]}"; do
-    name=${NAMES[$i]}
-    component=${COMPONENTS[$i]}
-    run_step "$name" "env:$name" "uv sync --frozen in $component" env_ready env_install "$component"
-    run_step "$name" "assets:$name" "copy $name's assets to the box" assets_ready assets_install "$component"
-    run_step "$name" "prepare-remote:$name" "run $name's box-side preparation" remote_prepared remote_prepare \
-      "$component"
-    run_verify "torch:$name" torch_cuda "$component"
+jobs_begin() {
+  JOB_DIR=$(mktemp -d)
+  JOB_NAMES=()
+  JOB_PIDS=()
+}
+
+spawn() {
+  local name=$1
+  shift
+  (
+    MARK_FILE="$JOB_DIR/$name.changed"
+    PENDING_FILE="$JOB_DIR/$name.pending"
+    mark_changed() { printf '%s\n' "$1" >>"$MARK_FILE"; }
+    "$@"
+    if (( PENDING )); then
+      : >"$PENDING_FILE"
+    fi
+  ) >"$JOB_DIR/$name.log" 2>&1 &
+  JOB_NAMES[${#JOB_NAMES[@]}]=$name
+  JOB_PIDS[${#JOB_PIDS[@]}]=$!
+  log "$name" "started"
+}
+
+join_all() {
+  local k name failed=0 scope
+  for (( k = 0; k < ${#JOB_PIDS[@]}; k++ )); do
+    name=${JOB_NAMES[$k]}
+    wait "${JOB_PIDS[$k]}" || failed=1
+    sed 's/^/  /' "$JOB_DIR/$name.log"
+    if [[ -f "$JOB_DIR/$name.changed" ]]; then
+      while read -r scope; do
+        mark_changed "$scope"
+      done <"$JOB_DIR/$name.changed"
+    fi
+    [[ ! -f "$JOB_DIR/$name.pending" ]] || PENDING=1
   done
+  rm -rf "$JOB_DIR"
+  (( failed == 0 )) || die "$1 (log above)"
+}
+
+signal() {
+  local marker=$1
+  shift
+  if ( "$@" ); then
+    : >"$MARKERS/$marker.ok"
+  else
+    : >"$MARKERS/$marker.failed"
+    return 1
+  fi
+}
+
+await() {
+  while [[ ! -e "$MARKERS/$1.ok" && ! -e "$MARKERS/$1.failed" ]]; do
+    sleep 2
+  done
+  [[ -e "$MARKERS/$1.ok" ]] || die "waited for $1, which failed (its log is printed after the join)"
+}
+
+local_assets() {
+  run_step local "local-assets:${NAMES[$1]}" "prepare ${NAMES[$1]}'s assets on this Mac" local_assets_ready \
+    local_assets_prepare "${COMPONENTS[$1]}"
+}
+
+driver_branch() {
+  step_driver
+  step_whole_gpu
+}
+
+component_env() {
+  local name=${NAMES[$1]} component=${COMPONENTS[$1]}
+  run_step "$name" "env:$name" "uv sync --frozen in $component" env_ready env_install "$component"
+  await "local-assets.$name"
+  run_step "$name" "assets:$name" "copy $name's assets to the box" assets_ready assets_install "$component"
+  await driver
+  run_step "$name" "prepare-remote:$name" "run $name's box-side preparation" remote_prepared remote_prepare \
+    "$component"
+  run_verify "torch:$name" torch_cuda "$component"
+}
+
+code_branch() {
+  local i
+  run_step all uv "install uv $(uv_version_here)" uv_ready uv_install
+  step_code
+  step_vendors
+  jobs_begin
+  for i in "${!COMPONENTS[@]}"; do
+    spawn "env:${NAMES[$i]}" component_env "$i"
+  done
+  join_all "a component's env, assets or box-side preparation failed"
+}
+
+step_box() {
+  local i
+  run_step all packages "apt-get install build tools" packages_ready packages_install
+  MARKERS=$(mktemp -d)
+  jobs_begin
+  for i in "${!COMPONENTS[@]}"; do
+    spawn "local-assets:${NAMES[$i]}" signal "local-assets.${NAMES[$i]}" local_assets "$i"
+  done
+  spawn driver signal driver driver_branch
+  spawn code code_branch
+  join_all "box setup failed"
+  rm -rf "$MARKERS"
 }
 
 json_get() {
@@ -591,16 +703,10 @@ gpu_memory_report() {
   printf '%s needs %s MiB GPU memory, %s MiB free' "$name" "$need" "$free"
 }
 
-require_gpu_memory() {
-  local name=$1 need=$2 free
-  free=$(box gpu_free_mib)
-  (( free >= need )) ||
-    die "$(gpu_memory_report "rojev-$name" "$need" "$free"); GPU processes: $(box gpu_apps). Free memory or skip it."
-}
-
 step_service() {
   local i=$1 state action holder
   local name=${NAMES[$i]} component=${COMPONENTS[$i]} port=${REMOTE_PORTS[$i]} auth=${AUTHS[$i]} need=${GPU_MEMS[$i]}
+  SERVICE_WAIT[i]=0
   state=$(box service_state "$name" "$port")
   case "$state" in
     running)
@@ -639,11 +745,44 @@ step_service() {
     box service_stop "$name"
   fi
   if [[ "$action" != wait ]]; then
-    require_gpu_memory "$name" "$need"
+    [[ -n "$PROJECTED_FREE_MIB" ]] || PROJECTED_FREE_MIB=$(box gpu_free_mib)
+    (( PROJECTED_FREE_MIB >= need )) ||
+      die "$(gpu_memory_report "rojev-$name" "$need" "$PROJECTED_FREE_MIB") after the services started before it; GPU processes: $(box gpu_apps). Free memory or skip it."
+    PROJECTED_FREE_MIB=$(( PROJECTED_FREE_MIB - need ))
     log "service:$name" "starting unit rojev-$name"
     box service_start "$name" "$component" "$auth"
   fi
-  log "service:$name" "ok: $(box service_wait "$name" "$port" "$auth")"
+  SERVICE_WAIT[i]=1
+}
+
+service_wait() {
+  log "service:${NAMES[$1]}" "ok: $(box service_wait "${NAMES[$1]}" "${REMOTE_PORTS[$1]}" "${AUTHS[$1]}")"
+}
+
+step_services() {
+  local i
+  for i in "${!COMPONENTS[@]}"; do
+    step_service "$i"
+  done
+  if (( DRY_RUN )); then
+    return 0
+  fi
+  jobs_begin
+  for i in "${!COMPONENTS[@]}"; do
+    if (( SERVICE_WAIT[i] )); then
+      spawn "health:${NAMES[$i]}" service_wait "$i"
+    fi
+  done
+  join_all "a service did not become healthy"
+}
+
+step_tunnels() {
+  local i
+  jobs_begin
+  for i in "${!COMPONENTS[@]}"; do
+    spawn "tunnel:${KEYS[$i]}" step_tunnel "$i"
+  done
+  join_all "a tunnel failed"
 }
 
 tunnel_command() {
@@ -706,7 +845,6 @@ print_summary() {
 }
 
 main() {
-  local i
   parse_args "$@"
   require_mac_tools
   load_components
@@ -715,23 +853,12 @@ main() {
   if (( TUNNEL_ONLY )); then
     [[ -f "$SERVICE_JSON" ]] || die "no $SERVICE_JSON yet: run without --tunnel first"
     pick_local_ports
-    for i in "${!COMPONENTS[@]}"; do
-      step_tunnel "$i"
-    done
+    step_tunnels
     print_summary
     return
   fi
   step_gpu
-  for i in "${!COMPONENTS[@]}"; do
-    run_step local "local-assets:${NAMES[$i]}" "prepare ${NAMES[$i]}'s assets on this Mac" local_assets_ready \
-      local_assets_prepare "${COMPONENTS[$i]}"
-  done
-  step_driver
-  run_step all packages "apt-get install build tools" packages_ready packages_install
-  run_step all uv "install uv $(uv_version_here)" uv_ready uv_install
-  step_code
-  step_vendors
-  step_components_env
+  step_box
   if (( SKIP_SERVE )); then
     log summary "--skip-serve: box is set up; services and tunnels not touched"
     return
@@ -740,12 +867,8 @@ main() {
   run_step local service-json "write the service JSON entries ($(printf '%s ' "${KEYS[@]}"))" service_json_ready \
     service_json_write
   step_tokens
-  for i in "${!COMPONENTS[@]}"; do
-    step_service "$i"
-  done
-  for i in "${!COMPONENTS[@]}"; do
-    step_tunnel "$i"
-  done
+  step_services
+  step_tunnels
   print_summary
 }
 

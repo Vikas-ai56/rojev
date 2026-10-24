@@ -1,6 +1,18 @@
-"""OneJev System One calls, each recorded as an OpenInference LLM span holding the exact image the model received."""
+"""OneJev System One calls, each recorded as an OpenInference LLM span holding the exact image the model received.
+
+`KeptClient` is qev's `Client` over one kept HTTP connection. qev's own client opens a connection per request
+(`urllib.request.urlopen`); over the SSH tunnel to a remote box every new connection costs an extra wide-area round
+trip (measured 2026-10-24, three 256 x 256 cameras: median 1269 ms per decision with a new connection, 604 ms kept;
+server compute 75-140 ms). It overrides the client's two transport methods (`_post`, `_get`, qev pinned in uv.lock);
+requests are serialised on one connection, and a broken connection is reopened and the request sent once more
+(inference is read-only, so a repeat is safe).
+"""
+import http.client
 import json
+import threading
+import urllib.error
 from typing import Any
+from urllib.parse import urlparse
 
 import numpy as np
 from opentelemetry import trace
@@ -14,6 +26,67 @@ _MSG = "llm.input_messages.0.message"
 
 
 Img = np.ndarray | Image.Image
+
+
+class KeptClient(Client):
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: float = 120.0):
+        super().__init__(base_url, api_key=api_key, timeout=timeout)
+        url = urlparse(self.base_url)
+        self._https, self._host, self._port, self._prefix = url.scheme == "https", url.hostname, url.port, url.path
+        self._conn: http.client.HTTPConnection | None = None
+        self._lock = threading.Lock()
+
+    def _connection(self) -> http.client.HTTPConnection:
+        if self._conn is None:
+            kind = http.client.HTTPSConnection if self._https else http.client.HTTPConnection
+            self._conn = kind(self._host, self._port, timeout=self.timeout)
+        return self._conn
+
+    def _close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def _request(self, method: str, path: str, body: bytes | None) -> tuple[bytes, dict[str, str]]:
+        headers = {"Authorization": f"Bearer {self.api_key}", "User-Agent": "qev-client"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        with self._lock:
+            for attempt in range(2):
+                try:
+                    conn = self._connection()
+                    conn.request(method, self._prefix + path, body=body, headers=headers)
+                    resp = conn.getresponse()
+                    payload, resp_headers = resp.read(), dict(resp.getheaders())
+                except (http.client.HTTPException, OSError):
+                    self._close()
+                    if attempt:
+                        raise
+                    continue
+                if resp.status >= 400:
+                    raise urllib.error.HTTPError(self.base_url + path, resp.status, payload.decode(errors="replace"),
+                                                 resp.msg, None)
+                return payload, resp_headers
+        raise RuntimeError("unreachable")
+
+    def _post(self, path: str, body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+        payload, headers = self._request("POST", path, json.dumps(body).encode())
+        return json.loads(payload), headers
+
+    def _get(self, path: str) -> dict[str, Any]:
+        return json.loads(self._request("GET", path, None)[0])
+
+    def close(self) -> None:
+        with self._lock:
+            self._close()
+
+
+def camera_views(names: list[str] | None, count: int) -> str:
+    """How the state names the images of one moment: each camera is its own image (`<image:k>`), never views glued
+    side by side, so the model sees where one view ends and the next begins; all are taken at the same time."""
+    labels = names if names is not None else [f"camera {k}" for k in range(1, count + 1)]
+    views = "; ".join(f"<image:{k}> = {label}" for k, label in enumerate(labels, start=1))
+    return f"{views} (separate views of the same moment)"
 
 
 def system_one(client: Client, image: Img | list[Img], state: dict[str, Any], questions: dict[str, Any],

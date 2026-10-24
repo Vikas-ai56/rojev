@@ -59,7 +59,7 @@ assets() {
 }
 
 client_hint() {
-  echo "OneJev (qev, no auth, only through the tunnel) at $2: QEV_BASE_URL=$2, or workflow.py --onejev $2"
+  echo "OneJev (qev, no auth, only through the tunnel) at $2: realtime.py reads its 'onejev' entry from $1"
 }
 
 check_remote() {

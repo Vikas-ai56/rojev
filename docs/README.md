@@ -10,15 +10,31 @@ Where each kind of document lives. Code map: [`CODEBASE.md`](CODEBASE.md).
 | [`decisions.md`](decisions.md) | Every durable decision, newest last (decision · why · rejected · risks) |
 | [`CODEBASE.md`](CODEBASE.md) | How to read the code |
 
+## Model bring-up: `model-bringup/` (read before plugging in any new or retrained model)
+| Doc | What it is |
+|---|---|
+| [`README.md`](model-bringup/README.md) | Why it exists, rules of thumb |
+| [`checklist.md`](model-bringup/checklist.md) | Ordered gates: claims and licence, serving, input / output contracts, env parity, observation integrity, runtime, reproduce-then-measure, own trained models |
+| [`search-directions.md`](model-bringup/search-directions.md) | Where to look and how to bisect when a model underperforms |
+
 ## Research briefs: `research/` (findings, not decisions; adopted parts move to the roadmap / decisions)
 | Doc | What it is |
 |---|---|
+| [`2026-10-23-v2-plan.md`](research/2026-10-23-v2-plan.md) | v2 for new compositions: XR-1 whole-task + trained critic (done / progress, capability, next-step feasibility) + recovery; week-1 gates, 4-week recipe, π0.7 / Eka VFA / JEPA verified, flip triggers |
+| [`2026-10-23-discarded-actions-as-prefix.md`](research/2026-10-23-discarded-actions-as-prefix.md) | VLA-Rolling (arXiv 2610.25043): reuse the discarded chunk tail as the next chunk's denoising start; fit for XR-1 and what to test |
+| [`2026-10-22-s1-candidates.md`](research/2026-10-22-s1-candidates.md) | S1 candidates with verified results (π0.5, Xiaomi-Robotics-0/1, MolmoAct2, GR00T): which S1 for RoboCasa, LIBERO, real SO-101 / Franka; licences; flip triggers |
+| [`2026-10-22-xr1-integration.md`](research/2026-10-22-xr1-integration.md) | Xiaomi-Robotics-1 RoboCasa365 checkpoint behind our runtime: exact inputs / outputs, env parity, pickle-server risk, history placement, plan |
+| [`2026-10-22-mjev-keep-or-drop.md`](research/2026-10-22-mjev-keep-or-drop.md) | MJev-Spatial: what it is, what it has done here, literature on VLM step verification / grounding / tracking, options, A/B and flip triggers (verdict: drop from the v1 loop unless it wins grounding) |
+| [`2026-10-22-trackers-vs-sam2.md`](research/2026-10-22-trackers-vs-sam2.md) | Trackers vs SAM 2.1 Tiny (EdgeTAM, EfficientTAM, SAM 3.1, …): accuracy, speed, licence, Mac; recommendation and acceptance gates |
+| [`2026-10-22-native-runtime.md`](research/2026-10-22-native-runtime.md) | Python vs C++/Rust: measured per-tick cost and jitter; GC and GIL are the stalls; no rewrite for v1 |
 | [`2026-10-20-jev-role-and-novelty.md`](research/2026-10-20-jev-role-and-novelty.md) | Jev's limits and better roles, MJev's role, prior art, novelty gap, Turing and human timing, full-duplex models, design implications, revision benchmark |
 
 ## Plans: `plan/`
 | Doc | What it is |
 |---|---|
 | [`jev_helix_implementation_plan.pdf`](plan/jev_helix_implementation_plan.pdf) | Source plan for v3 (pp.1–18 proposal, pp.19+ reference) |
+| [`../hardware-port.md`](hardware-port.md) | Moving to a real robot: lockstep is sim-only (kept for now), delay levers in order, what the simulator hides |
+| [`../how-to-train.md`](how-to-train.md) | Training directions (recovery, handoffs, memory, delay, interface gradients) + 2026-10-23 addendum: measured delay budget, completion target and loop guard, memory, data integrity, S1 base, corrections |
 | [`visual_skill_agent_implementation_plan.md`](plan/visual_skill_agent_implementation_plan.md) (+ pdf) | v1 plan (SO-101 skill agent), superseded |
 | [`motion_planner.md`](plan/motion_planner.md) | Notes on a spatial-reasoning / motion layer (v1 era) |
 | [`../onejev_learned_policy_plan_v2.md`](onejev_learned_policy_plan_v2.md) | v2 plan (OneJev over a frozen RoboCasa policy), superseded by v3 |
@@ -29,19 +45,26 @@ Where each kind of document lives. Code map: [`CODEBASE.md`](CODEBASE.md).
 | [`v3-runtime.md`](features/v3-runtime.md) | v3 runtime core: messages, execution runtime (leases, review, blending, holds), guard, control loop, robot plug-ins, state owner (two lanes, keyframes), S2 worker, baseline deciders, v1 role split; runtime live results incl. π0.5² |
 | [`s1-supply-and-commitment.md`](features/s1-supply-and-commitment.md) | S1 runner: chunk supply, measured latency, floor and lead time, commitment policies (fixed / phase / consensus) |
 | [`execution-monitor.md`](features/execution-monitor.md) | Kinematic execution monitor: effect models, conformal calibration, `Deviation` → owner + refill, results and limits |
-| [`remote-models.md`](features/remote-models.md) | Remote models: transport (HTTP/1.1 keep-alive, HTTP/3), frame codecs, π0.5² / OneJev / MJev services, WAN measurements |
+| [`remote-models.md`](features/remote-models.md) | Remote models: transport (HTTP/1.1 keep-alive, HTTP/3), wire v3 and codecs, π0.5² / XR-1 / OneJev / MJev / SAM 2 services, `KeptClient`, WAN measurements |
+| [`plan/specs/any-robot/00-index.md`](plan/specs/any-robot/00-index.md) | SPEC (not built): one assembly layer `rojev/app`, robots as executor plug-ins; slices: app layer, RoboCasa on it, MuJoCo SO-101 proof |
 | [`system1-map.md`](features/system1-map.md) | System 1 map (start here for S1): call map, control loop → guard → runtime ← runner ← π0.5², commitment, transport, monitor, messages, timeline, evidence |
 | [`system2-map.md`](features/system2-map.md) | System 2 map (start here for S2): owner lanes / holds / dialogue, workers, planning lane, Jev v1, step watcher, messages to S1, timeline, evidence |
 | [`scorecard.md`](features/scorecard.md) | T8 revision-benchmark scorecard: inputs, window and answer rule, metric definitions, aggregation, what is not validated |
 | [`jev-interaction.md`](features/jev-interaction.md) | Jev v1 interaction lane (legal acts, calibration, abstention, budgets, REVISE), owner holds / dialogue / utterances / step events, MJev end-state checks + step watcher; flags, spoofs, tests, what is not validated |
+| [`campaign.md`](features/campaign.md) | Test campaign: scripted / fuzz / live users talking to the v1 loop, the line judge (pass / unsafe / safe miss), caps, use |
 | [`live-harness.md`](features/live-harness.md) | Live RoboCasa harness: `realtime.py` flags and outputs, 19-case scenario matrix, invariants, declared spoofs, viewer, video, matrix results |
 | [`robot-interface.md`](features/robot-interface.md) | Robot interface (`rojev.robot`: MuJoCo SO-101, mock; hardware adapter later): limits, cameras, clocks and time modes |
-| [`gpu-setup.md`](features/gpu-setup.md) | One-command GPU box setup (`scripts/gpu_setup.sh`) for S1 (π0.5²) + S2 (OneJev, MJev): steps, component hook interface, pitfalls, security |
+| [`gpu-setup.md`](features/gpu-setup.md) | One-command GPU box setup (`scripts/gpu_setup.sh`) for S1 (π0.5², XR-1) + S2 (OneJev, MJev, SAM 2): parallel steps, component hook interface, pitfalls, security |
+| [`levers.md`](features/levers.md) | Current knobs that change behaviour: default, where set (flag / constant), trade-off, owning page |
 | [`observability.md`](features/observability.md) | Phoenix tracing: setup, what spans contain, measurements, gotchas |
-| [`v2-levers.md`](features/v2-levers.md) | Registry of every lever that changes output (current value, cost to change) |
-| [`v2-pi052-executor.md`](features/v2-pi052-executor.md) | π0.5² set-up, steering point, subtask vocabulary (current); v2 OneJev arm and Kaggle runner (history) |
-| [`v2-engineering-notes.md`](features/v2-engineering-notes.md) | v2-era build notes: code reuse and licences, MJev on Apple silicon, platform notes |
-| [`phase0-install.md`](features/phase0-install.md) | Install gate of the v1 SO-101 plan: toolchain (current), OneJev 0.8B rows (stale) |
+
+## Feature history: `features/history/` (superseded designs; what replaced them, lessons that still apply)
+| Doc | What it was |
+|---|---|
+| [`v2-levers.md`](features/history/v2-levers.md) | v2 levers registry (chunk-synchronous OneJev supervisor); authored-task budgets still read by `tasks.py` |
+| [`v2-pi052-executor.md`](features/history/v2-pi052-executor.md) | π0.5² set-up, steering slot, subtask vocabulary, Kaggle 2×T4 runner |
+| [`v2-engineering-notes.md`](features/history/v2-engineering-notes.md) | v2 code-reuse plan and licences, MJev on Apple silicon, platform notes |
+| [`phase0-install.md`](features/history/phase0-install.md) | G0 install gate of the SO-101 plan (local OneJev 0.8B) |
 
 ## Paper: `paper/` (only approved material)
 | Doc | What it is |

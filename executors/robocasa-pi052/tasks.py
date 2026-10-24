@@ -6,7 +6,7 @@ done), and logged for every arm as the reference: per step we record which subta
   object names come from the scene (`get_obj_lang`).
 - Completion checks reuse RoboCasa's own success primitives (the parts of each task's `_check_success`).
 - `chunks_per_subtask` (arm B) = p75 subtask duration in the task's training demos ÷ 50-step chunks, rounded up;
-  `max_steps` ≈ 1.5 × p90 demo length (docs/features/v2-levers.md §7).
+  `max_steps` ≈ 1.5 × p90 demo length (docs/features/history/v2-levers.md §7).
 """
 from collections.abc import Callable
 from dataclasses import dataclass

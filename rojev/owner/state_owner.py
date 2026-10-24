@@ -12,8 +12,10 @@ request is pending, planning requests are deferred (the latest is sent once the 
 planning proposals are refused, so a routine next-step decision never overrides the response to what the user just
 said. The pending request is released by its proposal, its `DecisionFailure`, or `interaction_timeout_s`. A change
 nobody answered (failure, timeout, refused proposal) is never handed to the planning lane: the robot holds
-(GUARDED_WAIT `UNANSWERED`, said to the user) and the interaction lane is asked again on the hold recheck, so an
-unread "stop" can never move the robot. Without an interaction worker every trigger goes to the planning worker (one
+(GUARDED_WAIT `UNANSWERED`, said to the user), so an unread "stop" can never move the robot. After a failure or a
+refusal the interaction lane is asked again on the hold recheck; after a timeout the answer is still awaited: when it
+comes it is applied to the situation it was decided on (the placeholder hold is not a new base; CONTINUE resumes what
+was in force), and it is never asked again meanwhile. A newer interaction request ends the wait. Without an interaction worker every trigger goes to the planning worker (one
 lane).
 
 Rules:
@@ -47,6 +49,8 @@ Rules:
   unchecked claim, e.g. S1's planner moving on, is not progress). Snapshots carry
   all keyframes, so after a repair or a revision no decider redoes a done step. ABORT, waits, asks and retries are not
   progress.
+- A subtask S1's own planner chose for the active command (`PlannedSubtask`) is kept (`snapshot.planned`) and asks
+  the planning lane at once (trigger `planned`); one about another command is stale.
 - A deviation or step event about the active command is kept for the decider (`snapshot.deviation`,
   `snapshot.step_event`) and asks at once (triggers `deviation` → interaction, `step` → planning); one about any other
   command, or another epoch, is logged as stale. A newly activated command clears both.
@@ -66,17 +70,17 @@ from dataclasses import dataclass, field
 from rojev.control import ExecutionRuntime, Guard
 from rojev.protocol import (ACK, ROBOT, UNANSWERED, USER, AcceptedGoal, AckStatus, Capture, DecisionFailure,
                             DecisionProposal, Deviation, ExecutionAck, Hold, Keyframe, ObservationSnapshot, Operation,
-                            OpKind, Revoke, StepEvent, Transition, Turn, UserInstruction, Utterance)
+                            OpKind, PlannedSubtask, Revoke, StepEvent, Transition, Turn, UserInstruction, Utterance)
 from rojev.system2 import DecisionWorker
 
 INSTRUCTION_CHANGE_MODES = ("review", "revoke")
 PLANNING, INTERACTION = "planning", "interaction"
 INTERACTION_TRIGGERS = ("instruction", "deviation", "hold")
-STEP = "step"
+STEP, PLANNED = "step", "planned"
 HOLD_KINDS = (OpKind.ABORT, OpKind.GUARDED_WAIT, OpKind.ASK)
 ENDED = (AckStatus.REJECTED, AckStatus.EXPIRED, AckStatus.REVOKED, AckStatus.DROPPED)
 
-Event = UserInstruction | DecisionProposal | DecisionFailure | Deviation | StepEvent
+Event = UserInstruction | DecisionProposal | DecisionFailure | Deviation | StepEvent | PlannedSubtask
 
 
 @dataclass
@@ -93,6 +97,15 @@ class OwnerRecord:
 class _Request:
     lane: str
     snapshot: ObservationSnapshot
+
+
+@dataclass(frozen=True)
+class _Awaited:
+    """An interaction request past its deadline whose answer may still come: the owner holds on `placeholder_cmd` (its
+    own `UNANSWERED` hold) meanwhile."""
+
+    request_id: int
+    placeholder_cmd: int
 
 
 class StateOwner:
@@ -121,6 +134,7 @@ class StateOwner:
         self.reviewing: int | None = None
         self.deviation: Deviation | None = None
         self.step_event: StepEvent | None = None
+        self.planned: PlannedSubtask | None = None
         self.hold: Hold | None = None
         self.keyframes: list[Keyframe] = []
         self.dialogue: deque[Turn] = deque(maxlen=dialogue_turns)
@@ -131,6 +145,7 @@ class StateOwner:
         self._requests: dict[int, _Request] = {}
         self._applied_request = -1
         self._interaction_pending: tuple[int, float] | None = None
+        self._awaited: _Awaited | None = None
         self._deferred: str | None = None
         self._hold_checked_t: float | None = None
         self._last_ack_seq = 0
@@ -164,6 +179,8 @@ class StateOwner:
             self._on_deviation(event)
         elif isinstance(event, StepEvent):
             self._on_step(event)
+        elif isinstance(event, PlannedSubtask):
+            self._on_planned(event)
         elif isinstance(event, DecisionFailure):
             self._on_failure(event)
         else:
@@ -178,7 +195,7 @@ class StateOwner:
             request_id = self._interaction_pending[0]
             self._interaction_pending = None
             self.record.add(now, "interaction timeout", request=request_id)
-            self._unanswered(self._requests[request_id], "interaction timeout")
+            self._unanswered(self._requests[request_id], "interaction timeout", awaiting=True)
         if self.hold is not None:
             self._keep_hold(now)
             return
@@ -207,11 +224,12 @@ class StateOwner:
                                    self.active_since if desired and self.active_cmd == desired.cmd_id else None,
                                    tuple(self.keyframes), trigger,
                                    review=desired is not None and self.reviewing == desired.cmd_id,
-                                   deviation=self.deviation, step_event=self.step_event, hold=self.hold,
-                                   dialogue=tuple(self.dialogue))
+                                   deviation=self.deviation, step_event=self.step_event, planned=self.planned,
+                                   hold=self.hold, dialogue=tuple(self.dialogue))
         self._requests[snap.request_id] = _Request(lane, snap)
         if lane == INTERACTION:
             self._interaction_pending = (snap.request_id, now + self.interaction_timeout_s)
+            self._awaited = None
         self.workers[lane].request(snap)
 
     def _run(self) -> None:
@@ -268,14 +286,27 @@ class StateOwner:
         self.record.add(now, "step event", cmd=e.cmd_id, t_detect=e.t, source=e.source, step=e.step, detail=e.detail)
         running = self.goals.get(e.cmd_id)
         if e.checked and running is not None and running.operation.subtask is None:
-            self._keyframe(running, e.step, self.latest(), f"{e.source}: {e.detail}", now)
+            self._keyframe(running, e.step, self.latest(), f"{e.source}: {e.detail}", True, now)
         self.request_decision(STEP)
+
+    def _on_planned(self, e: PlannedSubtask) -> None:
+        """S1's own planner chose a subtask for the active command: kept for the planning lane, which is asked at once
+        (trigger `planned`); about any other command or epoch, logged as stale."""
+        now = self.now()
+        if e.epoch != self.epoch or e.cmd_id != self.active_cmd:
+            self.record.add(now, "stale planned subtask", cmd=e.cmd_id, active=self.active_cmd, subtask=e.subtask)
+            return
+        self.planned = e
+        self.record.add(now, "planned subtask", cmd=e.cmd_id, subtask=e.subtask)
+        self.request_decision(PLANNED)
 
     def _on_failure(self, f: DecisionFailure) -> None:
         now = self.now()
         request = self._requests.pop(f.request_id, None)
         lane = request.lane if request is not None else None
         self.record.add(now, "decision failed", request=f.request_id, lane=lane, error=f.error)
+        if self._awaited is not None and self._awaited.request_id == f.request_id:
+            self._awaited = None
         if f.epoch != self.epoch or request is None or lane != INTERACTION:
             return
         if self._interaction_pending is not None and self._interaction_pending[0] == f.request_id:
@@ -288,6 +319,9 @@ class StateOwner:
         lane = request.lane if request is not None else None
         pending = self._interaction_pending[0] if self._interaction_pending is not None else None
         base = self.desired.cmd_id if self.desired is not None else None
+        late = self._awaited is not None and self._awaited.request_id == p.request_id
+        if late and request is not None and base == self._awaited.placeholder_cmd:
+            base = request.snapshot.active_cmd
         answers_change = request is not None and request.snapshot.trigger in INTERACTION_TRIGGERS
         problem = (f"epoch {p.epoch} != {self.epoch}" if p.epoch != self.epoch else
                    f"instruction rev {p.instruction_rev} != {self.instruction_rev}"
@@ -306,6 +340,8 @@ class StateOwner:
         answers_pending = lane == INTERACTION and pending == p.request_id
         if answers_pending:
             self._interaction_pending = None
+        if late:
+            self._awaited = None
         if problem:
             op = p.operation
             self.record.add(now, "refused", request=p.request_id, lane=lane, op=op.kind.value, subtask=op.subtask,
@@ -313,6 +349,9 @@ class StateOwner:
             if answers_pending:
                 self._unanswered(request, f"proposal refused: {problem}")
             return
+        if late:
+            p = self._as_decided(p, request)
+            self.record.add(now, "late answer", request=p.request_id, op=p.operation.kind.value)
         self._apply(p, request, now)
         if answers_pending and self._deferred is not None:
             trigger, self._deferred = self._deferred, None
@@ -340,6 +379,9 @@ class StateOwner:
                 if self.reviewing == desired.cmd_id:
                     self.reviewing = None
             self.record.add(now, "continue", cmd=desired.cmd_id if desired else None, renewed=renewed, **detail)
+            if same and op.template is not None and request.snapshot.trigger == "instruction":
+                self.dialogue.append(Turn(now, ROBOT, self.instruction_rev, template=op.template, objects=op.objects))
+                self._utter(now, op.template, op.objects, desired.cmd_id)
             return
         if op.kind == OpKind.COMPLETE:
             self.complete = True
@@ -347,21 +389,33 @@ class StateOwner:
         self._update_hold(op, request.snapshot.trigger in INTERACTION_TRIGGERS, now)
         self._issue(op, now, "command", detail)
 
-    def _unanswered(self, request: _Request, why: str) -> None:
+    def _as_decided(self, p: DecisionProposal, request: _Request) -> DecisionProposal:
+        """A late answer is applied to the situation it was decided on, not to the owner's placeholder hold: CONTINUE
+        ("keep what you are doing") becomes the operation in force when the change was decided (a plain hold if none
+        was), so "keep going" resumes the motion the placeholder stopped."""
+        if p.operation.kind != OpKind.CONTINUE:
+            return p
+        before = request.snapshot.active_operation
+        return dataclasses.replace(p, operation=before if before is not None else Operation(OpKind.GUARDED_WAIT))
+
+    def _unanswered(self, request: _Request, why: str, awaiting: bool = False) -> None:
         """No decision answered a change (the interaction lane failed, timed out, or its proposal was refused): the
-        robot holds as if the answer were "wait" (`Hold`, interrupted step kept), says `UNANSWERED`, and the interaction
-        lane is asked again on the hold recheck. A deferred routine planning request is dropped (planning is held)."""
+        robot holds as if the answer were "wait" (`Hold`, interrupted step kept) and says `UNANSWERED`. After a timeout
+        (`awaiting`) the answer may still come: it is applied when it does (`_as_decided`) and the hold is not
+        rechecked meanwhile; otherwise the interaction lane is asked again on the hold recheck. A deferred routine
+        planning request is dropped (planning is held)."""
         now = self.now()
         self._deferred = None
         op = Operation(OpKind.GUARDED_WAIT, template=UNANSWERED)
         self.record.add(now, "unanswered", request=request.snapshot.request_id, trigger=request.snapshot.trigger,
                         why=why)
-        if self.desired is not None and self.desired.operation == op:
-            return
-        self._update_hold(op, True, now)
-        self._issue(op, now, "command", {"request": request.snapshot.request_id, "lane": INTERACTION,
-                                         "trigger": request.snapshot.trigger, "reason": f"unanswered: {why}",
-                                         "decider": None})
+        if self.desired is None or self.desired.operation != op:
+            self._update_hold(op, True, now)
+            self._issue(op, now, "command", {"request": request.snapshot.request_id, "lane": INTERACTION,
+                                             "trigger": request.snapshot.trigger, "reason": f"unanswered: {why}",
+                                             "decider": None})
+        if awaiting:
+            self._awaited = _Awaited(request.snapshot.request_id, self.desired.cmd_id)
 
     def _update_hold(self, op: Operation, answers_change: bool, now: float) -> None:
         """A hold that answers a change stands until a later change resolves it; keeps the step it first interrupted."""
@@ -378,12 +432,13 @@ class StateOwner:
 
     def _keep_hold(self, now: float) -> None:
         """While a hold stands the owner keeps its command leased (holding needs no decision), and asks the
-        interaction lane again (trigger `hold`) every `hold_recheck_s` without a change."""
+        interaction lane again (trigger `hold`) every `hold_recheck_s` without a change, unless an answer is still
+        awaited."""
         goal = self.desired
         if goal is not None and goal.operation == self.hold.operation and goal.expires_t - now < self.lease_s / 2 \
                 and self.runtime.renew(goal.cmd_id, now + self.lease_s, now):
             self.desired = self.goals[goal.cmd_id] = dataclasses.replace(goal, expires_t=now + self.lease_s)
-        if self.hold_recheck_s is not None and not self.interaction_pending \
+        if self.hold_recheck_s is not None and not self.interaction_pending and self._awaited is None \
                 and now - self._hold_checked_t >= self.hold_recheck_s:
             self._hold_checked_t = now
             self.request_decision("hold")
@@ -398,15 +453,17 @@ class StateOwner:
         if not moves_on or running is None or running.operation != step:
             return
         seen = snap.step_event
-        evidence = (f"{seen.source}: {seen.detail}" if seen is not None and seen.cmd_id == running.cmd_id else
+        about = seen is not None and seen.cmd_id == running.cmd_id
+        evidence = (f"{seen.source}: {seen.detail}" if about else
                     f"decider {p.evidence.get('decider')}: {p.evidence.get('reason', '')}")
-        self._keyframe(running, step.subtask, snap.capture, evidence, now)
+        self._keyframe(running, step.subtask, snap.capture, evidence, about and seen.checked, now)
 
-    def _keyframe(self, running: AcceptedGoal, subtask: str, capture: Capture, evidence: str, now: float) -> None:
-        frame = Keyframe(running.cmd_id, subtask, running.instruction_rev, capture, evidence)
+    def _keyframe(self, running: AcceptedGoal, subtask: str, capture: Capture, evidence: str, checked: bool,
+                  now: float) -> None:
+        frame = Keyframe(running.cmd_id, subtask, running.instruction_rev, capture, evidence, checked)
         self.keyframes.append(frame)
         self.record.add(now, "keyframe", cmd=frame.cmd_id, subtask=frame.subtask, obs_id=frame.capture.obs_id,
-                        evidence=frame.evidence)
+                        evidence=frame.evidence, checked=checked)
 
     def _issue(self, op: Operation, now: float, kind: str, detail: dict, transition: Transition | None = None) -> None:
         """A new command for `op` under the current instruction. Between moving commands the configured transition
@@ -444,6 +501,8 @@ class StateOwner:
                 self.deviation = None
             if self.step_event is not None and self.step_event.cmd_id != a.cmd_id:
                 self.step_event = None
+            if self.planned is not None and self.planned.cmd_id != a.cmd_id:
+                self.planned = None
             self.active_cmd = a.cmd_id
             if self.reviewing is not None and self.reviewing != a.cmd_id:
                 self.reviewing = None

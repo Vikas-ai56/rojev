@@ -1,8 +1,10 @@
-"""Wire format for a remote executor: numpy-only, no pickle. Version `VERSION` (2); both sides refuse another one.
+"""Wire format for a remote executor: numpy-only, no pickle. Version `VERSION` (3); both sides refuse another one.
 
 Request  = compressed .npz: `version`; per camera either `img/<camera>` (uint8 H×W×3, lossless, codec "raw") or
            `webp/<camera>` (WebP bytes, codec "webp90"); `state` (float32); `task` and `subtask` (unicode scalars);
-           `samples` K ≥ 1 (one observation, K independently sampled chunks in one request).
+           `samples` K ≥ 1 (one observation, K independently sampled chunks in one request); optionally the
+           continuation (`policy.Continuation`): `prefix` (float32 n×d, the actions already queued from the
+           observation's time) and `delay_steps`.
 Response = compressed .npz: `version`; `actions` (float32 K×n×d); `timings_ms` and `info` (JSON lists, one entry per
            sample).
 
@@ -22,9 +24,9 @@ from PIL import Image
 
 from rojev.protocol import Observation
 
-from .policy import ActionChunk
+from .policy import ActionChunk, Continuation
 
-VERSION = 2
+VERSION = 3
 IMG, WEBP = "img/", "webp/"
 CODECS = ("raw", "webp90")
 DEFAULT_CODEC = "webp90"
@@ -32,14 +34,17 @@ DEFAULT_CODEC = "webp90"
 
 @dataclass(frozen=True)
 class ActRequest:
-    """What one /act request asks for: `samples` chunks for `observation`, conditioned on `subtask`."""
+    """What one /act request asks for: `samples` chunks for `observation`, conditioned on `subtask`, continuing
+    `continuation` when given."""
 
     observation: Observation
     subtask: str
     samples: int = 1
+    continuation: Continuation | None = None
 
 
-def encode_request(obs: Observation, subtask: str, samples: int = 1, codec: str = DEFAULT_CODEC) -> bytes:
+def encode_request(obs: Observation, subtask: str, samples: int = 1, codec: str = DEFAULT_CODEC,
+                   continuation: Continuation | None = None) -> bytes:
     if codec not in CODECS:
         raise ValueError(f"codec {codec!r} not in {CODECS}")
     if samples < 1:
@@ -55,6 +60,9 @@ def encode_request(obs: Observation, subtask: str, samples: int = 1, codec: str 
             arrays[WEBP + cam] = np.frombuffer(buf.getvalue(), dtype=np.uint8)
     arrays.update(version=np.array(VERSION), state=np.asarray(obs.state, dtype=np.float32), task=np.array(obs.task),
                   subtask=np.array(subtask), samples=np.array(samples))
+    if continuation is not None:
+        arrays.update(prefix=np.asarray(continuation.actions, dtype=np.float32),
+                      delay_steps=np.array(continuation.delay_steps))
     buf = io.BytesIO()
     np.savez_compressed(buf, **arrays)
     return buf.getvalue()
@@ -71,7 +79,8 @@ def decode_request(data: bytes) -> ActRequest:
         for k in z.files:
             if k.startswith(WEBP):
                 images[k[len(WEBP):]] = np.asarray(Image.open(io.BytesIO(z[k].tobytes())).convert("RGB"))
-        return ActRequest(Observation(images, z["state"], str(z["task"])), str(z["subtask"]), samples)
+        continuation = (Continuation(z["prefix"], int(z["delay_steps"])) if "prefix" in z.files else None)
+        return ActRequest(Observation(images, z["state"], str(z["task"])), str(z["subtask"]), samples, continuation)
 
 
 def encode_response(chunks: Sequence[ActionChunk]) -> bytes:

@@ -5,9 +5,10 @@ SPOOFS (declared):
                         wait → GUARDED_WAIT, go on → resume, a vague reference → ASK, a new destination → REVISE
                         (SWITCH_TO the rewritten step), a deviation → RETRY, anything else → CONTINUE
   KeywordChooser        the same keyword rules as act probabilities, in place of OneJev's scores inside the real
-                        `JevInteraction` (candidates, calibration, abstention and budgets are the system under test)
+                        `JevInteraction` (candidates, calibration, abstention and budgets are the system under test);
+                        a deviation reads as "the motion went wrong" (wait)
   RewriteReviser        REVISE = the interrupted or running place step rewritten to the destination the instruction
-                        names, in place of π0.5²'s own planner re-planning (the scripted S1 needs a step text)
+                        names, in place of the trained-task choice (`CanonicalTask`): the scripted S1 needs a step text
   RevisableSequence     the authored step list rewritten to the destination the current instruction names, advanced
                         on a time budget or on simulator truth; in place of a planner that re-plans from the
                         instruction (π0.5²'s own planner in v1)
@@ -45,10 +46,13 @@ def rewrite(subtask: str | None, phrase: str | None) -> str | None:
     return f"{match.group(1)} {phrase}" if match and phrase else subtask
 
 
+RETRY = "retry"
+
+
 def _act(s: ObservationSnapshot) -> str:
-    """The act the keyword rules pick for a change."""
+    """The act the keyword rules pick for a change (`RETRY` for a deviation: the rules' own act, not Jev's)."""
     if s.trigger == "deviation":
-        return jev.RETRY
+        return RETRY
     text = s.latest_utterance.lower()
     if STOP.search(text):
         return jev.ABORT
@@ -72,7 +76,7 @@ class RuleBasedInteraction:
     def decide(self, s: ObservationSnapshot) -> Verdict:
         act = _act(s)
         running = s.active_operation if s.active_operation is not None and s.active_operation.moves_robot() else None
-        if act == jev.RETRY:
+        if act == RETRY:
             if running is not None:
                 return Verdict(Operation(OpKind.RETRY, subtask=running.subtask), "deviation: retry the step")
             return Verdict(Operation(OpKind.CONTINUE), "deviation while holding")
@@ -85,10 +89,8 @@ class RuleBasedInteraction:
         if act == jev.RESUME:
             return Verdict(s.hold.interrupted, "resume the interrupted step")
         if act == jev.REVISE:
-            revised, task = RewriteReviser().revise(s)
-            if revised.kind == OpKind.CONTINUE:
-                return Verdict(revised, "destination applies to a later step", task=task)
-            return Verdict(revised, f"revise: {destination(task)}", task=task)
+            revision = RewriteReviser().revise(s)
+            return Verdict(revision.operation, revision.reason, task=revision.task)
         return Verdict(Operation(OpKind.CONTINUE), "nothing to change")
 
 
@@ -100,9 +102,10 @@ class KeywordChooser:
     def __init__(self, confidence: float = 0.8):
         self.confidence = confidence
 
-    def choose(self, s: ObservationSnapshot, options: list[jev.Option]) -> dict[str, float]:
+    def choose(self, s: ObservationSnapshot, options: list[jev.Option], question: str = jev.ACT_QUESTION
+               ) -> dict[str, float]:
         labels = [o.label for o in options]
-        act = _act(s)
+        act = jev.WAIT if s.trigger == "deviation" else _act(s)
         best = act if act in labels else jev.CONTINUE
         rest = (1.0 - self.confidence) / max(len(labels) - 1, 1)
         return {label: self.confidence if label == best else rest for label in labels}
@@ -112,16 +115,16 @@ class RewriteReviser:
     """`Reviser` stand-in: what the user said becomes the task text, and the step a hold interrupted (else the running
     one) is rewritten to the destination it names; CONTINUE when the destination concerns a later step."""
 
-    def revise(self, s: ObservationSnapshot) -> tuple[Operation, str]:
+    def revise(self, s: ObservationSnapshot) -> jev.Revision:
         task = s.latest_utterance
         step = s.hold.interrupted if s.hold is not None and s.hold.interrupted is not None else s.active_operation
         if step is None or not step.subtask:
-            return Operation(OpKind.CONTINUE), task
+            return jev.Revision(Operation(OpKind.CONTINUE), task, "no step to rewrite")
         revised = rewrite(step.subtask, destination(task))
         held = s.active_operation is not None and not s.active_operation.moves_robot()
         if revised == step.subtask and not held:
-            return Operation(OpKind.CONTINUE), task
-        return Operation(OpKind.SWITCH_TO, subtask=revised), task
+            return jev.Revision(Operation(OpKind.CONTINUE), task, "destination applies to a later step")
+        return jev.Revision(Operation(OpKind.SWITCH_TO, subtask=revised), task, f"revise: {destination(task)}")
 
 
 class RevisableSequence:

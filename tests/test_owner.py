@@ -426,6 +426,64 @@ def test_an_unanswered_change_is_asked_again_on_the_hold_recheck_and_then_answer
     assert owner.hold is None and owner.desired.operation == B
 
 
+def timed_out(owner, runtime, clock, text, **kw):
+    """Command A running, the user says `text`, the interaction deadline passes: the owner's placeholder hold stands.
+    Returns the interaction request that is still awaited."""
+    owner.handle(proposal(owner, A))
+    run_command(owner, runtime, clock, 1)
+    owner.handle(UserInstruction(text))
+    request = interaction_request(owner)
+    clock["t"] = 0.3
+    owner.tick()
+    assert owner.desired.operation == Operation(OpKind.GUARDED_WAIT, template=UNANSWERED)
+    return request
+
+
+def test_a_late_answer_is_applied_to_the_situation_it_was_decided_on():
+    """Live 2026-10-23: OneJev answered in 1.1–1.5 s against a 1.0 s deadline; the answer was refused (its base was the
+    owner's own placeholder hold) and the change decided again. Now a late "wait" stands, and a late "keep going"
+    resumes the command the placeholder stopped."""
+    for op, expected in ((Operation(OpKind.GUARDED_WAIT), Operation(OpKind.GUARDED_WAIT)),
+                         (Operation(OpKind.CONTINUE), A)):
+        owner, runtime, planning, clock = unit_owner(interaction=True, interaction_timeout_s=0.3)
+        request = timed_out(owner, runtime, clock, "slow down a bit")
+        owner.handle(proposal(owner, op, request.request_id, base=request.active_cmd))
+        assert owner.desired.operation == expected and any(e["kind"] == "late answer" for e in owner.record.events)
+        assert (owner.hold is None) == expected.moves_robot()
+        assert owner.hold is None or owner.hold.interrupted == A
+
+
+def test_an_awaited_answer_is_not_asked_for_again_and_a_newer_change_ends_the_wait():
+    owner, runtime, planning, clock = unit_owner(interaction=True, interaction_timeout_s=0.3, hold_recheck_s=1.0)
+    request = timed_out(owner, runtime, clock, "wait")
+    clock["t"] = 2.0
+    owner.tick()
+    assert interaction_request(owner) is request
+    owner.handle(UserInstruction("no, put it in B"))
+    newer = interaction_request(owner)
+    owner.handle(proposal(owner, Operation(OpKind.GUARDED_WAIT), request.request_id, rev=request.instruction_rev,
+                          base=request.active_cmd))
+    assert owner.desired.operation.template == UNANSWERED
+    owner.handle(proposal(owner, B, newer.request_id))
+    assert owner.desired.operation == B and owner.hold is None
+
+
+def test_a_repeated_question_answering_the_user_is_said_again():
+    """The robot is already asking; the user answers and the interaction lane asks again: the same operation, but a
+    question is an event, so it is said again (live 2026-10-23: the second question was silent)."""
+    said = []
+    owner, runtime, planning, clock = unit_owner(interaction=True, say=said.append)
+    owner.handle(proposal(owner, A))
+    run_command(owner, runtime, clock, 1)
+    question = Operation(OpKind.ASK, template="clarify")
+    owner.handle(UserInstruction("wait on the microwave"))
+    owner.handle(proposal(owner, question, interaction_request(owner).request_id))
+    owner.handle(UserInstruction("the apple on the microwave"))
+    owner.handle(proposal(owner, question, interaction_request(owner).request_id))
+    assert [u.template for u in said if u.template == "clarify"] == ["clarify", "clarify"]
+    assert owner.desired.operation == question
+
+
 def test_without_an_interaction_worker_every_trigger_goes_to_planning():
     owner, runtime, planning, clock = unit_owner()
     owner.handle(proposal(owner, A))

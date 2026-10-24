@@ -1,0 +1,2 @@
+repo facebook/sam2.1-hiera-tiny @ de431c4043854a71d8101e17995dfe596bf101a5
+SAM 2.1 Hiera Tiny (39M, Apache-2.0), transformers-format weights (config.json, model.safetensors); resolved 2026-10-22.

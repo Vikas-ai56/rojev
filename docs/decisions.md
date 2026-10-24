@@ -169,7 +169,7 @@
 **Risks / edge cases found:** Unreleased branch; Gemma fp16 overflow (hence validation; fallback = fp32 across 2×T4); PaliGemma tokenizer gated; 4.14B params (2.82B bf16 + 1.32B fp32).
 
 ## [2026-10-17] Code reuse: what we borrow
-**Decision:** Per `docs/features/v2-engineering-notes.md (§1)`. Import π0.5² (actions, its own planner as Arm A, subtask vocabulary as OneJev's candidates); port LeRobot's external-VLM planner (Arm C, Qwen3.5-0.8B) and RoboCombine's switching/metrics; MemER and Goal2Skill as ideas only; SkillNet not used.
+**Decision:** Per `docs/features/history/v2-engineering-notes.md`. Import π0.5² (actions, its own planner as Arm A, subtask vocabulary as OneJev's candidates); port LeRobot's external-VLM planner (Arm C, Qwen3.5-0.8B) and RoboCombine's switching/metrics; MemER and Goal2Skill as ideas only; SkillNet not used.
 **Why:** Avoid rebuilding what exists, and keep every arm on identical candidates and identical low-level weights.
 **Rejected alternatives:** Forking π0.5² to change its planner; copying MemER code (no licence).
 **Risks / edge cases found:** The planner lives on another unreleased branch (port, pin commit); the subtask vocabulary must be extracted from the dataset's `language_persistent` column.
@@ -205,7 +205,7 @@
 **Risks / edge cases found:** Hook lives on an unreleased branch (pinned @9d00293).
 
 ## [2026-10-17] Curate the paper bibliography
-**Decision:** `docs/paper/references.bib` keeps 29 entries: load-bearing research papers, SmolVLA/π0-family papers/blogs/checkpoints, OneJev and MJev-Spatial. Codebases, tool docs, one-off side references removed; build notes moved to `docs/features/v2-engineering-notes.md`.
+**Decision:** `docs/paper/references.bib` keeps 29 entries: load-bearing research papers, SmolVLA/π0-family papers/blogs/checkpoints, OneJev and MJev-Spatial. Codebases, tool docs, one-off side references removed; build notes moved to `docs/features/v2-engineering-notes.md` (now `docs/features/history/`).
 **Why:** User call: the paper folder holds only what the paper cites.
 **Rejected alternatives:** Citing every source touched (141 entries).
 **Risks / edge cases found:** Removed sources (e.g. EmbodiedJev, Jev blog, Goal2Skill) are no longer cited; re-add deliberately if the paper text needs them.
@@ -648,3 +648,183 @@
 **Why:** GPU suite: OneJev chose "continue" 8/8 for "put the steak on the plate" while picking (the continue option read as compatible), but "revise" p 0.87 in the gate run where the situation was described differently: a wording/inputs failure first, not shown to be a depth failure.
 **Rejected alternatives:** LEV first (no evidence the errors are compute-bound); training first (no labelled set yet).
 **Risks / edge cases found:** Prompt tuning on 14 cases overfits; wording changes need a held-out set.
+
+## [2026-10-22] Any robot: one assembly layer (`rojev/app`), robots as executor plug-ins (spec, not built)
+**Decision:** D-A1 `rojev/app` is the only assembly (top layer); D-A2 `Embodiment` = ActionSpec + EffectModel + cameras + start command, the backend built by the executor; D-A3 recording wrappers + Speaker move to `rojev/app`, invariants to `rojev/eval` (eval → robot); D-A4 the record format is the contract every run tool reads; D-A5 the SO-101 proof uses a declared joint-space stand-in S1. Specs: `docs/plan/specs/any-robot/`.
+**Why:** The core is robot-agnostic by contract, but the assembly is one 500-line RoboCasa script, so a second robot means copying it.
+**Rejected alternatives:** A base executor class to subclass (inheritance across repos/envs, fragile); keeping assembly per executor (the copy problem); a config-file-driven launcher (hides the wiring a builder must reason about).
+**Risks / edge cases found:** The owner / runner / watcher closure order must be preserved exactly; record field names are a contract (scenarios, GPU suite, calibration, scorecard read them).
+
+## [2026-10-22] Scenario matrix feeds the T8 scorecard
+**Decision:** Each scenario declares its injected changes (`Scenario.changes`: kind, expected act, goal texts), paired in order with its `--say` / `--block-at` times; the matrix scores every case with changes under arm = `--interaction` else `--arm`, writes scorecard.md / .json beside report.json; `--score-only RUN_DIR` re-scores past matrices; kinds gain `pause` / `resume`.
+**Why:** Expected acts are facts of each case's design, not inferable from text; one source for times keeps injections and arguments from drifting.
+**Rejected alternatives:** Inferring kind / act from utterance text (heuristic); declaring times twice (drift); scoring past runs without checking what they injected.
+**Risks / edge cases found:** A run whose recorded schedule differs from the current case is skipped, not mis-scored; arms pool faults and baselines sharing a decider; no phases declared yet (T8 needs phase-placed injections).
+
+## [2026-10-22] Scorecard: an unanswered change is no decision; pauses judged by what the change asked; conditions are arms
+**Decision:** The owner's safety hold after an `unanswered` event scores act `unanswered` (never correct) with an arm-level unanswered rate; pause is aggregated as `pause_when_moving` (expected continue / revise) and `hold_when_asked` (expected wait / ask / abort); scenario arms carry their conditions (`+revoke`, `+s2-slow`, `+s2-fail`).
+**Why:** The first table scored S2 failures as correct waits (rules 1.00), pooled faults and the revoke baseline with the nominal system, and averaged right holds with wrong freezes.
+**Rejected alternatives:** Excluding fault cases from scoring (hides the fallback rate); one pause number.
+**Risks / edge cases found:** Answer latency has one control tick of resolution (robot clock); runs from before the 2026-10-22 hold rule (155022) score their escalated planning answers as wrong, which is what they did.
+
+## [2026-10-22] MJev scope: the release signal of commit-and-verify (pending A/B), later the grounder for a tracker
+**Decision:** v1: MJev's only loop job is the windowed step-done check that releases a committed π0.5² subtask, kept only if it beats OneJev on truth frames; grounding (points → SAM 2.1 Tiny) comes with the tracker; never a per-frame verdict that moves the robot or a metric estimator; v2: input to Jev's spatial / progress heads (one backbone).
+**Why:** Today it changes no behaviour; π0.5²'s subtask head is memoryless (trained on task + image only), so a verified done signal is what a training-free commit-and-verify fix needs; the plan assigns completion to "Jev auxiliary heads or a validated monitor" and identity to a tracker.
+**Rejected alternatives:** Dropping MJev before the A/B (loses the only candidate verifier with zero false "done" so far); keeping it as an always-on judge (literature: judges lean to "success", per-frame queries add false judgements).
+**Risks / edge cases found:** Its positives are unmeasured; both checkers may exceed 5% false "done" (then the release signal must come from tracked predicates).
+
+## [2026-10-22] Commit and verify: a self-planning S1 is held on its planned subtask until a check confirms it
+**Decision:** `PlannedSubtask` (S1 runner → owner, `snapshot.planned`); `CommitVerifyPlanner` (`rojev/system2/planning.py`, `--arm commit`) commits S1 to its planned subtask (`SWITCH_TO` the text), releases on a checked step event about it (the owner records a checked keyframe), never re-commits a verified step (counted `reentries`), and releases an unverified commitment after `max_commit_s` (declared liveness bound, counted `expired`); `Keyframe.checked` separates verified progress from decider judgement.
+**Why:** π0.5²'s subtask head is memoryless (trained on task + image only, recipe `subtask_mem.yaml`), so it flips when the image is ambiguous (18× in 60 s); it is steerable by subtask text, so pinning the step stops the flips reaching the robot without training.
+**Rejected alternatives:** Feeding history into its subtask prompt (out of distribution: not trained); slowing its re-planning (`chunks_per_regen`; slower to react, not evidence); training its subtask head with memory now (v2).
+**Risks / edge cases found:** Release depends on the checker's recall (unmeasured until the done-check A/B); steps with no visual cue (microwave "on") can only be released by the bound; re-entries of verified steps are counted, not prevented.
+
+## [2026-10-22] Done-check A/B on simulator-labelled frames decides the checker
+**Decision:** `done_check_ab.py build` sets kitchen states (object placed, door closed, appliance on), labels each checked step with the task's own completion test, drops states whose predicate fails (2 of 80) and never relabels; `score` asks MJev and `OneJevVerifier` the identical question; gpu_suite steps `done_check` and `commit_ab`.
+**Why:** MJev's recall was never measured (0 positives in live runs); a checker must be chosen on balanced accuracy and false "done", the release signal's failure modes.
+**Rejected alternatives:** Waiting for π0.5² to complete steps (it completed none); hand-labelled frames (truth is available from the simulator).
+**Risks / edge cases found:** "pick up" steps are excluded (holding needs a real grasp); "turned on" has no visual cue (both checkers should fail it; reported per step type); teleported placements may look unlike placed-by-robot scenes.
+
+## [2026-10-22] MJev out of the v1 loop: it fails the done-check gate on both question forms
+**Decision:** MJev is not loaded or used by default; commit-and-verify keeps the bound as its only release until a measured completion signal exists; the next completion signal to build is tracked object state, and π0.5²'s planned subtask must be checked against the task before it is committed.
+**Why:** On 222 simulator-labelled pairs MJev scored balanced accuracy 0.50 ("is this step done?") and 0.45 (yes / no postconditions), OneJev 0.52 / 0.52; live, commit cut subtask switches 19 → 2 but verified nothing and pinned a wrong first pick ("put steak in fridge").
+**Rejected alternatives:** Keeping MJev for its zero false "done" (it never says "done" at all); lowering the threshold (no separation to threshold on).
+**Risks / edge cases found:** The 256 × 256 multi-camera views may be the limit rather than the models (higher-resolution single-camera A/B pending); teleported placements may differ from robot-made ones; pointing (MJev's other use) is untested.
+
+## [2026-10-22] OneJev sees each camera as its own image (one request), never views glued side by side
+**Decision:** `onejev.camera_views` names `<image:1>…<image:k>` as separate views of the same moment; the interaction chooser and `OneJevVerifier` send the image list in one request instead of one concatenated 768 × 256 picture; `OneJevVerifier` asks every step as one question of that request (one call per frame).
+**Why:** The concatenated picture gave the model no boundary between views (a container's edge in one view runs into the next); MJev already received separate images; qev takes several images per request, so it stays one pass.
+**Rejected alternatives:** Drawing separator lines into a concatenated picture (still one image to the vision encoder, a pixel cue standing in for real image boundaries); one request per camera (three passes).
+**Risks / edge cases found:** Three images cost more vision tokens than one at a third of the width each (latency to measure); earlier OneJev numbers (done-check, Jev runs) were taken with the glued view.
+
+## [2026-10-22] π0.5²'s native planner memory stays off
+**Decision:** `serve.py --planner-memory` remains an opt-in A/B flag; the default unit runs with memory off.
+**Why:** A/B on MoveFridgeToFreezer (2 seeds × 60 s each way, `results/memory-ab/20261022`): subtask switches 16 / 10 off vs 21 / 11 on, no success either way, S1 p50 525 → 575 ms; the memory notes are false ("I placed it in the freezer" while the steak never got there), because the subtask head is not trained on memory and the note is written from the planned subtask, not observed state.
+**Rejected alternatives:** Turning it on by default (no gain, slower, false notes); feeding its notes to S2 as progress (unverified claims, plan: never promote a prediction to "completed" because another model echoed it).
+**Risks / edge cases found:** 2 seeds on one task; the memory head may help where subtasks are visually distinct.
+
+## [2026-10-22] Inference delay: the runtime tells a policy what runs while it thinks; the policy decides how to use it
+**Decision:** Core: `Continuation(actions, delay_steps)` from `ExecutionRuntime.queued_from(cmd, capture.t)` and ⌈L/dt⌉, passed by `S1Runner` only to a policy that declares `accepts_continuation` (wire v3 carries it); placement at observation time and skipping unchanged. Model-specific use stays in the executor: `serve.py --rtc H` feeds it to LeRobot's real-time chunking for π0.5² (normalized by the checkpoint's own normalizer).
+**Why:** Real-time chunking needs the actions the robot will actually execute during inference; only the runtime knows them (commitment may keep part of a chunk; revokes, new commands and skips change the queue); `queued_from` costs 8.7 µs on the runner thread vs a 50 ms control period.
+**Rejected alternatives:** An executor-side client that remembers its last chunk (wrong after partial commits, revokes or new commands; no observation time in `act`, so wall-clock guesses); RTC in the core (model-specific); passing the continuation to every policy (stand-ins would have to accept and ignore it).
+**Risks / edge cases found:** RTC guidance runs under `no_grad` (autograd) instead of `inference_mode`: server latency to measure; the execution horizon (25 steps) is a declared choice; wire v2 clients are refused.
+
+## [2026-10-22] Lockstep mode for the live harness (diagnostic; superseded 2026-10-23: lockstep is the sim evaluation mode)
+**Decision:** `realtime.py --lockstep`: one thread alternates S1 supply and one control tick, so simulated time stops while S1 thinks; real time stays the default.
+**Why:** π0.5² completed no task in real time; lockstep is how it was trained and evaluated, so it separates the policy's own skill from the cost of the delay; LeRobot's own runner needs the RoboCasa assets on the GPU box (absent; the simulator runs on the Mac).
+**Rejected alternatives:** `drive.py` / lerobot-eval on the box (tens of GB of scene assets); slowing the simulator (still couples sim time to latency).
+**Risks / edge cases found:** S2 threads run on the simulated clock and may see more ticks per decision than in real time.
+
+## [2026-10-22] SAM 2.1 measured as a completion signal; truth rendered after the run
+**Decision:** `services/sam2` (SAM 2.1 Hiera Tiny, transformers, pinned) with `/segment` and streaming `/track/*` (state on CPU, idle sessions closed, errors answered); measured offline: `--record-frames` saves cameras + simulator state, `sam_check.py track` renders truth in a fresh process. Not in the loop.
+**Why:** Still frames: masks from correct points IoU 0.64 (0.82 for objects ≥ 100 px), MJev pointing hits 41%, 2D "placed inside" with perfect masks 0.68 balanced (freezer 90% false "done"), 44/74 placed objects unseen. Live tracking: IoU up to 0.86–0.96 when started on a visible object, but a bad first mask never recovers (freezer run IoU 0.00) and re-acquisition is 3/11; π0.5² placed nothing, so completion is unvalidated.
+**Rejected alternatives:** Rendering truth inside the live process (offscreen renderer returns blank images there); GPU-resident session frames (7.5 GB, out of memory after 177 frames).
+**Risks / edge cases found:** Needs grounding (no reliable pointer yet), a first-mask check, depth or "seen entering then occluded" for containment, and placements made by robot motion.
+
+## [2026-10-22] π0.5² (pi052_robocasa) cannot execute our composite tasks; Xiaomi-Robotics-1 becomes the RoboCasa S1 candidate (EVIDENCE WITHDRAWN: see the render-context entry below)
+**Decision:** Stop building on `pi052_robocasa` for RoboCasa composite tasks; evaluate Xiaomi-Robotics-1-RoboCasa365 (5B, Apache-2.0, 57.28% on target50) as S1 on the published target50 test cases (their seeds and horizons) in our own harness, lockstep first; briefs `docs/research/2026-10-22-s1-candidates.md`, `-xr1-integration.md`.
+**Why:** π0.5² completed 0/14 episodes (real time, lockstep, full budget) and 0/4 even with an oracle planner (picks 2/4, places 0/4), matching RoboCasa365's π0.5 composite rate (7.1%); XR-1 is the strongest verified open checkpoint on this benchmark.
+**Rejected alternatives:** An external planner over π0.5² (the oracle shows execution is the limit); their own evaluator (we test our runtime, not theirs); RTC (+150 ms, no measured gain).
+**Risks / edge cases found:** Our two tasks are not in target50 (no published number); a 16-action chunk (0.8 s) is near our real-time latency budget; lockstep refill 0.05 executes ~14 of 16 actions per query (theirs 16).
+
+## [2026-10-22] History-conditioned policies get their frames from the executor; the generic server moves to the core
+**Decision:** `history.py` (executor): `FrameHistory` fed by the tick hook, `HistoryPolicy` sends `length` frames `interval` apart as `<cam>@k` images + stacked states on the existing wire; `rojev/system1/service.py` (`PolicyService`, `serve_policy`) is the server half of `RemotePolicy`, shared by the π0.5² and XR-1 services; `to_action_space` moved to `embodiment.py` (robot knowledge, applied on the robot side for XR-1).
+**Why:** Frame history is a model requirement (handled outside the core, as the user asked for delay); the newest frame is matched by identity, so the window is exact even when the runner reads a frame before the hook files it; the server routing was identical for both models.
+**Rejected alternatives:** `Observation.history` + wire v4 in the core (proposed by the integration agent; model-specific need in the core); a server-side history buffer (the server sees one frame per chunk, never t−2/t−4/t−6; breaks retry safety); upstream pickle socket server (remote code execution).
+**Risks / edge cases found:** XR-1's environment pins transformers 4.57.1, so it installs only the core's S1-side dependencies (`dependency-metadata` override); flash-attn 2.8.3's wheel names a local version its metadata lacks, so `uv sync --frozen --check` never passes and `gpu_setup` stops at `env:robocasa-xr1` (service started by hand with the same launcher for this test; packaging fix open); SDPA is not supported by the model (flash-attn required, Ampere+ GPU).
+
+## [2026-10-22] Camera images in live runs were corrupted by robosuite's render-context teardown; fixed in the RoboCasa executor
+**Decision:** `executors/robocasa-pi052/render_context.py` installs a teardown that frees a robosuite render context in its own GL context (then restores the current one); `RoboCasaBackend` installs it before building the environment; regression test `executors/robocasa-pi052/tests/test_render_context.py`. Every live result from `realtime.py` before this fix is withdrawn until re-run: π0.5² memory A/B, delay A/B (lockstep / real time / RTC), full-budget lockstep, oracle, SAM live tracking, XR-1's first 1/6.
+**Why:** robosuite frees a replaced simulator's MuJoCo context (`mjr_freeContext`) in whatever GL context is current, deleting the live simulator's framebuffer and textures (same ids); `realtime.py` calls `gc.collect()` before `gc.freeze()`, so from the first step the policy saw noise (neighbour-pixel difference 70–84 vs 5 for real frames; reproduced with a stand-in policy, no network, lockstep and real time). Still-frame sets (done-check, SAM check) never collect: 0 of 444 images corrupt, those results stand.
+**Rejected alternatives:** Dropping `gc.collect()` (any later automatic collection triggers the same; the cause is the teardown); editing the vendored robosuite clone (lost on re-clone; the box re-clones at the pinned commit); recreating the live context after a collection (stale contexts appear on every reset).
+**Risks / edge cases found:** The fix is GLFW/CGL-specific (macOS; EGL contexts have no `_context` and keep robosuite's behaviour); remove when robosuite frees in its own context; earlier "the checkpoint is the limit" and "delay is not the cause" conclusions are unverified until re-run.
+
+## [2026-10-23] Lockstep stays the simulator evaluation mode for now
+**Decision:** Sim evaluations run in lockstep (`--lockstep`), with real time reported alongside; hardware requires real-time passes first (`hardware-port.md`).
+**Why:** S1 runs on a remote GPU (0.35–0.55 s vs an 0.8 s XR-1 chunk) and published benchmarks are scored in lockstep, so lockstep is the only fair model comparison until S1 runs next to the simulator / robot.
+**Rejected alternatives:** Real time only (measures our network, not the model); lockstep only (hides the delay problem the robot will have).
+**Risks / edge cases found:** Lockstep results overstate real-world performance; S2 threads run on the simulated clock and see more ticks per decision than in real time.
+
+## [2026-10-23] Every run checks its camera frames; flash-attn for XR-1 comes from its sdist
+**Decision:** `harness/frame_check.FrameCheck` samples frames every second in `realtime.py`; noise (neighbour difference > 25) or blank (std < 3) frames invalidate the run (summary, `frames_real` invariant, not scored). XR-1's env takes flash-attn 2.8.3 from PyPI, built with `FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE` against the env's torch, so its setup.py fetches the matching prebuilt wheel under its own version; the hook's readiness imports `torch` then `flash_attn_2_cuda` (the kernels link against torch's libraries).
+**Why:** The corrupted-frame bug was silent for a day; thresholds sit far outside 963 real frames (≤ 7.4, std ≥ 26.8). The prebuilt wheel used directly names `+cu12torch2.8…` while its metadata says 2.8.3, so `uv sync --frozen --check` never passed and gpu_setup could not provision XR-1.
+**Rejected alternatives:** Checking every tick in the control loop (~5 ms per tick); a frozen-frame rule (a still scene is legitimately identical); compiling flash-attn (needs nvcc, ~30+ min); `--inexact` env checks (hides real drift).
+**Risks / edge cases found:** If the prebuilt download fails, setup.py silently builds without kernels (caught by the readiness import); verified on the Mac lock only until the GPU box is back; on hardware the check moves to the robot layer with staleness and a guard hold.
+
+## [2026-10-23] Lockstep also stops simulated time while S2 decides
+**Decision:** In `--lockstep` the run loop does not tick while the planning or interaction lane is busy, so every model's computation takes zero simulated time.
+**Why:** Smoke test with XR-1 + Jev: OneJev's ~1.1–1.5 s wall latency became 1.75–1.85 s of simulated time against a 1.0 s interaction deadline; both answers (wait p 0.88, then resume) arrived late, the hold turned "unanswered" and "go on" was revised into the task. With S2 paused too: wait at 3.05 s, resume at 6.05 s, success at 10.5 s.
+**Rejected alternatives:** Longer interaction deadlines in lockstep (still depends on simulator speed); pausing only for S1 (S2 deadlines meaningless).
+**Risks / edge cases found:** Lockstep hides S2 latency as it hides S1 latency; real-time runs remain the measure of responsiveness.
+
+## [2026-10-23] First fitted Jev calibration, from live interactive decisions
+**Decision:** T = 0.44 and abstain margin 0.10 (target accuracy 0.8), fitted on 30 labelled interaction decisions from the clean-frame interactive runs 2–4 and the run-1 replay (`results/jev-calibration/20261023/{labels.jsonl,calibration.json}`; labels = the typed intent; 2 ambiguous lines excluded); used with `realtime.py --jev-calibration`.
+**Why:** At T = 1 / margin 0.2 Jev asked too often (top-1 accuracy 0.77, but many abstentions on clear intents); the fit sharpens (NLL 0.636 → 0.516) and keeps 87% of decisions at 81% accuracy. Target 0.9 would need margin 0.72 and abstain on half the turns.
+**Rejected alternatives:** Target 0.9 (asks every other turn); fitting on the recorded `InteractionCases` (frames corrupted before 2026-10-22's fix).
+**Risks / edge cases found:** 30 cases, one scene, labels by us; the remaining errors are semantic (a speed remark revised into a task, "close the cabinet door" not taken as a task, stop scored as wait), which calibration cannot fix: outcome-level abstention and REVISE over a capability list address them.
+
+## [2026-10-23] v1 interactive testing stops; next build = capability signal + completion signal
+**Decision:** No further v1 test rounds. Build the capability signal (what this S1 can do in this scene, as canonical task sentences; REVISE chooses among them) and the completion signal (trained progress / done estimate) before the next interactive or T8 run.
+**Why:** Runs 2–5 (XR-1 + Jev, clean frames) fail on the same two gaps: trained tasks such as "close the cabinet" were never offered to Jev, remarks became tasks, and after success (36.75 s in run 5) the robot kept executing the finished task, was "resumed" into it and drove in circles.
+**Rejected alternatives:** More wording / calibration tuning (run 5: calibration made wrong reads decisive); simulator success as the completion signal (sim-only spoof).
+**Risks / edge cases found:** The completion signal needs training data and a GPU run; capability preconditions (e.g. a door must be open to close) must come from perception on a real robot.
+
+## [2026-10-24] Jev revises to a trained task sentence, never the user's words
+**Decision:** REVISE asks a second typed question (`task_choice.CanonicalTask`): one of the trained task sentences S1 can run here (the run's instruction + `--skills FILE`) or `none`; `none` or a low margin → ask, else wait. `S1Replans` (raw utterance as the task) removed.
+**Why:** Runs 1–4: a remark and "make it fast pls" became XR-1's prompt, typos reached it, and "close the cabinet door" could not be chosen because no option named it.
+**Rejected alternatives:** Better option wording (adds no missing option); an open list or a generated rewrite (v1 scope is trained tasks only; a rewrite needs a generative model, v2).
+**Risks / edge cases found:** The list caps the repertoire (new compositions impossible until v2 adds a rewrite fallback); which listed task can run in the current state is not checked (critic's feasibility head); the task question has its own, uncalibrated, defaults.
+
+## [2026-10-24] One interaction act per effect; no retry
+**Decision:** Legal acts come from a situation table (moving · idle · held · deviation); retry removed; a deviation offers only continue or wait (hold until the user decides).
+**Why:** XR-1 takes only a task sentence, so a retry is the same sentence (= continue) and only dilutes the Choice; deviation-revise used a stale utterance as the task.
+**Rejected alternatives:** Separate intent classes for comment and speed request (same effect, splits probability).
+**Risks / edge cases found:** A policy that can retry a step (a skill library) needs the act back, behind that policy's capability.
+
+## [2026-10-24] A late interaction answer is applied as decided, not re-decided
+**Decision:** At the interaction deadline the owner holds (`UNANSWERED`) and awaits the answer; when it arrives it is accepted if epoch, revision and supersession allow, the placeholder hold is not a new base, and CONTINUE re-issues the operation in force when the change was decided. No hold recheck while awaited; a newer interaction request ends the wait. The scorecard counts the first decider's answer, noting a late one.
+**Why:** OneJev takes 1.1–1.5 s against a 1.0 s deadline; the answer was refused (its base was the placeholder) and the same change decided again, so in real time every change cost two decisions.
+**Rejected alternatives:** Raising the deadline (the robot then keeps moving on an unread "stop" longer); deciding again on the recheck (doubles latency, can disagree with itself).
+**Risks / edge cases found:** A decider that hangs without failing keeps the robot held (safe, needs a restart); the answer is applied to a ~1.5 s old situation (the robot was held meanwhile).
+
+## [2026-10-24] Jev calibration ships only if it holds on held-out runs; the 2026-10-23 fit is withdrawn
+**Decision:** One calibration per question (`act`, `task`); `calibrate_jev.py --question Q --fit DIR… --held-out DIR…` writes it only if the held-out decided accuracy reaches the target. The 2026-10-23 fit (T 0.441, margin 0.103) is withdrawn: it was fitted on 30 decisions from one scene, on the old act set, with no held-out set.
+**Why:** Accuracy measured on the cases a threshold was fitted on is not evidence; the act set changed.
+**Rejected alternatives:** Re-using the 2026-10-23 labels (options no longer match); a random case split (cases from one run are correlated: split by run / scene).
+**Risks / edge cases found:** Needs new labelled interactive runs in at least two scenes before any fitted value is used; until then T = 1, margin 0.2 are declared.
+
+## [2026-10-24] v1 test campaign: scripted, fuzz and live users, judged per line by the state it was heard in
+**Decision:** `campaign.py` runs the v1 loop (XR-1 + Jev/OneJev, lockstep, ≤ 300 s wall per run) with scripted happy / faulty cases, fuzz users (fresh recorded seed per campaign) and live users (an agent appending to `--input-file`, watching `--live-view`); `harness/judge.py` scores each line against what the robot's state at that moment allowed: pass, unsafe (a wrong answer that moves the robot), safe miss, unanswered.
+**Why:** Typing tests by hand covered a handful of cases; one answer can be right in one state and wrong in another ("go on" resumes a hold, continues a motion); unsafe errors matter more than over-cautious ones.
+**Rejected alternatives:** Scorecard act classes only (one expected act per change, no state, no severity); random utterances without intents (nothing to judge against).
+**Risks / edge cases found:** Lines are matched to owner events by text in order (a repeated line is matched to the next occurrence); tasks and seeds are ones XR-1 solved in its own evaluation, so S1 failures are under-sampled by design; revise targets are not checked for reachability in the scene.
+
+## [2026-10-24] Jev hesitates between effects, not between acts that do the same thing
+**Decision:** The act question's calibrated probabilities are summed per effect (move · hold · switch, `acts.effect`, situation-dependent: continue holds while held); abstention compares the top two effects; the act is the most probable one with the winning effect. Calibration fits and judges the act margin over the same effects (`calibrate_jev.py`; cases record effects).
+**Why:** Campaign 2026-10-24: "stop" split abort 0.49 / wait 0.41 and the robot asked although both hold it; "ruko" went to revise 0.45 against hold 0.38. Replay of all 82 recorded lines: the unsafe "ruko" now asks, two stops now stop, one remark keeps holding; one vague line while already held now stops instead of waiting.
+**Rejected alternatives:** A lower margin (lets weak label guesses through, e.g. "ruko"); merging labels into fewer options (loses what happens later: stop vs wait differ on resume and the wait budget).
+**Risks / edge cases found:** Within a winning hold effect, stop can win over wait or ask (a vague line while held stopped the task); revise vs continue still abstains at small margins (clear new tasks still asked).
+
+## [2026-10-24] OneJev over one kept connection; image quality unchanged
+**Decision:** Every OneJev call site uses `onejev.KeptClient` (qev's client with one kept HTTP connection, reopened once when dropped); images stay JPEG q95.
+**Why:** Of ~1.26 s per decision only 75–140 ms is the server; qev's client opened a connection per request, costing an extra wide-area round trip over the tunnel (~650 ms). Kept: median 604 ms, identical probabilities.
+**Rejected alternatives:** A separate vision encoder (vision is ~20 ms per image of the total); smaller JPEG / WebP (changed the top option in 1 / 6 cases for ≤ 100 ms); patching the vendored qev (lost on re-clone).
+**Risks / edge cases found:** `KeptClient` overrides qev's private `_post` / `_get` (pinned in uv.lock; re-check on a qev upgrade); requests on one client are serialised.
+
+## [2026-10-24] GPU setup runs independent steps at once
+**Decision:** After `packages`, the driver branch, Mac-side assets and the code branch (with every component's env / assets / weights chain) run as parallel jobs synchronised by marker files; services start in order with GPU memory projected across them, then health waits and tunnels run at once.
+**Why:** The fresh-box setup ran the driver install, two environment builds (torch, flash-attn) and two weight downloads one after another.
+**Rejected alternatives:** Driver in parallel with `packages` (both use apt / dpkg); service starts in parallel (two starts could claim the same free GPU memory).
+**Risks / edge cases found:** Logs appear per group, after it finishes; a component's weight step waits for the driver because readiness may load CUDA kernels.
+
+## [2026-10-24] Live rerun confirms effect hesitation and late answers; OneJev keep-alive still open
+**Decision:** Effect-based hesitation and the late-answer rule stand as built (E30); the next speed step is a longer keep-alive on the OneJev server (its service hook), not a client-side ping.
+**Why:** Live: stop / go on ×2 4 / 4 (was 2 / 4); "ruko" asks; with a 0.3 s deadline both late answers were applied, not re-decided. Jev in the loop stayed ~930 ms because the server drops a connection idle ~5 s and decisions are seconds apart.
+**Rejected alternatives:** A client ping every few seconds to keep the connection open (a workaround for a server setting).
+**Risks / edge cases found:** "stop" can resolve to wait (both hold, no question); "go on" after success still restarts the finished task (completion gap).
+
+## [2026-10-24] Superseded feature pages move to `docs/features/history/`; one current levers registry
+**Decision:** The four v2-era pages (`v2-levers`, `v2-pi052-executor`, `v2-engineering-notes`, `phase0-install`) move to `docs/features/history/`, each cut to what it was, what replaced it and the lessons that still apply; `docs/features/levers.md` lists current knobs only (default, where set, trade-off), read from the code.
+**Why:** The v2 pages presented superseded values as current (e.g. "current value" for the v2 supervisor, `raw` as the codec default).
+**Rejected alternatives:** Deleting them (loses lessons and the sources E1 / E8 cite); keeping a "v3 section" inside the v2 registry (mixes eras again).
+**Risks / edge cases found:** `levers.md` duplicates defaults that also appear on owning pages; a changed default must update both.

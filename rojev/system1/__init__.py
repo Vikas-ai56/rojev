@@ -9,9 +9,12 @@ the applied actions as on nominal runs (opt-in) → `Deviation`.
 from .commit import (COMMIT_POLICIES, Commitment, CommitPolicy, ConsensusCommit, FixedCommit, PhaseCommit,
                      make_commit_policy, motion, speed_profile)
 from .monitor import ExecutionMonitor, MonitorModel, Recording, fit_monitor
-from .policy import ActionChunk, Policy
+from .policy import ActionChunk, Continuation, Policy
 from .remote import RemotePolicy
 from .runner import S1Runner, S1Stats
+from .service import PolicyService, serve_policy
 
-__all__ = ["COMMIT_POLICIES", "ActionChunk", "CommitPolicy", "Commitment", "ConsensusCommit", "ExecutionMonitor", "FixedCommit",
-           "MonitorModel", "PhaseCommit", "Policy", "Recording", "RemotePolicy", "S1Runner", "S1Stats", "fit_monitor", "make_commit_policy", "motion", "speed_profile"]
+__all__ = ["COMMIT_POLICIES", "ActionChunk", "CommitPolicy", "Commitment", "ConsensusCommit", "Continuation",
+           "ExecutionMonitor", "FixedCommit", "MonitorModel", "PhaseCommit", "Policy", "PolicyService", "Recording",
+           "RemotePolicy", "S1Runner", "S1Stats", "fit_monitor", "make_commit_policy", "motion", "serve_policy",
+           "speed_profile"]
