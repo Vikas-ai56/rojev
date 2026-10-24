@@ -69,20 +69,6 @@ Every policy commits at least `min(floor, H)` and at most the chunk, always a pr
     decided by majority`, `switch tie keeps the value in effect`, `switch without a majority`.
   - Majority, not plurality: 2 of 5 closing first do not decide. With K = 2 any disagreement after the floor ends it.
 
-## Failure handling
-| Case | What happens | Pinned by |
-|---|---|---|
-| One wrong sample | outside the switch majority or far from its mean → never committed | `test_an_outlier_is_never_the_committed_candidate`, `test_closed_loop_consensus_rejects_a_minority_perception_failure` |
-| Disputed switch beyond / inside the floor | stops before it / majority decides, commitment = floor (no livelock) | `test_disputed_switch_beyond_the_floor_…`, `test_disputed_switch_inside_the_floor_…` |
-| Even-K tie | value in effect kept; at step 0 the robot's switch | `test_even_k_tie_…`, `test_a_tie_at_the_first_step_…` (both) |
-| Policy error | `errors`, `last_error`; back off `error_backoff_s` (0.5 s); guard holds | `test_policy_errors_are_counted_and_the_robot_holds` |
-| Request past its deadline | abandoned, re-requested at once | `test_a_request_gets_one_chunk_duration_and_a_timeout_is_retried_at_once` |
-| Policy slower than its chunk | chunk entirely past → `chunk_rejected`; robot never moves | `test_policy_slower_than_its_chunk_never_moves_the_robot` |
-| Stale chunk (revoked, superseded, lease over, wrong `dt` / shape) | `chunk_rejected` + reason | `test_a_chunk_in_flight_when_revoked_is_rejected` |
-| Deviation | `refill_now` → next step asks on the newest observation | `test_refill_now_requests_a_chunk_even_with_a_full_queue` |
-| Deviation of another command | ignored, `refill_ignored` + 1 | `test_a_refill_for_another_command_is_ignored_and_counted` |
-| Unbatched K samples | K calls → L ≈ K × one call → floor ≈ K× larger | `test_unbatched_samples_raise_the_floor_and_starve_only_when_the_chunk_is_too_short` |
-
 ## Configuration
 - `S1Runner(runtime, policy, latest, now, refill_s, poll_s=0.005, error_backoff_s=0.5, commit=FixedCommit(),
   latency_window=20, on_step, on_plan, deadline=True)`; `refill_now(cmd_id) → bool`.
@@ -104,11 +90,3 @@ Every policy commits at least `min(floor, H)` and at most the chunk, always a pr
 | XR-1 real time, F13 (`results/campaign/20261024-134629/F13`) | L estimate 0.9 s, floor 38 > 16-action chunk; 64 requests, 36 accepted, 13 timeouts; 651 of 985 ticks starved | valid (E24) |
 | π0.5² over the WAN, keep-alive (2026-10-21) | — | withdrawn: corrupted frames |
 | RTC / delay A/B with π0.5² (2026-10-22) | — | withdrawn: corrupted frames; not re-run |
-
-## Not validated
-- Consensus or phase commitment with a real stochastic policy (XR-1 or π0.5²).
-- K samples with XR-1: `HistoryPolicy` has no `act_samples`, so K samples are K round trips (the unbatched case), and
-  `XR1Policy` has no batched draw.
-- XR-1 in real time needs S1 next to the robot or a policy that uses the continuation.
-- `last` is the last applied action, not the last queued one; queued actions due before the chunk takes over are not
-  seen (switches are frozen outside running chunks anyway).

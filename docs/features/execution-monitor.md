@@ -73,13 +73,3 @@ runtime, guard and loop (50 Hz, first-order lag + sensor noise, window 10, segme
 |---|---|---|
 | Scripted S1 calibration (`results/monitor/skills-20261021/monitor.json`: window 0.5 s, segment 5 s, α 0.1, 12 segments) | threshold 2.54; residual scale ≈ 2.9 cm (the runs press into contact while grasping) | stands: the scripted S1 reads simulator poses, not images (rule of E15) |
 | 2 s block during a grasp phase (scenario `blocked`) | peak score 2.15 < threshold 2.54: not detected | same; decisions 2026-10-21 |
-
-## Limits and open items
-- Contact-blind: one threshold cannot separate intended contact from a fault; contact in calibration runs inflates it.
-  Open: contact-aware calibration from a real signal (perception, force, world-model prediction), no hand tuning.
-- Never calibrated or run with XR-1 (or π0.5² on clean frames).
-- Calibration refuses runs below real-time factor 0.98, but lockstep runs with a remote S1 run slower than real time
-  (XR-1 parity: 0.601), so lockstep recordings cannot calibrate it as built.
-- Position only on PandaOmron (no orientation, no base).
-- Spurious numpy matmul `RuntimeWarning` in the RoboCasa env (numpy 2.2.5 pin; results equal `einsum`; decisions
-  2026-10-21).
