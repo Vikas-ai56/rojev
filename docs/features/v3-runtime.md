@@ -1,13 +1,5 @@
 # v3 runtime core: messages, execution runtime, guard, control loop, state owner, S2 worker
 
-Code: `rojev/protocol/`, `rojev/robot/action_spec.py`, `rojev/control/` (execution, guard, loop, robot_backend),
-`rojev/owner/state_owner.py`, `rojev/system2/` (decider, worker, planning), `rojev/eval/deciders.py`.
-Spec: `docs/plan/v3-v1-spec.md` §3–6, §13–14.
-Elsewhere: S1 supply and commitment → [`s1-supply-and-commitment.md`](s1-supply-and-commitment.md) · monitor →
-[`execution-monitor.md`](execution-monitor.md) · walkthroughs with line refs → [`system1-map.md`](system1-map.md),
-[`system2-map.md`](system2-map.md) · Jev → [`jev-interaction.md`](jev-interaction.md) · live entrypoint →
-[`live-harness.md`](live-harness.md).
-
 ## Threads
 ```
 ControlLoop (20 Hz)  Guard.step → ExecutionRuntime.tick → backend.step → newest Capture
@@ -111,23 +103,14 @@ StateOwner           events + 50 ms tick → accept / renew / review / revoke; d
 - `CommitVerifyPlanner` (`system2/planning.py`, `--arm commit`): pins S1's planned subtask until a checked step event,
   else releases after `max_commit_s`. With MJev out (decisions 2026-10-22) only the bound releases it.
 
-## Tests (no models; `uv run pytest`, re-run 2026-10-24: 329 passed, 1 skipped, 2 `timing` deselected)
-| File | Tests | Pins |
-|---|---|---|
-| `tests/test_control_execution.py` | 34 | rejection reasons, activation, skip, revoke of a queued release, irreversible gating, leases (also starved), transitions, supersede, blend in bounds, upstream-only violations, review, decelerating hold, starvation, guard paths, PandaOmron spec, `queued_from` |
-| `tests/test_owner.py` | 45 | refusal reasons, review / revoke / reaffirm, ACK fallback incl. `dropped`, COMPLETE, deviations, two lanes, deferral replay, unanswered hold + recheck, late answers, keyframes, holds, dialogue, step events, review window = deadline; live multi-thread runs |
-| `tests/test_system2_planning.py` | 4 | commit-and-verify: commit, release only on a checked event, bound, no re-commit |
-| `tests/test_architecture.py` | 3 | imports point down the stack; nothing depends on `legacy_v2` |
-Runner and timing tests: [`s1-supply-and-commitment.md`](s1-supply-and-commitment.md).
-
-## Measured live (RoboCasa on the Mac, `executors/robocasa-pi052/realtime.py`)
+## Measured live (RoboCasa)
 | Run | Result | Status |
 |---|---|---|
 | XR-1 + Jev, lockstep with S2 paused, "wait" / "go on" (2026-10-23) | wait at 3.05 s, resume 6.05 s, success 10.5 s; with S2 not paused both answers were late | valid (decisions 2026-10-23) |
-| XR-1 real time, F13 (`results/campaign/20261024-134629/F13`) | real-time factor 0.806, 651 of 985 ticks starved, no success | valid (E24) |
-| Live rerun of late answers, 0.3 s deadline (`results/campaign/20261024-rerun/`) | both late answers applied, not re-decided; stop / go on ×2: 4 / 4 | valid (E30) |
+| XR-1 real time, F13 | real-time factor 0.806, 651 of 985 ticks starved, no success | valid (E24) |
+| Live rerun of late answers, 0.3 s deadline | both late answers applied, not re-decided; stop / go on ×2: 4 / 4 | valid (E30) |
 | Stand-in `wiggle` S1, review vs revoke (2026-10-20, decisions "Step 4.1 built") | review: no pause after a change of mind; revoke: a 0.3 s stop | before the render fix; the stand-in ignores images, so the mechanism result stands (rule of E15) |
-| π0.5² over the WAN (2026-10-21, `results/runs/pi052-live-*`) | — | withdrawn: corrupted frames. The bug it exposed (switch dims regressed as numbers, 486 violation ticks) stands, fixed by `to_action_space` (decisions 2026-10-21) |
+| π0.5² over the WAN | — | withdrawn: corrupted frames. The bug it exposed (switch dims regressed as numbers, 486 violation ticks) stands, fixed by `to_action_space` (decisions 2026-10-21) |
 
 ## Open / not validated
 - No completion signal: XR-1's native planner never yields COMPLETE, so a finished task keeps running (run 5, E25).

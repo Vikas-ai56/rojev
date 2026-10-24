@@ -6,8 +6,7 @@ Code: `rojev/system2/jev/` (`acts`, `chooser`, `interaction`, `task_choice`, `ca
 
 ## Roles (decisions 2026-10-21 / 22)
 - S1 (XR-1 in v1) picks its own steps and moves; Jev answers only changes (user speech, a motion deviation).
-- Interaction lane = `JevInteraction` over OneJev; planning lane = `NativePlanner` or a baseline. MJev is out of the
-  v1 loop (failed the done-check gate).
+- Interaction lane = `JevInteraction` over OneJev; planning lane = `NativePlanner` or a baseline. 
 - Jev is stateless: holds, dialogue and progress come from the snapshot (the owner's record).
 
 ## Flow of one change
@@ -87,28 +86,6 @@ user speaks → owner: rev+1, user turn, ACK said, moving command under review u
   --jev-calibration FILE --hold-recheck S --record-interaction DIR` ([`live-harness.md`](live-harness.md)).
 - Service JSON: `onejev: {url}` (qev over the tunnel). Spoofs (`harness/deciders.py`): `KeywordChooser` (scores; a
   deviation reads as wait), `RewriteReviser` (the scripted S1 needs step text).
-
-## Tests (2026-10-24)
-| File | Pins |
-|---|---|
-| `tests/test_system2_jev.py` (24) | legal acts per situation, budgets, each act's operation, resume, bad motion holds, effect hesitation, abstention → ask → wait, wait while holding, dwell, wait budget, unanswered hold decided on recheck, trained sentence on revise, none / low margin, distinct sentences, neutral ids, temperature and margin fit, model inputs, owner + Jev stop → go on |
-| `tests/test_owner.py` (45) | holds, dialogue, utterances, late answers applied as decided, no recheck while awaited |
-| `executors/robocasa-pi052/tests/test_harness.py` (9) | keyword Jev answers like the rules; both questions recorded as cases; held-out decided accuracy |
-
-## Evidence
-- 2026-10-22 GPU suite: two owner bugs found and fixed (review lease expired before the answer; utterances replaced
-  the task text).
-- 2026-10-23 interactive runs 1–5 (E25): remarks and typos became S1's prompt, trained tasks not offered, finished task
-  resumed → v1 interactive testing stopped; REVISE over trained sentences and one act per effect built 2026-10-24.
-- **2026-10-24 campaign (E27, `results/campaign/20261024-134629/analysis.md`)**: 82 lines, 55 pass, 2 unsafe ("ruko" →
-  revise to the faucet task; "go on" after success → resumed the finished task), 24 safe misses, 1 unanswered (F12, by
-  design). Misses: "stop" 3/9 (abort vs wait split → ask); listed new tasks 6/14 (act abstained, or the task question
-  tied on shared words); a status question → abort; remarks with fillers → ask. Never revised on unlisted, gibberish,
-  negated or vague lines; never sent the user's words to S1. Jev wall time p50 961 ms (one question), 2121 ms (two).
-- **Effect hesitation (E28 offline replay; E30 live, `results/campaign/20261024-rerun/report.md`)**: stop / go on ×2
-  4/4 (was 2/4); "ruko" asks; one "stop" resolves to wait (holds, no question); "go on" after success still resumes
-  the finished task; with a 0.3 s deadline both late answers were applied, not re-decided; in-loop latency ~930 ms
-  (the server drops idle connections after ~5 s).
 
 ## Not validated / open
 - A fitted calibration on held-out runs (needs labelled runs in ≥ 2 scenes).

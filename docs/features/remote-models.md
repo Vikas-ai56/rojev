@@ -5,14 +5,11 @@ Code: `rojev/transport/` (`open_transport`, `HttpTransport`, `H3Transport`, `End
 ## Services
 | Service | Role | Endpoints | Auth | Server | Client |
 |---|---|---|---|---|---|
-| π0.5² (`executors/robocasa-pi052/serve.py`) | S1 | `POST /act` (wire v3, K samples, optional continuation), `POST /reset`, `GET /health` | bearer token (`Endpoint`, before the body) | `serve_policy`: HTTP/1.1 127.0.0.1; with `--h3-port`: HTTP/3 UDP 0.0.0.0 | `RemotePolicy` |
 | XR-1 (`executors/robocasa-xr1/serve.py`) | S1 (current RoboCasa S1) | same as π0.5² | bearer token (`Endpoint`) | `serve_policy`, HTTP/1.1 only (no `--h3-port` flag) | `RemotePolicy` inside `HistoryPolicy` |
 | OneJev (`qev serve`) | S2 decision (Jev chooser, `--verify onejev`) | qev API | none | uvicorn, 127.0.0.1 (`--host 127.0.0.1` mandatory) | `onejev.KeptClient` (one kept connection) |
-| MJev (`serve_mjev.py`) | S2 evidence; out of the v1 loop | `POST /ask` (JSON, base64 PNG images + questions), `GET /health` | bearer token (own check) | own threaded HTTP/1.1, 127.0.0.1 | `RemoteMJev` (`rojev.transport`) |
 | SAM 2.1 (`serve_sam2.py`) | masks for measurement; not in the loop | `POST /segment`, `/track/start`, `/track/step`, `/track/end`, `GET /health` | bearer token (own check) | own threaded HTTP/1.1, 127.0.0.1 | `RemoteSam2` (`rojev.transport`) |
 - Every service reaches the Mac through an SSH tunnel made by `scripts/gpu_setup.sh`; only `serve_policy` services can add HTTP/3, and no hook does.
 - `--idle-min` (code default 30; the GPU hooks pass 600) exits after that long without requests; qev has no idle exit. `MAX_BODY` 32 MB on π0.5², XR-1 and MJev.
-- π0.5² `serve.py --planner-memory`: its own memory head on (`GenerationConfig.enable_memory`), reported by `/health`; off by default (decision 2026-10-22; its A/B, E19, is withdrawn: corrupted frames, not re-run).
 - XR-1: the RoboCasa365 checkpoint behind our wire, never its upstream pickle socket; history-encoded observation (`<cam>@k`, k = 0 oldest, 4 frames 2 ticks apart, + stacked `agent_pos`) → its prompt and processor → 16 × 12 raw actions, mapped into the action space on the robot side (`embodiment.to_action_space`); stateless, so a retried request answers the same. Measured on the A100: 10.2 GB, ~40 ms preprocess + 275–290 ms inference per query (E23).
 
 ## Transport (`rojev/transport/`; depends on nothing else in rojev)
@@ -63,36 +60,10 @@ Setup (2026-10-21): A100 40 GB box in Ashburn VA (`lambda`, since terminated), M
 - One request ≥ one ping; distance dominates. At L ≈ 0.57 s the commitment floor is ~24 of 50 actions ([`s1-supply-and-commitment.md`](s1-supply-and-commitment.md)).
 
 ## Default and why
-- Decided (decisions 2026-10-21): HTTP/1.1 keep-alive + WebP-90. Best p50 and tail in the WAN run; WebP within sampling noise; ~6× fewer bytes → fewer packets, fewer loss episodes. HTTP/3 kept: aioquic was inconsistent across runs and not better here.
-- In code: `gpu_setup.sh` writes `http://127.0.0.1:<port>` (keep-alive); `RemotePolicy` defaults to `wire.DEFAULT_CODEC` (WebP-90); a `"codec"` key in the service JSON entry overrides it (`service_addresses` → `RemotePolicy(**entry)`).
+- Decided: HTTP/1.1 keep-alive + WebP-90. Best p50 and tail in the WAN run; WebP within sampling noise; 
 
 ## Not done
 - Streamed frames and server-pushed chunks (removes one one-way trip); a native QUIC stack (quiche / msquic); a closer GPU region.
 - HTTP/3 in the GPU setup: no certificate, UDP rule or `cert_pem` entry is made; started by hand.
 - OneJev server keep-alive: `qev serve` calls `uvicorn.run` without `timeout_keep_alive` (`vendor/OneJev/qev/cli.py:135`), so uvicorn's 5 s default drops a connection idle ~5 s (E30) and `KeptClient` reconnects between decisions seconds apart (in the loop ~930 ms, not 604); qev exposes no flag for it (decision 2026-10-24: fix on the server side, no client ping).
 - Shared prefix across K draws (needs a LeRobot entry point that takes a prefix cache).
-- MJev and SAM 2 on `Endpoint` (replay cache, admission before the body): not done (own servers); neither is in the v1 loop.
-- Not validated: codec check at scale (8 frames); batched K inference-only numbers (below).
-
-## Batched K: measured so far, still to measure
-- First WAN numbers (`gpu_suite.py` `k_samples`, 2026-10-22, π0.5² + MJev + OneJev resident, `results/gpu-suite/20261022-163931/suite.md`): round trip p50 / p90 763 / 938 ms (K = 1), 919 / 1059 (K = 3), 1165 / 1236 (K = 5); GPU memory 32.6 → 33.0 → 33.6 GB. Its draw spread came from a frame taken before the render-context fix (E16 behaviour withdrawn): not evidence.
-- Still to measure: on the box over loopback (inference only) and from the Mac, ≥ 10 recorded frames, three cameras, WebP-90, K ∈ {1, 3, 5} interleaved, 30 requests per K, both modes (given subtask, planner); server stage times, p50 / p90, `torch.cuda.max_memory_allocated`.
-- Diversity: per frame, mean pairwise distance between the K chunks (actions 0–5) vs independent K = 1 calls on the same frame (0.070 baseline); batched draws must match independent ones.
-- Consequence: L(K) → floor ⌈2L/dt⌉ + 1 vs the chunk; `S1Stats.floor_over_chunk` must stay 0 for the K chosen.
-
-## Security
-- Tokens: made on the Mac, sent to the box only inside the SSH-streamed script, read by the service from `ROJEV_TOKEN` (launcher reads the token file); never on a command line or printed.
-- HTTP/3: pinned self-signed certificate (no public CA; no other server can stand in) + bearer token; binds all interfaces, so it needs the cloud firewall's UDP port.
-- HTTP/1.1 services and qev bind loopback only; the SSH tunnel is the only path (qev has no auth).
-- Request size and token: checked by `Endpoint.admit` on the headers, before any body is buffered, on both transports (HTTP/3 also stops a stream once its data passes the limit), so an unauthenticated client on the public HTTP/3 port cannot make the service buffer a body; `serve_mjev.py` checks the size before reading.
-
-## OneJev decision latency (E29, 2026-10-24, Mac in India → A100 40 GB box over the SSH tunnel)
-| part (3 cameras, 256 × 256, JPEG q95 ~26 kB each) | ms |
-|---|---|
-| qev server: render + one forward pass (images ~74 tokens / ~20 ms each) | 75–140 |
-| one round trip (kept connection, `/health`) | ~270–345 |
-| image upload (3 images vs none, kept connection) | ~215 |
-| extra round trip of a new connection per request (qev `Client` uses `urlopen`) | ~650 |
-- `KeptClient` (qev's `Client` with `_post` / `_get` over one kept `http.client` connection, requests serialised, a broken connection reopened and the request sent once more): median 1269 → 604 ms per decision, probabilities identical (6 recorded cases). Every OneJev call site uses it (decision 2026-10-24).
-- Smaller images rejected: JPEG q85 / q75, WebP q90 / q80 (8–15 kB) changed the top option in 1 / 6 cases; only WebP q80 was clearly faster (428 vs 533 ms). Next: frames sent ahead and referenced by path (qev reads `path` media).
-- Two questions (act, then task) are two requests today (+~1.1 s); qev answers several questions over one shared image prefix in one request.
