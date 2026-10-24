@@ -284,6 +284,13 @@ class ExecutionRuntime:
         with self._lock:
             return None if self.last is None else self.last.copy()
 
+    def queued_from(self, cmd_id: int, t: float) -> np.ndarray | None:
+        """The queued actions of `cmd_id` due at or after `t`, in time order, as the chunks gave them (before blends
+        and bounds); None if there are none."""
+        with self._lock:
+            actions = [e.action for e in self._queue if e.cmd_id == cmd_id and e.t >= t - self.spec.dt / 2]
+        return np.stack(actions) if actions else None
+
     def queued_until(self, cmd_id: int) -> float | None:
         """Due time of the last queued action of `cmd_id` (None if nothing is queued for it)."""
         with self._lock:

@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from rojev.protocol import Observation
-from rojev.system1 import ActionChunk, RemotePolicy, wire
+from rojev.system1 import ActionChunk, Continuation, RemotePolicy, wire
 from rojev.transport import Endpoint, H3Server, HttpServer, HttpTransport, make_certificate, open_transport
 from rojev.transport.endpoint import REQUEST_ID, ReplayCache
 from rojev.transport.h3 import ServiceError
@@ -351,6 +351,13 @@ def test_wire_is_versioned_and_carries_k_samples():
                         samples=np.array(1))
     with pytest.raises(ValueError, match="wire version 1"):
         wire.decode_request(buf.getvalue())
+
+
+def test_wire_carries_a_continuation_when_given_and_none_otherwise():
+    prefix = np.arange(24, dtype=np.float32).reshape(8, 3)
+    request = wire.decode_request(wire.encode_request(obs(), "s", 1, continuation=Continuation(prefix, 3)))
+    assert np.array_equal(request.continuation.actions, prefix) and request.continuation.delay_steps == 3
+    assert wire.decode_request(wire.encode_request(obs(), "s")).continuation is None
 
 
 def test_webp_codec_round_trips_within_a_few_levels_and_is_the_default():

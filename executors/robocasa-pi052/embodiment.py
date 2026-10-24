@@ -40,3 +40,15 @@ class PandaOmronEffect(EffectModel):
 
 
 ARM_DIMS = (0, 1, 2, 3, 4, 5, 10)
+
+
+def to_action_space(actions: np.ndarray) -> np.ndarray:
+    """Policies regress PandaOmron's on/off switches (gripper, base mode) as numbers (π0.5² overshoots ±1 slightly,
+    measured up to 1.018); the robot takes them as switches. Map each to the level RoboCasa's own gym wrapper uses
+    (robocasa/wrappers/gym_wrapper.py:125,137: below the threshold → low, else → high), so the chunk is in the
+    robot's action space; continuous dimensions are left as the policy produced them."""
+    out = actions.copy()
+    for i, d in enumerate(PANDA_OMRON.dims):
+        if d.threshold is not None:
+            out[:, i] = np.where(out[:, i] >= d.threshold, d.high, d.low)
+    return out

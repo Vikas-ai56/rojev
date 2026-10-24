@@ -371,3 +371,57 @@ def test_a_request_gets_one_chunk_duration_and_a_timeout_is_retried_at_once():
     t0 = sim.clock.t
     assert sim.runner.step() and sim.runner.stats.timeouts == 1 and sim.runner.stats.errors == 0
     assert sim.clock.t == t0 and policy.deadlines[-1] == pytest.approx(20 * DT)
+
+
+class ContinuingPolicy(StandInPolicy):
+    """Records each continuation it is given."""
+
+    accepts_continuation = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.continuations = []
+
+    def act(self, obs, subtask, timeout_s=None, continuation=None):
+        self.continuations.append(continuation)
+        return super().act(obs, subtask, timeout_s)
+
+
+def test_a_continuing_policy_gets_the_queued_actions_from_its_observation_and_the_latency_in_steps():
+    """No continuation before a latency is measured; afterwards the actions still queued from the capture on, of
+    which ⌈L/dt⌉ run before the chunk lands."""
+    sim = Sim(latency_s=0.1, horizon=20, refill_s=0.3)
+    sim.policy = ContinuingPolicy(0.1, 20, think=sim.think)
+    sim.runner.policy = sim.policy
+    sim.go()
+    sim.run(1.0)
+    first, later = sim.policy.continuations[0], [c for c in sim.policy.continuations[1:] if c is not None]
+    assert first is None and later and sim.runner.stats.continuations == len(later)
+    c = later[0]
+    assert c.delay_steps == round(0.1 / DT) and c.actions.shape[1] == SPEC.size
+    assert len(c.actions) >= c.delay_steps and c.actions[0, 0] > 0
+
+
+def test_a_policy_that_cannot_continue_is_never_given_a_continuation():
+    sim = Sim(latency_s=0.1, horizon=20, refill_s=0.3)
+    sim.go()
+    sim.run(1.0)
+    assert sim.policy.calls >= 3 and sim.runner.stats.continuations == 0
+
+
+def test_without_a_deadline_a_request_carries_no_timeout():
+    """Lockstep: the robot clock stands still while the policy thinks, so no answer can be stale."""
+    timeouts = []
+
+    class Timed(StandInPolicy):
+        def act(self, obs, subtask, timeout_s=None):
+            timeouts.append(timeout_s)
+            return super().act(obs, subtask, timeout_s)
+
+    sim = Sim(latency_s=0.1, horizon=20, refill_s=0.3)
+    sim.policy = sim.runner.policy = Timed(0.1, 20, think=sim.think)
+    sim.runner.deadline = False
+    sim.go()
+    sim.run(1.0)
+    assert len(timeouts) >= 2 and all(t is None for t in timeouts)
+
