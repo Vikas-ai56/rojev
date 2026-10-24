@@ -91,6 +91,21 @@ driver_install() {
   echo "kernel module $module_version, utils branch $utils_branch"
 }
 
+whole_gpu_ready() {
+  local mode
+  mode=$(nvidia-smi -i 0 --query-gpu=mig.mode.current --format=csv,noheader 2>/dev/null | tr -d ' ')
+  [[ "$mode" != "Enabled" ]]
+}
+
+whole_gpu_apply() {
+  require_sudo
+  if [[ -n "$(gpu_apps)" ]]; then
+    echo "MIG is enabled and GPU processes are running ($(gpu_apps)); not changing the GPU mode" >&2
+    return 1
+  fi
+  sudo -n nvidia-smi -i 0 -mig 0
+}
+
 packages_ready() {
   dpkg -s "${APT_PACKAGES[@]}" >/dev/null 2>&1
 }
