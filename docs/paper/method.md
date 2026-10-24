@@ -1,7 +1,6 @@
 # Method: the system as built (2026-10-24)
 
-Source of truth for mechanisms: the code under `rojev/` and `docs/features/` (system1-map, system2-map,
-jev-interaction, v3-runtime). Measured numbers live in `experiments.md`; here each mechanism cites the fact behind it.
+Mechanisms verified against `rojev/` and `docs/features/`; numbers live in `experiments.md`, cited here by source.
 
 ## Terms (defined once)
 | Term | Meaning |
@@ -23,46 +22,45 @@ jev-interaction, v3-runtime). Measured numbers live in `experiments.md`; here ea
 
 | Guarantee | Mechanism (section) |
 |---|---|
-| Every line is acknowledged before any model answers | owner says `ACK` on receipt (§4) |
+| Every user line is acknowledged before any model answers | owner says `ACK` on receipt (§4) |
 | Speaking does not stop the robot by itself | the moving command goes *under review*: keeps moving, gripper frozen (§3, §4) |
 | A change nobody understood never moves the robot | no answer by the deadline → hold and say so (§4) |
 | A stop stays a stop | holds stand until a later change; no planner can restart the task (§4) |
 | The user's words never become S1's prompt | a new task is one of S1's trained sentences, chosen verbatim (§5) |
 | Nothing stale moves the robot | late actions skipped, revoked commands' actions dropped, epoch on every message (§3) |
-| Gripper changes only inside a running, unreviewed chunk | irreversible-switch gating (§3) |
-| A dead model, network or owner leaves the robot holding still | guard watchdog and owner heartbeat (§3) |
+| The gripper changes only on a running, unreviewed command's chunk | irreversible-switch gating (§3) |
+| A dead model, network or owner leaves the robot holding still | guard watchdog, owner heartbeat, command leases (§3) |
 | Questions are bounded | at most 2 per dialogue, never two in a row (§5) |
 
 Not yet (v1 limits): knowing a task is done; starting a task not on the trained list; checking a task can run in
-this scene; answering status questions ("are you done?"). Campaign 2026-10-24 found each one (`jev-interaction.md`).
+this scene; answering status questions ("are you done?") (`jev-interaction.md`, `campaign.md`).
 
 ## 2. Architecture at a glance
 ```
-user ─▶ Owner ─snapshot─▶ interaction lane: Jev (OneJev)      planning lane: NativePlanner (S1 plans its own steps)
-          ▲  └──────────────── proposals ◀─────────────────────────────┘
-          │ ACKs     │ commands (accept · renew · review · revoke)
-          │          ▼
+user ─▶ Owner ──snapshot──▶ interaction lane: Jev on OneJev   |   planning lane: NativePlanner (S1 plans steps)
+          ▲ ◀─────────────── proposals ──────────────────────────────────────┘
+          │ ACKs   │ commands (accept · renew · review · revoke)
+          │        ▼
        Execution runtime ◀─ timed chunks ─ S1 runner ◀─ XR-1 / π0.5² (remote GPU)
-          ▼
-       Guard → control loop (20 Hz) → robot ─ newest camera frame ─▶ S1 runner, owner snapshots
+          │
+       Guard → control loop (20 Hz) → robot ─ newest frame ─▶ S1 runner, owner snapshots
 ```
-- One-way dependencies: protocol → robot → control → system1 / system2 → owner → eval (`tests/test_architecture.py`).
-- S2 reaches the robot only through owner commands; S1 never changes the task (`docs/architecture.md` rules 1–4).
+- S2 reaches the robot only through owner commands; S1 never changes the task; imports point one way
+  (protocol → robot → control → system1 / system2 → owner → eval, `tests/test_architecture.py`).
 
 ## 3. Execution runtime and guard: what keeps it safe
 **Runtime** (`control/execution.py`): the only authority on what is physically active.
 - Proposal ≠ command ≠ active: a moving command is *pending* until its first action is applied (ACK `activated`);
   wait / ask / abort hold at once. Why: the owner's record matches the robot, never a guess.
-- Refuses stale input: wrong epoch, revoked or older command, lapsed lease, wrong control period or shape.
+- Refuses stale input: wrong epoch, revoked or older command, lapsed lease, wrong control period or shape. Revoke
+  drops a command's queued actions at once (a queued release never happens).
 - Chunks are placed at their observation's time; actions already due are skipped, never replayed; a new chunk replaces
   the queue from its first due time. Why: a slow model costs its latency, never stale motion.
 - Review: after the user speaks the command keeps reversible motion, irreversible switches freeze, its lease shrinks
-  to the answer deadline. Why: no needless stop, no grasp or release on a goal that may be changing.
-- Irreversible switches (gripper) change only on a chunk action of a running, unreviewed command.
-- Revoke drops the command's queued actions at once (a queued release never happens).
-- Blends: each new segment decays the jump over 0.2 s (quintic); holds decelerate (0.3 s in the RoboCasa executor).
-- Bounds: incoming actions clamped and reported as upstream violations; the runtime's own blends are projected
-  silently (decision 2026-10-21: blends had been misreported as faults).
+  to the answer deadline. Why: no needless stop, no grasp or release on a goal that may be changing. Outside review,
+  irreversible switches (gripper) still change only on a chunk action of a running command.
+- New segments blend over 0.2 s; holds decelerate. Incoming out-of-bound actions are clamped and reported upstream; the
+  runtime's own blends are projected silently (decision 2026-10-21: blends had been misreported as faults).
 
 **Guard** (`control/guard.py`), inside the control loop, works if every thread above it is dead:
 - owner heartbeat older than 2 s → hold, commands dropped (`dropped` ACK: the owner must re-issue);
@@ -73,7 +71,7 @@ user ─▶ Owner ─snapshot─▶ interaction lane: Jev (OneJev)      planning
 immediate S1 refill. Contact-blind: a deliberate press and a blocked arm look alike (decision 2026-10-21).
 
 ## 4. State owner: single writer of intent (`owner/state_owner.py`)
-- One thread, one event queue, a 50 ms tick; never waits for a model.
+- One thread, one event queue, a 50 ms tick; never waits for a model. Commands become active only on the runtime's ACK.
 - User line: revision + 1, dialogue turn, `ACK` said, moving command under review, interaction lane asked. The task
   text is unchanged until an accepted decision carries new text (decision 2026-10-22: "wait" had become S1's task).
 - Two lanes: changes (user line, deviation, hold recheck) → interaction; heartbeat and step events → planning.
@@ -88,7 +86,6 @@ immediate S1 refill. Contact-blind: a deliberate press and a blocked arm look al
   (decision 2026-10-22: an unread "stop" could move the robot).
 - Late answer: awaited, then applied to the situation it was decided on; "continue" re-issues the operation in force
   then. Why: OneJev took 1.1–1.5 s, so every change cost two decisions (decision 2026-10-24).
-- Progress keyframes: a step moved past is recorded with the observation the judgement used.
 
 ## 5. Jev v1: two typed questions (`system2/jev/`)
 Stateless: everything comes from the owner's snapshot. Per change:
@@ -100,6 +97,7 @@ Stateless: everything comes from the owner's snapshot. Per change:
    | idle | continue · revise · ask · abort |
    | held | resume (if a command was interrupted) · continue (= keep holding) · revise · ask · abort |
    | motion deviation | continue · wait |
+
    No retry: XR-1 takes only a task sentence, so a retry equals continue (decision 2026-10-24).
 2. **Question one (act)**: one OneJev Choice; inputs = every camera as its own image + task, what the user just said,
    current step, steps done, dialogue, hold. Options are neutral ids worded as what the user wants (live 2026-10-22:
@@ -114,8 +112,8 @@ Stateless: everything comes from the owner's snapshot. Per change:
    cases reach a target accuracy; written only if held-out runs reach that target. Today none ships: T = 1, margin
    0.2 are declared constants (the 2026-10-23 fit was withdrawn: one scene, no held-out set).
 - Latency: one OneJev decision median 604 ms on a kept connection, 75–140 ms of it on the server (decision 2026-10-24).
-- Measured (campaign, before step 3 was added): 82 user lines, 55 right, 2 unsafe, 24 safe misses; never revised on
-  unlisted, gibberish or negated lines (`jev-interaction.md`).
+- Measured (campaign, before step 3 was added): 82 user lines, 55 right, 2 unsafe, 24 safe misses, 1 unanswered by
+  design; never revised on unlisted, gibberish or negated lines (`jev-interaction.md`).
 
 ## 6. S1 supply: chunks at observation time (`system1/runner.py`, `commit.py`)
 - Latency L = observation age when its chunk is submitted, the largest of the last 20 requests.
@@ -128,10 +126,9 @@ Stateless: everything comes from the owner's snapshot. Per change:
   (opt-in, not validated on a real policy).
 - Continuation: the actions that run during inference are sent only to a policy that accepts them (π0.5² with
   real-time chunking); XR-1 does not.
-- Model specifics stay in the executor: XR-1's 4-frame history (2 ticks apart) and the switch mapping to the robot's
-  action space. The server is stateless, so a retried request answers the same.
-- Remote path: one kept HTTP connection, WebP-90 frames, request ids with a server replay cache (each request runs
-  at most once), token and size checked before the body (`remote-models.md`).
+- Model specifics stay in the executor (XR-1's 4-frame history, the switch mapping to the robot's action space).
+- Remote path: one kept connection, WebP-90 frames, request ids + a server replay cache (each request runs at most
+  once), token and size checked before the body (`remote-models.md`).
 - Measured: XR-1 lockstep parity 18/20 on its published test cases vs 20/20 reported; request p50 511 / p90 731 ms
   against a 0.8 s chunk, so in real time over the WAN supply is the bottleneck (`system1-map.md` §12).
 
@@ -151,6 +148,7 @@ Stateless: everything comes from the owner's snapshot. Per change:
 | `ActionSpec` | per action dimension: bounds, hold value (or keep last), switch threshold, irreversible | runtime, guard, commitment |
 | `EffectModel` | which measured numbers an action should move, and their resolution | execution monitor |
 | Backend | `observe` / `step`, or a `rojev.robot.Robot` with its own clock (`joint_target_spec`) | control loop |
+
 - Built: RoboCasa PandaOmron (Franka on a mobile base, 12-D, 20 Hz) in simulation; MuJoCo SO-101 with joint
   targets, exercised in tests with a stand-in S1 (no learned SO-101 policy).
 - Not built: a shared assembly layer (`rojev/app`, spec only); any hardware run.
@@ -159,8 +157,8 @@ Stateless: everything comes from the owner's snapshot. Per change:
 - Protocol: a command may carry a step sentence (`Operation.subtask`); none = S1 sequences its own steps.
 - XR-1 (default) receives the whole task sentence and sequences internally; it reports no steps.
 - Planning-lane sequencers exist for step sentences: scripted (time budgets), oracle (simulator truth, evaluation
-  only), commit-and-verify (pins a self-planning S1's chosen step until a check confirms it).
-- Progress: step events trigger the planning lane; keyframes keep steps done across revisions.
+  only), commit-and-verify (pins a self-planning S1's chosen step until a check confirms it). Step events trigger the
+  planning lane; keyframes keep steps done (with the observation judged) across revisions.
 - Gap: no reliable step-done signal (MJev 0.50 / 0.45, OneJev 0.52 balanced accuracy on 222 labelled frames;
   decision 2026-10-22). Composite sequencing with XR-1: not validated.
 

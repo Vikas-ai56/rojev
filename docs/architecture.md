@@ -3,7 +3,7 @@
 Binding rules for all code. Sources: `plan/jev_helix_implementation_plan.pdf` (pp.1–18), the review amendments in `plan/v3-roadmap.md` §2, `plan/v3-v1-spec.md`, and `decisions.md` (2026-10-20 entries). Code map: `CODEBASE.md`.
 
 ## Roles
-1. **Two systems, separate jobs.** S1 (visuomotor policy, e.g. π0.5²) answers *how do I do the current step from what I see now*. S2 (Jev = OneJev typed choices + MJev spatial evidence) answers *is the goal still right, what next, do I need more evidence*. Jev never emits motor actions; S1 never changes the user's goal.
+1. **Two systems, separate jobs.** S1 (visuomotor policy: XR-1 by default, π0.5² supported) answers *how do I do the current step from what I see now*. S2 (Jev = OneJev typed choices; MJev and trackers measured, not in the v1 loop) answers *is the goal still right, what next, do I need to ask*. Jev never emits motor actions; S1 never changes the user's goal.
 2. **One state owner.** The only writer of instruction revision, desired command, evidence/progress and outstanding jobs. It never blocks on inference.
 3. **Advice is evidence, not authority.** Slow workers (deep models, advisors) return dated evidence; only the owner turns proposals into commands.
 
@@ -14,7 +14,7 @@ Binding rules for all code. Sources: `plan/jev_helix_implementation_plan.pdf` (p
 7. **Elapsed actions are skipped, never replayed.** A new chunk replaces the queue from its first due time; segments are blended.
 
 ## Time
-8. **Each layer runs on its own clock.** The control loop never waits for a model; S1 and S2 run asynchronously. In simulation, `realtime` mode keeps physics running during inference (all timing results); `lockstep` is for deterministic tests and data generation only.
+8. **Each layer runs on its own clock.** The control loop never waits for a model; S1 and S2 run asynchronously. In simulation, `lockstep` (simulated time stops while any model thinks) is the evaluation mode while the models run on a remote GPU (decision 2026-10-23); `realtime` keeps physics running during inference and measures responsiveness; hardware runs real time only.
 9. **Latency is measured per path**: event → ACK, event → guarded response, event → new goal; never a single number.
 
 ## Safety

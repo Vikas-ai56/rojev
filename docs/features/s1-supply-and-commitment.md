@@ -1,88 +1,114 @@
-# S1 supply and commitment: runner, latency-derived floor, commitment policies (steps 2 + 4.2, 2026-10-20 / 21)
+# S1 supply and commitment: runner, latency-derived floor, deadline, continuation, commitment policies
 
-Code: `rojev/system1/runner.py` (`S1Runner`, `S1Stats`), `rojev/system1/commit.py` (`FixedCommit`, `PhaseCommit`, `ConsensusCommit`, `make_commit_policy`), `rojev/system1/policy.py` (`Policy.act`, `act_samples`), `rojev/control/execution.py` (`target`, `queued_until`, `submit`, `starved_ticks`). Tests: `tests/test_system1_runner.py` (14, 2 `timing`), `tests/test_system1_commit.py` (42). Spec: `docs/plan/v3-v1-spec.md` §14. Remote policy: [`remote-models.md`](remote-models.md); deviations: [`execution-monitor.md`](execution-monitor.md).
+Code: `rojev/system1/runner.py` (`S1Runner`, `S1Stats`), `rojev/system1/commit.py` (`FixedCommit`, `PhaseCommit`,
+`ConsensusCommit`, `make_commit_policy`), `rojev/system1/policy.py` (`Policy`, `ActionChunk`, `Continuation`),
+`rojev/control/execution.py` (`target`, `queued_until`, `queued_from`, `submit`, `starved_ticks`).
+Tests: `tests/test_system1_runner.py` (18 + 2 `timing`), `tests/test_system1_commit.py` (43). Spec:
+`docs/plan/v3-v1-spec.md` §14. Line-by-line walkthrough: [`system1-map.md`](system1-map.md) §5–6. Remote policy and
+services: [`remote-models.md`](remote-models.md).
 
-In short: S1 returns a chunk of actions; the commitment is how many of them the robot is committed to. Three policies: `FixedCommit` (default), `PhaseCommit`, `ConsensusCommit` (only when the user turns on `speculative_predict`). How short a commitment may be is set by the policy's latency, not by the policy.
+Terms: a **chunk** is the H actions one policy call returns; the **commitment** is the prefix the robot is committed
+to; L is the request **latency** (observation age when its chunk is submitted, robot clock).
 
-## Cycle (one `S1Runner.step`, own thread)
+## Cycle (one `S1Runner.step`; own thread, or once per tick in lockstep)
 1. `runtime.target()`: the pending command, else the active one while it moves (or is held "starved"); none → no request.
-2. Ask if `refill_now(cmd)` was taken for this command, nothing is queued for it, or `queued_until(cmd) − now ≤ lead_s()`.
-3. `latest()` = newest `Capture`; `obs.task` replaced by the command's `AcceptedGoal.instruction` (never the stale environment text); subtask = `operation.subtask`.
-4. `policy.act(obs, subtask)`, or `act_samples(obs, subtask, K)` when the commit policy has `samples` K > 1.
-5. `commit.plan(candidates, spec, floor, last)` → `Commitment(actions, chosen, reason, detail)`; `last` = `runtime.last_action()` (the action last applied).
-6. `TimedChunk(epoch, cmd, obs_id, t_start = capture.t, dt, committed actions)` → `runtime.submit`: action k due at `capture.t + k·dt`; actions already due are skipped, never replayed; the chunk replaces the command's queue from its first due time.
-7. Latency sample `now − capture.t` recorded (also when the chunk is refused).
+2. Request if `refill_now` was taken for this command, nothing is queued for it, or `queued_until − now ≤ lead_s()`.
+3. Newest `Capture`; its task replaced by the command's `instruction`; subtask = `operation.subtask` ("" = S1 plans).
+4. Continuation (see below) for a policy that `accepts_continuation`.
+5. `policy.act(…, deadline_s())`, or `act_samples(…, K)` when the commit policy has `samples` K > 1.
+6. `commit.plan(candidates, spec, floor, runtime.last_action())` → `Commitment(actions, chosen, reason, detail)`.
+7. `TimedChunk(t_start = capture.t)` → `runtime.submit`: elapsed actions skipped, the queue replaced from the first
+   due time; then L recorded.
+8. Subtask-less command and the chunk reports a subtask (π0.5² planner): `PlannedSubtask` posted; a change under the
+   same command → unchecked `StepEvent(source="s1-planner")`. XR-1 reports none.
 
 ## Who decides what
 | Who | Decides | Where |
 |---|---|---|
-| State owner | which command exists, its instruction, lease, review | `StateOwner` → `ExecutionRuntime.accept / renew / review / revoke` |
-| Runtime | which command needs chunks; accepts or refuses each chunk; one action per tick; counts starvation | `target`, `submit`, `tick`, `starved_ticks` |
-| Runner | when to ask, on which observation, how many samples, the floor | `S1Runner.step`, `lead_s`, `floor` |
+| State owner | which command exists, its instruction, lease, review | `StateOwner` → `accept / renew / review / revoke` |
+| Runtime | which command needs chunks; accepts or refuses each chunk; one action per tick; counts starvation | `target`, `submit`, `tick` |
+| Runner | when to ask, on which observation, how many samples, the floor, the deadline | `step`, `lead_s`, `floor`, `deadline_s` |
 | Commit policy | which candidate, how many actions (never below the floor) | `CommitPolicy.plan` |
-| Guard | hold "starved" after `watchdog_s` 0.5 s without a valid action; resumes when chunks return | `Guard` |
-| Execution monitor | "ask now" on a deviation (`refill_now(deviation.cmd_id)`) | [`execution-monitor.md`](execution-monitor.md) |
+| Guard | hold "starved" after 0.5 s without a valid action; resumes when chunks return | `Guard` |
+| Execution monitor | "ask now" on a deviation (`refill_now(cmd_id)`) | [`execution-monitor.md`](execution-monitor.md) |
 
-## Latency → lead time and floor (`runner.py`)
-- L = observation age when its chunk is submitted (robot clock): includes K-sample cost, network, server queue. Estimate = max of the last `latency_window` = 20 samples (`latency_s`); max, so a commitment covers the slow tail.
-- Gap-free condition (one request in flight): lead ≥ L and committed span n·dt ≥ 2L, plus one tick of quantization.
-- `lead_s() = max(refill_s, L + dt)`: `refill_s` is a lower bound only; a too-low setting is overridden after the first sample.
-- `floor(horizon) = ⌈2L/dt⌉ + 1`, passed to `plan`; per request in `S1Stats.floors`.
-- Floor > chunk length (even the whole chunk cannot cover 2L): counted per request in `S1Stats.floor_over_chunk`, not silent; floor = chunk is still gap-free.
-- First request (no sample): lead = `refill_s`, floor = whole chunk (shortest candidate). Only this refill can starve, by at most one latency.
-- Policy error: no latency sample.
+## Latency → lead time and floor
+- L estimate = max of the last `latency_window` (20) samples: a commitment must cover the slow tail.
+- Gap-free with one request in flight iff lead ≥ L and committed span n·dt ≥ 2L (plus one tick of quantization).
+- `lead_s() = max(refill_s, L + dt)`; `floor(H) = ⌈2L/dt⌉ + 1`; before the first sample lead = `refill_s`, floor = H.
+- Floor > H (even the whole chunk cannot cover 2L): counted per request in `floor_over_chunk`; starvation follows.
+- Lockstep: simulated time stands still while S1 thinks, so L = 0 and the floor is 1 (XR-1 parity runs:
+  `s1_floor_last` 1).
+
+## Deadline (decisions 2026-10-22)
+- `deadline_s()` = the last chunk's duration: an older answer lies entirely in the past.
+- On `TimeoutError` the request is abandoned (`timeouts`) and the next one made at once on the newest observation.
+- `S1Runner(deadline=False)` in lockstep: a wall-clock deadline there only throws away good answers.
+
+## Continuation (decisions 2026-10-22)
+- For a policy with `accepts_continuation`, after the first L sample: `Continuation(queued_from(cmd, capture.t),
+  delay_steps = ⌈L/dt⌉)` = the actions that run while it thinks (`continuations` counted).
+- Placement and skipping are unchanged; using it is the policy's job (`serve.py --rtc H` for π0.5²).
+- `RemotePolicy` accepts it; `HistoryPolicy` (XR-1) does not: XR-1 is synchronous.
 
 ## Commitment policies (`commit.py`)
-Every policy commits at least `min(floor, horizon)` and at most the chunk, always a prefix of one candidate.
-- **Motion** (robot-agnostic): continuous dims only; numeric hold value → distance from it (velocity-like); `KEEP` → step-to-step change (position-like).
-- **`FixedCommit`** (default): whole chunk, or `max_commit` raised to the floor (a cap below it would starve).
-- **`PhaseCommit`** (PACE): through the first local speed minimum after the floor below `slow_fraction` (0.3) × the chunk's peak speed; none → whole chunk (or `max_commit`). Reasons `phase boundary` / `no slow point`.
-- **`ConsensusCommit`** (CA³C without its world model; opt-in), K = `samples` (default 3, ≥ 2):
-  1. First step where candidates disagree on an irreversible switch (`first_switch_disagreement`); switch limit = that step, raised to the floor (horizon if none).
-  2. Switch values up to the limit, per step and switch (`majority_switches`): the strict majority's value; on a tie (no strict majority) the value in effect stays: the previous step's, and at step 0 the robot's switch in `last`. Only with `last` None (nothing applied yet) is a step-0 tie unknown until a majority forms.
-  3. Candidates following that sequence (any value where unknown); chosen = the one closest (squared error, continuous dims) to their mean.
-  4. Agreement walk: per step, count candidates whose motion differs from the chosen one's by ≤ `tolerance` (0.5) × median candidate speed, smoothed over the last `smooth` (3) steps; chosen counts itself. Prefix ends at the first step ≥ floor without a strict majority (2·agreeing ≤ K); one outlier among three cannot shorten it. Median speed 0 → any motion is disagreement.
+Every policy commits at least `min(floor, H)` and at most the chunk, always a prefix of one candidate.
+- **Motion** (robot-agnostic): continuous dims; numeric hold value → distance from it; `KEEP` → step-to-step change.
+- **`FixedCommit`** (default): the whole chunk, or `max_commit` raised to the floor.
+- **`PhaseCommit`** (PACE): through the first local speed minimum after the floor below `slow_fraction` (0.3) × peak;
+  none → whole chunk. Reasons `phase boundary` / `no slow point`.
+- **`ConsensusCommit`** (CA³C without its world model; opt-in `speculative_predict`; K = `samples`, default 3, ≥ 2):
+  1. Switch limit = first step where candidates disagree on an irreversible switch, raised to the floor.
+  2. Per step and switch the strict majority's value; a tie keeps the value in effect (previous step, or at step 0 the
+     switch in `last`); only with `last` None is a step-0 tie unknown.
+  3. Chosen = among candidates following that sequence, the one closest (continuous dims) to their mean.
+  4. Agreement: a candidate agrees while its motion differs from the chosen one's by ≤ `tolerance` (0.5) × median
+     speed, smoothed over `smooth` (3) steps; the prefix ends at the first step ≥ floor without a strict majority.
   5. Commit `min(agreed, switch limit, then.plan(chosen))`; `then` = Fixed or Phase.
-  - Reasons: `candidates agree`, `then`'s reason, `candidates diverge`, `stop before a disputed switch`; disputed switch inside the floor: `switch decided by majority`, `switch tie keeps the value in effect`, `switch without a majority` (step-0 tie before anything was applied, or no candidate follows the majority). `detail`: horizon, agreed, capped, switch, votes (fewest candidates backing the committed switch values at a step, `2/3`), min_agreeing.
-  - Majority, not plurality: 2 of 5 closing first (largest identical group) do not decide; the step where 3 of 5 have closed does.
-  - Odd K never ties on one binary switch; with K = 2 any disagreement after the floor ends the commitment.
+  - Reasons: `candidates agree`, `then`'s reason, `candidates diverge`, `stop before a disputed switch`, `switch
+    decided by majority`, `switch tie keeps the value in effect`, `switch without a majority`.
+  - Majority, not plurality: 2 of 5 closing first do not decide. With K = 2 any disagreement after the floor ends it.
 
 ## Failure handling
 | Case | What happens | Pinned by |
 |---|---|---|
-| One wrong sample (misperceived object) | outside the largest switch group or far from its mean → never committed | `test_an_outlier_is_never_the_committed_candidate`, closed-loop minority failure |
-| Early disagreement | agreement checked only from the floor; floor always committed | invariants test |
-| Disputed switch beyond the floor | commitment stops before it; next request decides on a fresher observation | `test_disputed_switch_beyond_the_floor_…` |
-| Disputed switch inside the floor | majority decides; commitment = floor (no livelock) | `test_disputed_switch_inside_the_floor_…` |
-| Tie (even K) inside the floor | value in effect kept until a strict majority changes it; at step 0 the robot's switch (`last`); `switch without a majority` only with `last` None | `test_even_k_tie_…`, `test_a_tie_at_the_first_step_…` (both),  `test_the_largest_group_is_not_a_majority` |
-| Policy error / unreachable service | `errors`, `last_error`; sleep `error_backoff_s` 0.5 s, retry; guard holds; loop never stops | `test_policy_errors_are_counted_…` |
-| Request slower than any of the last 20 | gap possible; counted in `starved_ticks`; guard holds "starved" after 0.5 s; next chunk resumes | runtime starvation tests |
-| Policy slower than its whole chunk | chunk entirely in the past → `chunk_rejected`; robot never moves | `test_policy_slower_than_its_chunk_…` |
-| Change of mind / review | S1 conditioned on the new instruction; pending command supplied first; old chunk cannot delay the takeover; switches frozen in review (runtime) | runner + runtime tests |
-| Stale chunk (revoked, superseded, lease over, wrong `dt` or shape, holding) | `submit` refuses with `chunk_rejected` + reason; never applied | `test_a_chunk_in_flight_when_revoked_is_rejected` |
-| Deviation | `refill_now(cmd_id)` → next step asks on the newest observation; new chunk replaces the queue | `test_refill_now_…` |
-| Deviation of another command (older, or none) | ignored, `refill_ignored` +1 (also when the command is replaced before the next step) | `test_a_refill_for_another_command_…` |
-| Floor > chunk | counted in `floor_over_chunk`; starvation follows (runtime `starved_ticks`) | `test_a_floor_longer_than_the_chunk_is_counted` |
-| Unbatched K samples (a policy without its own `act_samples`) | default = K sequential calls → L ≈ K × single latency → floor ≈ K× larger; starves when the chunk is shorter than the floor | `test_unbatched_samples_…` |
+| One wrong sample | outside the switch majority or far from its mean → never committed | `test_an_outlier_is_never_the_committed_candidate`, `test_closed_loop_consensus_rejects_a_minority_perception_failure` |
+| Disputed switch beyond / inside the floor | stops before it / majority decides, commitment = floor (no livelock) | `test_disputed_switch_beyond_the_floor_…`, `test_disputed_switch_inside_the_floor_…` |
+| Even-K tie | value in effect kept; at step 0 the robot's switch | `test_even_k_tie_…`, `test_a_tie_at_the_first_step_…` (both) |
+| Policy error | `errors`, `last_error`; back off `error_backoff_s` (0.5 s); guard holds | `test_policy_errors_are_counted_and_the_robot_holds` |
+| Request past its deadline | abandoned, re-requested at once | `test_a_request_gets_one_chunk_duration_and_a_timeout_is_retried_at_once` |
+| Policy slower than its chunk | chunk entirely past → `chunk_rejected`; robot never moves | `test_policy_slower_than_its_chunk_never_moves_the_robot` |
+| Stale chunk (revoked, superseded, lease over, wrong `dt` / shape) | `chunk_rejected` + reason | `test_a_chunk_in_flight_when_revoked_is_rejected` |
+| Deviation | `refill_now` → next step asks on the newest observation | `test_refill_now_requests_a_chunk_even_with_a_full_queue` |
+| Deviation of another command | ignored, `refill_ignored` + 1 | `test_a_refill_for_another_command_is_ignored_and_counted` |
+| Unbatched K samples | K calls → L ≈ K × one call → floor ≈ K× larger | `test_unbatched_samples_raise_the_floor_and_starve_only_when_the_chunk_is_too_short` |
 
 ## Configuration
-- `make_commit_policy(commit_policy="fixed"|"phase", speculative_predict=False, **params)`: strict; a parameter that does not apply raises (`min_commit` removed 2026-10-21, now rejected).
-- `S1Runner(runtime, policy, latest, now, refill_s, poll_s=0.005, error_backoff_s=0.5, commit=FixedCommit(), latency_window=20)`; `refill_now(cmd_id) → bool` (taken only for `runtime.target()`).
-- `realtime.py`: `--refill` (1.0 s), `--commit-policy fixed|phase`, `--speculative-predict`, `--samples`, `--tolerance`; no flags for `smooth`, `slow_fraction`, `max_commit`.
-- Per run: `S1Stats` (requests, accepted, errors, infer_ms, obs_age_s, committed, commit_reasons, forced, refill_ignored, floors, floor_over_chunk); `realtime.py` writes `s1_requests.jsonl`, `commits.jsonl`, summary `s1_latency_est_s`, `s1_floor_last`, `starved_ticks`.
+- `S1Runner(runtime, policy, latest, now, refill_s, poll_s=0.005, error_backoff_s=0.5, commit=FixedCommit(),
+  latency_window=20, on_step, on_plan, deadline=True)`; `refill_now(cmd_id) → bool`.
+- `make_commit_policy(commit_policy="fixed"|"phase", speculative_predict=False, **params)`: a parameter that does not
+  apply raises.
+- `realtime.py`: `--s1 pi052|xr1`, `--refill` (1.0 s), `--lockstep`, `--commit-policy`, `--speculative-predict`,
+  `--samples`, `--tolerance`; no flags for `smooth`, `slow_fraction`, `max_commit`.
+- Per run: `S1Stats` → `summary.json` (`s1_latency_est_s`, `s1_floor_last`, `s1_timeouts`, `starved_ticks`, …);
+  per call `s1_requests.jsonl`, `commits.jsonl`.
 
 ## Evidence
-Tests re-run 2026-10-22 after the majority / refill / floor changes (`uv run pytest tests/test_system1_commit.py tests/test_system1_runner.py`): 54 pass; timing tests (`-m timing`): 2 pass.
-- Closed-loop reach-and-grasp (deterministic, real runtime + runner, 50 Hz): one of three samples misperceives → fixed grasps air, consensus grasps (`switch decided by majority`, 0 starved); noisy samples → grasp on 10/10 seeds; phase / consensus / consensus+phase at 0.05, 0.1, 0.2 s → 0 starved; a policy ignoring the floor starves (> 20 ticks); unbatched K = 3 at 0.1 s → floor ≥ 31, starves only with a 25-step chunk.
-- Randomized invariants: 300 candidate sets (K 2–5) × 5 policies × velocity and position robots.
+- Tests: both files pass in the full suite re-run 2026-10-24 (329 passed); `-m timing`: 2 passed.
+- Deterministic closed loop (real runtime + runner, 50 Hz): with one of three samples misperceiving, fixed grasps air
+  and consensus grasps; a policy ignoring the floor starves; randomized invariants over K 2–5 and both motion kinds.
 
-| Live run (RoboCasa, `realtime.py`) | Result |
-|---|---|
-| Stand-in 0.3 s, derived floor, 7 runs (2026-10-21) | floor 14, 0 starved ticks |
-| CloseFridge 12 s, fixed vs consensus K = 3, hand-set floor 13 (before derivation, 2026-10-20) | both 234 chunk / 8 start-up hold ticks, 0 rejected chunks, 0 violations; consensus cut 5 of 12 commitments (`candidates diverge`) |
-| π0.5² over the WAN (keep-alive), MicrowaveThawingFridge 30 s, revisable planner (2026-10-21) | real-time factor 0.97, 0 starved ticks, S1 latency p50 0.7 / p90 0.8 s, floor 34 |
+| Live run (RoboCasa, `realtime.py`) | Result | Status |
+|---|---|---|
+| XR-1 parity, lockstep, `--refill 0.05`, fixed (`results/xr1-parity/20261022-fixed`, 20 runs) | 0 starved ticks, 0 timeouts; one request per ~14.5 ticks (31 per 450-tick episode) | valid (E23) |
+| XR-1 real time, F13 (`results/campaign/20261024-134629/F13`) | L estimate 0.9 s, floor 38 > 16-action chunk; 64 requests, 36 accepted, 13 timeouts; 651 of 985 ticks starved | valid (E24) |
+| π0.5² over the WAN, keep-alive (2026-10-21) | — | withdrawn: corrupted frames |
+| RTC / delay A/B with π0.5² (2026-10-22) | — | withdrawn: corrupted frames; not re-run |
 
 ## Not validated
-- Consensus / phase with a real stochastic policy (π0.5²): roadmap T8a decides whether either is enabled in benchmark arms.
-- Consensus with remote π0.5²: `RemotePolicy.act_samples` = one request, K draws in one forward batch (2026-10-22); K = 1/3/5 latency and draw diversity not measured on GPU ([`remote-models.md`](remote-models.md) "To measure").
-- `last` is the last applied action, not the last queued one; actions queued before the chunk takes over are not seen (switches stay frozen outside a running chunk).
+- Consensus or phase commitment with a real stochastic policy (XR-1 or π0.5²).
+- K samples with XR-1: `HistoryPolicy` has no `act_samples`, so K samples are K round trips (the unbatched case), and
+  `XR1Policy` has no batched draw.
+- XR-1 in real time needs S1 next to the robot or a policy that uses the continuation.
+- `last` is the last applied action, not the last queued one; queued actions due before the chunk takes over are not
+  seen (switches are frozen outside running chunks anyway).

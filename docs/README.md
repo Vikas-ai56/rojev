@@ -45,7 +45,7 @@ Where each kind of document lives. Code map: [`CODEBASE.md`](CODEBASE.md).
 | [`v3-runtime.md`](features/v3-runtime.md) | v3 runtime core: messages, execution runtime (leases, review, blending, holds), guard, control loop, robot plug-ins, state owner (two lanes, keyframes), S2 worker, baseline deciders, v1 role split; runtime live results incl. π0.5² |
 | [`s1-supply-and-commitment.md`](features/s1-supply-and-commitment.md) | S1 runner: chunk supply, measured latency, floor and lead time, commitment policies (fixed / phase / consensus) |
 | [`execution-monitor.md`](features/execution-monitor.md) | Kinematic execution monitor: effect models, conformal calibration, `Deviation` → owner + refill, results and limits |
-| [`remote-models.md`](features/remote-models.md) | Remote models: transport (HTTP/1.1 keep-alive, HTTP/3), frame codecs, π0.5² / OneJev / MJev services, WAN measurements |
+| [`remote-models.md`](features/remote-models.md) | Remote models: transport (HTTP/1.1 keep-alive, HTTP/3), wire v3 and codecs, π0.5² / XR-1 / OneJev / MJev / SAM 2 services, `KeptClient`, WAN measurements |
 | [`plan/specs/any-robot/00-index.md`](plan/specs/any-robot/00-index.md) | SPEC (not built): one assembly layer `rojev/app`, robots as executor plug-ins; slices: app layer, RoboCasa on it, MuJoCo SO-101 proof |
 | [`system1-map.md`](features/system1-map.md) | System 1 map (start here for S1): call map, control loop → guard → runtime ← runner ← π0.5², commitment, transport, monitor, messages, timeline, evidence |
 | [`system2-map.md`](features/system2-map.md) | System 2 map (start here for S2): owner lanes / holds / dialogue, workers, planning lane, Jev v1, step watcher, messages to S1, timeline, evidence |
@@ -54,12 +54,17 @@ Where each kind of document lives. Code map: [`CODEBASE.md`](CODEBASE.md).
 | [`campaign.md`](features/campaign.md) | Test campaign: scripted / fuzz / live users talking to the v1 loop, the line judge (pass / unsafe / safe miss), caps, use |
 | [`live-harness.md`](features/live-harness.md) | Live RoboCasa harness: `realtime.py` flags and outputs, 19-case scenario matrix, invariants, declared spoofs, viewer, video, matrix results |
 | [`robot-interface.md`](features/robot-interface.md) | Robot interface (`rojev.robot`: MuJoCo SO-101, mock; hardware adapter later): limits, cameras, clocks and time modes |
-| [`gpu-setup.md`](features/gpu-setup.md) | One-command GPU box setup (`scripts/gpu_setup.sh`) for S1 (π0.5²) + S2 (OneJev, MJev): steps, component hook interface, pitfalls, security |
+| [`gpu-setup.md`](features/gpu-setup.md) | One-command GPU box setup (`scripts/gpu_setup.sh`) for S1 (π0.5², XR-1) + S2 (OneJev, MJev, SAM 2): parallel steps, component hook interface, pitfalls, security |
+| [`levers.md`](features/levers.md) | Current knobs that change behaviour: default, where set (flag / constant), trade-off, owning page |
 | [`observability.md`](features/observability.md) | Phoenix tracing: setup, what spans contain, measurements, gotchas |
-| [`v2-levers.md`](features/v2-levers.md) | Registry of every lever that changes output (current value, cost to change) |
-| [`v2-pi052-executor.md`](features/v2-pi052-executor.md) | π0.5² set-up, steering point, subtask vocabulary (current); v2 OneJev arm and Kaggle runner (history) |
-| [`v2-engineering-notes.md`](features/v2-engineering-notes.md) | v2-era build notes: code reuse and licences, MJev on Apple silicon, platform notes |
-| [`phase0-install.md`](features/phase0-install.md) | Install gate of the v1 SO-101 plan: toolchain (current), OneJev 0.8B rows (stale) |
+
+## Feature history: `features/history/` (superseded designs; what replaced them, lessons that still apply)
+| Doc | What it was |
+|---|---|
+| [`v2-levers.md`](features/history/v2-levers.md) | v2 levers registry (chunk-synchronous OneJev supervisor); authored-task budgets still read by `tasks.py` |
+| [`v2-pi052-executor.md`](features/history/v2-pi052-executor.md) | π0.5² set-up, steering slot, subtask vocabulary, Kaggle 2×T4 runner |
+| [`v2-engineering-notes.md`](features/history/v2-engineering-notes.md) | v2 code-reuse plan and licences, MJev on Apple silicon, platform notes |
+| [`phase0-install.md`](features/history/phase0-install.md) | G0 install gate of the SO-101 plan (local OneJev 0.8B) |
 
 ## Paper: `paper/` (only approved material)
 | Doc | What it is |

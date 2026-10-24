@@ -8,7 +8,7 @@ System 1 does it (see [`system1-map.md`](system1-map.md)). The state owner is th
 ## 0. Call map
 ```
 realtime.main → executors/robocasa-pi052/realtime.py          builds and wires every part, one thread each
- ├ Console           → realtime.py:358                         --interactive: typed lines → UserInstruction
+ ├ Console           → realtime.py:385                         --interactive: typed lines → UserInstruction
  ├ StateOwner        → rojev/owner/state_owner.py              gatekeeper: lanes, holds, dialogue, commands, speech
  ├ DecisionWorker ×2 → rojev/system2/worker.py                 one decider per lane; stamps proposals
  │  ├ planning       → rojev/eval/deciders.py | system2/planning.py   NativePlanner (S1 plans) | commit-verify | baselines
@@ -25,22 +25,22 @@ models/sam2.py (RemoteSam2)                                     measurement only
 - v1 default stack: XR-1 (S1, plans its own steps from the task text) + Jev over OneJev (interaction) + `NativePlanner`
   (planning). MJev is not loaded (failed the done-check gate, `decisions.md` 2026-10-22).
 
-## 1. Entrypoint (`realtime.py:409`)
-- Planning worker: `DecisionWorker(RecordingDecider(make_planner(a)))` (`:461`); `--arm fixed | scripted | oracle |
+## 1. Entrypoint (`realtime.py:462`)
+- Planning worker: `DecisionWorker(RecordingDecider(make_planner(a)))` (`:514`); `--arm fixed | scripted | oracle |
   revisable(-truth) | native | commit`.
-- Interaction worker (`:464`), if `--interaction` is given: `continue` (baseline), `rules` (keyword spoof) or `jev`
-  (`make_jev`: `--chooser onejev|keywords`, `--reviser canonical|rewrite`, `--skills FILE` (trained task sentences;
-  the run's instruction is always one), `--max-asks`, `--jev-calibration` `{act, task}` JSON).
+- Interaction worker (`:517`), if `--interaction` is given: `continue` (baseline), `rules` (keyword spoof) or `jev`
+  (`make_jev`, `:346`: `--chooser onejev|keywords`, `--reviser canonical|rewrite`, `--skills FILE` (trained task
+  sentences; the run's instruction is always one), `--max-asks`, `--jev-calibration` `{act, task}` JSON).
 - `StateOwner(runtime, guard, planning, latest, now, instruction, lease_s, decide_every_s, on_change, review_s,
-  interaction, interaction_timeout_s, say=Speaker.say, hold_recheck_s)` (`:467`); `instruction` = `--instruction`,
+  interaction, interaction_timeout_s, say=Speaker.say, hold_recheck_s)` (`:520`); `instruction` = `--instruction`,
   else the environment's sentence.
-- `StepWatcher(make_verifier(a), runtime.active_goal, loop.latest, owner.post, …)` (`:471`) with `--verify
-  onejev|mjev|truth`; `make_verifier` (`:342`) wraps it in `RecordingVerifier` (every check logged with the truth).
+- `StepWatcher(make_verifier(a), runtime.active_goal, loop.latest, owner.post, …)` (`:524`) with `--verify
+  onejev|mjev|truth`; `make_verifier` (`:369`) wraps it in `RecordingVerifier` (every check logged with the truth).
 - User speech: `--say T:TEXT` (scripted) or `--interactive` (`Console`, `typed.jsonl`), both → `owner.post(UserInstruction)`.
   Robot speech: `Speaker.say` prints and logs `utterances.jsonl`.
-- **Lockstep** (`--lockstep`, `:518`): the world does not tick while either lane is `busy` (`worker.py:41`), so a
-  decision takes zero simulated time and the owner's deadlines stay meaningful (smoke test: OneJev's 1.1–1.5 s wall
-  had become 1.75–1.85 s simulated against a 1.0 s deadline).
+- **Lockstep** (`--lockstep`, run loop `:587`; the simulator evaluation mode, decision 2026-10-23): the world does not
+  tick while either lane is `busy` (`worker.py:41`), so a decision takes zero simulated time and the owner's deadlines
+  stay meaningful (smoke test: OneJev's 1.1–1.5 s wall had become 1.75–1.85 s simulated against a 1.0 s deadline).
 - `--record-interaction DIR`: exact model inputs per question asked (act, task) + `labels.jsonl` to fill (calibration).
 
 ## 2. Messages
@@ -141,11 +141,11 @@ ABORT, WAIT and ASK activate at once as holds; `target()` is then None, so S1 is
   `RevisableSequence`.
 
 ## 6. Jev v1 (`system2/jev/`; stateless, everything comes from the snapshot)
-`JevInteraction.decide` (`interaction.py:36`):
-1. `hold` trigger (not `UNANSWERED`) → `_wait_budget_spent` (`:72`): a stop keeps holding; else report
+`JevInteraction.decide` (`interaction.py:39`):
+1. `hold` trigger (not `UNANSWERED`) → `_wait_budget_spent` (`:82`): a stop keeps holding; else report
    `waiting_for_user` once, then keep holding. No model.
 2. Dwell: a deviation < `min_dwell_s` (1 s) after the step started → CONTINUE. No model.
-3. `candidates` (`acts.py:93`): legal acts from the situation table (`situation_of`, `:84`), one per distinct effect,
+3. `candidates` (`acts.py:107`): legal acts from the situation table (`situation_of`, `:88`), one per distinct effect,
    each worded as what the user wants; acts that keep the task name it (`snapshot.instruction`).
 
    | Situation | Acts |
@@ -156,12 +156,12 @@ ABORT, WAIT and ASK activate at once as holds; `target()` is then None, so S1 is
    | deviation | continue (motion fine) · wait (motion wrong: hold until the user decides) |
 
    - no retry (removed 2026-10-24): XR-1 takes only a task sentence, so a retry is the same sentence = continue;
-   - revise = `NEW_TASK` (`:37`): only a *complete* new task (what and with which objects);
-   - ask = unclear, or a change named without the full new task; offered only while `may_ask` (`:64`: ≤ `max_asks`,
+   - revise = `NEW_TASK` (`:41`): only a *complete* new task (what and with which objects);
+   - ask = unclear, or a change named without the full new task; offered only while `may_ask` (`:68`: ≤ `max_asks`,
      never two in a row).
-4. Question one: `OneJevChooser.choose(snapshot, options, ACT_QUESTION)` (`chooser.py:53`) → one OneJev Choice:
-   `situation` (`:26`) = instruction, trigger, current step, steps done, conversation, hold, motion check; every camera
-   its own `<image:k>` in one request.
+4. Question one: `OneJevChooser.choose(snapshot, options, ACT_QUESTION)` (`chooser.py:55`) → one OneJev Choice over
+   `onejev.KeptClient`: `situation` (`:26`) = task, what the user just said, trigger, current step, steps done,
+   conversation, hold, motion check; every camera its own `<image:k>` in one request.
 5. `Calibration.apply` (temperature); probabilities summed per effect (`acts.effect`: move · hold · switch); top-two
    effect margin < `margin` → ask (if allowed) else wait; else the most probable act with the winning effect.
 6. Question two, only for revise: `CanonicalTask.revise` (`task_choice.py:42`): one Choice over the trained task
@@ -170,14 +170,15 @@ ABORT, WAIT and ASK activate at once as holds; `target()` is then None, so S1 is
    prompt (`S1Replans`, which sent them raw, removed 2026-10-24).
 7. Wait while already held: on an instruction → GUARDED_WAIT `waiting_for_user` (the owner says it); otherwise
    CONTINUE.
-8. `operation` (`acts.py:118`): continue → CONTINUE; resume → the interrupted operation; wait → GUARDED_WAIT;
+8. `operation` (`acts.py:132`): continue → CONTINUE; resume → the interrupted operation; wait → GUARDED_WAIT;
    ask → ASK(`clarify`); abort → ABORT; revise → the `Revision`.
 
 **Calibration** (offline; at runtime only `apply`; one per question, `act` and `task`): `fit_temperature`
 (`calibration.py:50`, NLL), `fit_margin` (`:68`, smallest margin whose decided cases reach the target accuracy),
-`fit_calibration` (`:83`). `calibrate_jev.py --question act|task --fit DIR… --held-out DIR…` writes a calibration only if
-its decided accuracy on the held-out runs reaches the target. The 2026-10-23 fit (T 0.441, margin 0.103, 30 cases, one
-scene, no held-out set, old act set) is withdrawn; today T = 1, margin 0.2 (declared).
+`fit_calibration` (`:83`). `calibrate_jev.py --question act|task --fit DIR… --held-out DIR…` writes a calibration only
+if its decided accuracy on the held-out runs reaches the target (the act margin judged over effects, as Jev decides).
+The 2026-10-23 fit (T 0.441, margin 0.103, 30 cases, one scene, no held-out set, old act set) is withdrawn; today
+T = 1, margin 0.2 (declared).
 
 On a `hold` recheck of an `UNANSWERED` hold, Jev skips the wait-budget rule and decides the original change.
 
@@ -201,19 +202,21 @@ On a `hold` recheck of an `UNANSWERED` hold, Jev skips the wait-budget rule and 
 | … | No heartbeats; the owner renews cmd 2's lease; the robot holds |
 | 6.05 | "go on": snapshot carries `hold.interrupted` → resume → cmd 3 = cmd 1's operation; hold released; XR-1 supplies cmd 3 |
 | 10.5 | Task success (simulator check, logged only; nothing in S2 knows) |
-Real time: d = OneJev latency (1.1–1.5 s wall) > `interaction_timeout_s` 1.0 → the robot holds (`UNANSWERED`) at the
-deadline, and the answer is applied when it arrives (since 2026-10-24; before, it was refused and decided again).
+Real time: if OneJev's answer misses `interaction_timeout_s` (1.0 s) the robot holds (`UNANSWERED`) at the deadline and
+the answer is applied when it arrives (since 2026-10-24; confirmed live in E30 with a 0.3 s deadline).
 
-## 9. Evidence (tests re-run 2026-10-24; live runs from 2026-10-23, before the Jev fixes)
+## 9. Evidence (tests re-run 2026-10-24; runs 1–5 from 2026-10-23, before the Jev fixes; E27–E30 after)
 | Suite / run | Result |
 |---|---|
-| core `uv run pytest -q` (owner, Jev, verify, runner, …) | 327 passed, 1 skipped, 2 timing deselected |
-| executor tests (harness incl. both questions as cases, held-out calibration, frame check, serve) | 31 passed |
+| core `uv run pytest -q` (owner, Jev, verify, runner, …) | 329 passed, 1 skipped, 2 timing deselected |
+| executor tests (harness incl. both questions as cases, held-out calibration, campaign judge, frame check, serve) | 36 passed |
 | smoke test (above) | wait 3.05 s, resume 6.05 s, success 10.5 s |
 | interactive run 1 (+ replay) | a remark became the task; a repeated question went unsaid (fixed: owner re-says, WAITING reply) |
 | run 2 | goals outside XR-1's repertoire → erratic motion |
 | runs 3–4 | hesitation between equivalent acts; "close the cabinet door" (a trained task) not taken as a task; typos sent raw; "make it fast pls" still revised |
 | run 5 (2026-10-23 calibration, now withdrawn) | success at 36.75 s; then abort / resume of the finished task → the base circles (no completion signal) |
+| E27 campaign (`results/campaign/20261024-134629/analysis.md`) | 82 lines: 55 pass, 2 unsafe, 24 safe misses, 1 unanswered by design ([`campaign.md`](campaign.md)) |
+| E28 replay / E30 live rerun (`results/campaign/20261024-rerun/`) | effect hesitation: stop / go on ×2 4/4, "ruko" asks, one stop → wait; late answers applied, not re-decided |
 
 ## 10. Proper vs declared, open
 - Proper:
@@ -235,4 +238,5 @@ deadline, and the answer is applied when it arrives (since 2026-10-24; before, i
     signal yet;
   - status questions ("are you done?") have no act;
   - preconditions stay refused until perception checks them; ASK has one generic template;
-  - real-time OneJev latency vs the 1 s deadline.
+  - OneJev in the loop ~930 ms (E30) vs the 1 s deadline: the server drops idle connections after ~5 s (keep-alive
+    on the server, open); late answers are applied meanwhile.

@@ -186,12 +186,12 @@ Read in this order; each step adds one layer of the loop.
 | [`harness/tracking.py`](../executors/robocasa-pi052/harness/tracking.py) | Simulator truth masks and 2D geometry; `FrameRecorder` (cameras + state during a live run, scored afterwards) | `truth_masks`, `inside_share`, `FrameRecorder` |
 | [`gpu_suite.py`](../executors/robocasa-pi052/gpu_suite.py) | The v1 GPU test suite in one sequential command: π0.5² baseline, K-sample latency / diversity / memory, OneJev latency + live Jev runs (calibration cases recorded), MJev checks vs truth, commitment ablation (T8a) + gate run; suite.json / suite.md | `STEPS`, `realtime`, `main` |
 | [`embodiment.py`](../executors/robocasa-pi052/embodiment.py) | PandaOmron `ActionSpec` (12-D; deltas hold at 0; gripper and base mode kept; gripper irreversible); monitor plug-in: end-effector position vs OSC position + torso commands | `PANDA_OMRON`, `PandaOmronEffect`, `ARM_DIMS` |
-| [`serve.py`](../executors/robocasa-pi052/serve.py) | π0.5² service on a GPU: routing `Service` behind `Endpoint` (admission, replay cache) on `HttpServer` (loopback) and, with `--h3-port`, `H3Server`; empty subtask → its own planner, planned once per request; K draws in one forward batch (`Draws`); `--rtc H` real-time chunking on the request's continuation | `Pi052Policy.act_samples`, `Draws`, `Service`, `to_action_space`, `serve` |
-| [`tasks.py`](../executors/robocasa-pi052/tasks.py) | Authored sequences and per-subtask truth for 3 diagnosis tasks (evaluation only) | `TaskSpec`, `_picked`, `_placed` |
-| [`drive.py`](../executors/robocasa-pi052/drive.py) | π0.5² on LeRobot's own language runtime (own planner or fixed subtask) | `load_policy`, `main --planner` |
+| [`serve.py`](../executors/robocasa-pi052/serve.py) | π0.5² service on a GPU: `Pi052Policy` on the core's `PolicyService` behind `Endpoint` (admission, replay cache) on `HttpServer` (loopback) and, with `--h3-port`, `H3Server`; empty subtask → its own planner, planned once per request; K draws in one forward batch (`Draws`); `--rtc H` real-time chunking on the request's continuation (switch snapping: `embodiment.py` `to_action_space`) | `Pi052Policy.act_samples`, `Pi052Policy.guidance`, `Draws`, `main` |
+| [`tasks.py`](../executors/robocasa-pi052/tasks.py) | Authored sequences and per-subtask truth for 3 diagnosis tasks (evaluation only); budget rationale in [`features/history/v2-levers.md`](features/history/v2-levers.md) §7 | `TaskSpec`, `_picked`, `_placed` |
+| [`drive.py`](../executors/robocasa-pi052/drive.py) | π0.5² on LeRobot's own language runtime (own planner or fixed subtask); history: [`features/history/v2-pi052-executor.md`](features/history/v2-pi052-executor.md) | `load_policy`, `main --planner` |
 | [`workflow.py`](../executors/robocasa-pi052/workflow.py) | v2 chunk-synchronous live runner (arms B/D/E, uses `legacy_v2`) | `main`, `LiveView`, `service_addresses` |
-| [`extract_subtask_vocab.py`](../executors/robocasa-pi052/extract_subtask_vocab.py) | π0.5²'s training subtask strings and timelines | |
-| [`kaggle/kaggle_run.py`](../executors/robocasa-pi052/kaggle/kaggle_run.py), [`kaggle/push.py`](../executors/robocasa-pi052/kaggle/push.py) | Kaggle 2×T4 bring-up (serve / armd / smoke), bundle, push, service addresses, pull | `MODE`, `services_stages`, `push`, `service` |
+| [`extract_subtask_vocab.py`](../executors/robocasa-pi052/extract_subtask_vocab.py) | π0.5²'s training subtask strings and timelines (E8; [`features/history/v2-pi052-executor.md`](features/history/v2-pi052-executor.md)) | |
+| [`kaggle/kaggle_run.py`](../executors/robocasa-pi052/kaggle/kaggle_run.py), [`kaggle/push.py`](../executors/robocasa-pi052/kaggle/push.py) | Kaggle 2×T4 bring-up (serve / armd / smoke), bundle, push, service addresses, pull (v2; [`features/history/v2-pi052-executor.md`](features/history/v2-pi052-executor.md)) | `MODE`, `services_stages`, `push`, `service` |
 
 ### `services/` (S2 model services, own envs), `scripts/`, and `executors/robocasa/` (v2 G0)
 | File | What it does |
@@ -200,7 +200,7 @@ Read in this order; each step adds one layer of the loop.
 | `services/onejev/` | OneJev 1.6 4B via `qev serve` (PyTorch backend), own env; loopback only (qev has no auth) |
 | [`executors/robocasa-xr1/serve.py`](../executors/robocasa-xr1/serve.py), [`xr1_inputs.py`](../executors/robocasa-xr1/xr1_inputs.py) | Xiaomi-Robotics-1 RoboCasa365 checkpoint (pinned `config/xr1_weights.txt`) as a remote S1 on our wire (never its pickle socket); inputs ported from its evaluation client (4 frames 2 ticks apart, 0.95 crop, end-effector-first 14-value state); own env (torch 2.8, transformers 4.57.1, flash-attn 2.8.3 from its sdist, fetching the prebuilt kernels; readiness imports them) |
 | [`services/sam2/serve_sam2.py`](../services/sam2/serve_sam2.py) | SAM 2.1 Hiera Tiny (transformers, pinned `config/sam2_weights.txt`): `/segment` and streaming `/track/*` (session state on CPU, idle sessions closed, errors → 500); own env, GPU hook |
-| `services/*/gpu/hook.sh` | OneJev / MJev component hooks for `scripts/gpu_setup.sh` |
+| `services/*/gpu/hook.sh`, `executors/*/gpu/hook.sh` | Component hooks for `scripts/gpu_setup.sh`: OneJev, MJev, SAM 2; π0.5², XR-1 |
 | `scripts/gpu_setup.sh`, `scripts/gpu_box.sh`, `scripts/hf_pins.py` | One command from the Mac: fresh GPU box → driver, uv, code, vendors at pins, envs, pinned weights, systemd units, tunnels, one service JSON per box (`docs/features/gpu-setup.md`) |
 | [`check_precision.py`](../services/mjev/check_precision.py), [`speed_check.py`](../services/mjev/speed_check.py), [`profile_mjev.py`](../services/mjev/profile_mjev.py), [`patch_embed_check.py`](../services/mjev/patch_embed_check.py), [`make_testdata.py`](../services/mjev/make_testdata.py) | Precision vs fp32, speed levers, profile, patch-embedding fix, test scenes (E11–E12) |
 | [`executors/robocasa/`](../executors/robocasa/rollout.py) | SmolVLA env: `checkpoint.py`, `rollout.py`, `check_policy_load.py`, `capability_table.py` |
@@ -282,7 +282,7 @@ loop = ControlLoop(backend, Guard(runtime), spec)
 | [`tests/test_robot_contract.py`](../tests/test_robot_contract.py) (18, mujoco + mock) | Robot contract, cameras, calibration, time modes |
 | [`tests/test_robot_sim_world.py`](../tests/test_robot_sim_world.py) (4) | World composition |
 | `tests/test_legacy_v2_*.py` (11) | Quarantined v2 arms, candidate filter |
-| [`tests/test_install.py`](../tests/test_install.py) (10) | Install gate |
+| [`tests/test_install.py`](../tests/test_install.py) (10) | Install gate ([`features/history/phase0-install.md`](features/history/phase0-install.md)) |
 | [`examples/scripted_trajectory.py`](../examples/scripted_trajectory.py) | SO-101 scripted trajectory through `rojev.robot`, traced; optional OneJev checkpoints with a truth evaluator |
 | [`playground/onejev_bench/`](../playground/onejev_bench/run_bench.py), [`playground/candidates/`](../playground/candidates/coverage.py), [`playground/archive/`](../playground/archive/e3_prompt_variants.py) | Experiments E13, E9/E9b, E3/E6 (`templates.py` to be adopted for Jev v1) |
 

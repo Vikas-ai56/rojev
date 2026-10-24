@@ -1,4 +1,4 @@
-# System 1 map: how actions reach the robot (code as of 2026-10-23)
+# System 1 map: how actions reach the robot (code as of 2026-10-24)
 
 How System 1 keeps the robot moving: control loop → guard → execution runtime ← S1 runner ← policy (XR-1 or π0.5²
 over the network). System 2 never sends actions; its only input to this side is a command from the owner (see
@@ -29,18 +29,19 @@ realtime.main → executors/robocasa-pi052/realtime.py          builds and wires
 - Robot specifics enter only as an `ActionSpec` and an `EffectModel` (`embodiment.py`); model specifics only inside an
   executor's `Policy` (inputs, outputs, history).
 
-## 1. Entrypoint (`realtime.py:409`)
+## 1. Entrypoint (`realtime.py:462`)
 - `RoboCasaBackend` (`:88`) = the `Backend` (`observe`, `step`); `render_context.install()` (`:95`) before the env.
 - `ExecutionRuntime(PANDA_OMRON, epoch=1, last=START, blend_s, stop_s)`, `Guard(runtime)`.
-- `FrameHistory((4 − 1) · 2 + 1)` (`:435`), fed every tick by `on_tick` (`:437`) and once with the initial capture.
-- `ControlLoop(..., realtime=not a.lockstep, on_tick)` (`:452`).
+- `FrameHistory((4 − 1) · 2 + 1)` (`:488`), fed every tick by `on_tick` (`:490`) and once with the initial capture.
+- `ControlLoop(..., realtime=not a.lockstep, on_tick)` (`:505`).
 - `S1Runner(runtime, RecordingPolicy(make_policy(...)), loop.latest, loop.now, refill_s, commit, on_step, on_plan,
-  deadline=not a.lockstep)` (`:456`).
-- `make_policy` (`:287`): `--policy remote` + `--s1 pi052` → `RemotePolicy`; `--s1 xr1` → `HistoryPolicy(remote,
-  history, *XR1_HISTORY, to_action_space)`; `skills` / `wiggle` are stand-ins.
-- `FrameCheck(loop.latest, CAMS, every_s)` (`:494`) is one of the run's threads.
-- `gc.collect(); gc.freeze()` (`:504`) before the threads start (a full GC pass measured 45–96 ms).
-- Run loop (`:509`):
+  deadline=not a.lockstep)` (`:509`).
+- `make_policy` (`:301`): `--policy remote` + `--s1 pi052` → `RemotePolicy`; `--s1 xr1` → `HistoryPolicy(remote,
+  history, *XR1_HISTORY, to_action_space)`; `skills` / `wiggle` are stand-ins. The `--s1` flag defaults to `pi052`;
+  v1 runs pass `--s1 xr1` (`campaign.py`).
+- `FrameCheck(loop.latest, CAMS, every_s)` (`:548`) is one of the run's threads.
+- `gc.collect(); gc.freeze()` (`:562`) before the threads start (a full GC pass measured 45–96 ms).
+- Run loop (`:567`):
   - real time: the loop and runner run on their own threads; the main thread only posts user speech;
   - **lockstep**: no loop / runner threads; per iteration, if the planning or interaction lane is busy → wait (no
     tick); else `runner.step()` then `loop.run_ticks(1)`. Every model's computation takes zero simulated time.
@@ -65,9 +66,9 @@ realtime.main → executors/robocasa-pi052/realtime.py          builds and wires
 - Dropping a command sends a `dropped` ACK, so the owner re-decides; a starved command resumes with its next chunk.
 
 ## 4. Execution runtime (`control/execution.py`); the authority on what is active
-- `accept(goal)` (`:123`): refuses stale epoch / revoked / not newer / expired. A non-moving operation (ABORT, WAIT,
-  ASK) becomes active at once as a hold. A moving one becomes `pending`; `pause_hold` (or not running) holds until its
-  first chunk.
+- `accept(goal)` (`:123`): refuses stale epoch / stopped / revoked / not newer / expired. A non-moving operation
+  (ABORT, WAIT, ASK, COMPLETE) becomes active at once as a hold. A moving one becomes `pending`; `pause_hold` (or not
+  running) holds until its first chunk.
 - `renew` (`:150`), `review` (`:160`), `revoke` (`:174`): lease extension; review (keeps moving, switches frozen, lease
   shortened); revoke (drops its queued actions at once).
 - `submit(chunk)` (`:220`): refuses wrong epoch, unknown, revoked or expired command, wrong `dt`, wrong shape, a
@@ -92,7 +93,8 @@ realtime.main → executors/robocasa-pi052/realtime.py          builds and wires
 ## 5. S1 runner (`system1/runner.py`); supply
 - `step` (`:158`), on its own thread every `poll_s` (lockstep: once per tick from the run loop):
   1. `goal = runtime.target()`; none → nothing to do (holding, or no command).
-  2. Request only if a refill is pending for this command, or less than `lead_s()` is queued (`queued_until`).
+  2. Request only if a refill is pending for this command, or nothing / less than `lead_s()` is queued
+     (`queued_until`).
   3. `capture = latest()`; observation task = `goal.instruction`; subtask = `goal.operation.subtask` ("" = the policy
      works from the task alone).
   4. `_continuation` (`:217`): for a policy that `accepts_continuation`, after the first latency measurement,
@@ -108,7 +110,8 @@ realtime.main → executors/robocasa-pi052/realtime.py          builds and wires
 - `lead_s` (`:129`) = max(`refill_s`, L + dt): request before the queue runs out.
 - `deadline_s` (`:141`): one chunk duration (an older answer is entirely in the past); `TimeoutError` → `timeouts` +
   an immediate new request. None with `deadline=False` (lockstep: simulated time does not move while S1 thinks, so a
-  wall-clock deadline only abandons good answers; live: 217 of 292 requests starved before this).
+  wall-clock deadline only abandons good answers; first lockstep runs: 217 of 292 starved before this; that run is
+  not in `results/`, and whether the unit was requests or ticks is unresolved).
 - `refill_now(cmd_id)` (`:146`): a fresh chunk at once, taken only for the command being supplied (else counted in
   `refill_ignored`).
 
@@ -167,7 +170,7 @@ realtime.main → executors/robocasa-pi052/realtime.py          builds and wires
   2. over a window: measured change vs a linear map of this and the previous window's commands;
   3. directions never exercised in calibration are not scored;
   4. score > conformal threshold → one `Deviation(epoch, cmd_id, t, score, threshold)` per excursion.
-- `on_deviation` (`realtime.py:427`): `owner.post(d)` (S2 decides) and `runner.refill_now(d.cmd_id)` (S1 replans).
+- `on_deviation` (`realtime.py:480`): `owner.post(d)` (S2 decides) and `runner.refill_now(d.cmd_id)` (S1 replans).
 - Contact-blind: deliberate contact and a blocked arm look alike (`blocked` scenario fails).
 
 ## 10. Messages on this side
@@ -187,21 +190,23 @@ realtime.main → executors/robocasa-pi052/realtime.py          builds and wires
 |---|---|
 | 0.00 | Owner `accept`s cmd 1 `SWITCH_TO(None)` with the task text; pending, the robot holds |
 | 0.00 | Run loop: lanes idle → `runner.step()`: `target()` = cmd 1, nothing queued → request on capture t = 0.00 (history = that frame repeated 4×) |
-| 0.00 | Simulated time waits for the answer (wall ≈ 0.5 s); 16 actions (0.8 s) submitted; L = 0 in simulated time → floor 1 |
+| 0.00 | Simulated time waits for the answer (wall ≈ 0.5 s); 16 actions (0.8 s) submitted (first request: floor = whole chunk); L = 0 in simulated time → floor 1 from now on |
 | next tick | First action applied → `activated` ACK → the owner records cmd 1 active |
 | ~0.70 | One tick of actions left (< `lead_s` = 0.05 s) → next request on the newest capture; history now 4 real frames 2 ticks apart |
 | … | One request per ~15 ticks (450 ticks / 31 requests per CloseToasterOvenDoor episode); no deadline, no starvation |
-In real time the same 0.5 s wall latency is ~0.6 of each 0.8 s chunk: lead and floor exceed the chunk, so supply is
-the bottleneck (why lockstep is the sim evaluation mode, `decisions.md` 2026-10-23).
+In real time a 0.5 s latency already needs a floor of ⌈2·0.5/0.05⌉ + 1 = 21 > 16 actions, so supply is the bottleneck
+(F13 measured L ≈ 0.9 s, floor 38, 651 of 985 ticks starved); why lockstep is the sim evaluation mode (`decisions.md`
+2026-10-23).
 
-## 12. Evidence (re-run 2026-10-23)
+## 12. Evidence (tests re-run 2026-10-24)
 | Suite / run | Result |
 |---|---|
-| core `uv run pytest -q` | 322 passed, 1 skipped, 2 timing deselected |
-| executor `executors/robocasa-pi052` `uv run pytest -q` (harness, serve, history, render context, frame check) | 29 passed |
+| core `uv run pytest -q` | 329 passed, 1 skipped, 2 timing deselected (`-m timing`: 2 passed) |
+| executor `executors/robocasa-pi052` `uv run pytest -q` (harness, serve, history, render context, frame check, campaign) | 36 passed |
 | XR-1 parity, their target50 cases, 4 tasks × 5 seeds, lockstep (`results/xr1-parity/20261022-fixed`) | 18/20 (CloseToasterOvenDoor 4/5, TurnOnElectricKettle 5/5, PickPlaceCounterToCabinet 5/5, RinseSinkBasin 4/5) vs their 20/20 |
-| XR-1 request wall time, same runs (1000 requests, Mac ↔ GPU box) | p50 511 ms, p90 731 ms |
+| XR-1 request wall time, same runs (1000 requests: 1020 minus each run's cold first, Mac ↔ GPU box) | p50 511 ms, p90 731 ms |
 | Interactive run 5 (XR-1 + Jev, lockstep, `results/v1-interactive/run5`) | task success at 36.75 s; frames valid |
+| XR-1 real time, F13 (`results/campaign/20261024-134629/F13`) | real-time factor 0.806; 64 requests, 36 accepted, 13 timeouts; 651 of 985 ticks starved; no success |
 | π0.5², earlier delay / RTC A/B | withdrawn (corrupted frames); not re-run |
 
 ## 13. Proper vs declared, open

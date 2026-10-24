@@ -1,131 +1,138 @@
-# v3 runtime core: messages, execution runtime, guard, control loop, state owner, S2 worker (v1 steps 1–4)
+# v3 runtime core: messages, execution runtime, guard, control loop, state owner, S2 worker
 
-Code: `rojev/protocol/`, `rojev/robot/action_spec.py`, `rojev/control/` (execution, guard, loop, robot_backend), `rojev/owner/state_owner.py`, `rojev/system2/` (decider, worker), `rojev/eval/deciders.py`. Spec: `docs/plan/v3-v1-spec.md` §3–6, §13–14.
-Elsewhere: S1 supply, latency, commitment → [`s1-supply-and-commitment.md`](s1-supply-and-commitment.md) · execution monitor → [`execution-monitor.md`](execution-monitor.md) · transport, codecs, model services, WAN numbers → [`remote-models.md`](remote-models.md) · live entrypoint, scenario matrix, spoofs → [`live-harness.md`](live-harness.md).
+Code: `rojev/protocol/`, `rojev/robot/action_spec.py`, `rojev/control/` (execution, guard, loop, robot_backend),
+`rojev/owner/state_owner.py`, `rojev/system2/` (decider, worker, planning), `rojev/eval/deciders.py`.
+Spec: `docs/plan/v3-v1-spec.md` §3–6, §13–14.
+Elsewhere: S1 supply and commitment → [`s1-supply-and-commitment.md`](s1-supply-and-commitment.md) · monitor →
+[`execution-monitor.md`](execution-monitor.md) · walkthroughs with line refs → [`system1-map.md`](system1-map.md),
+[`system2-map.md`](system2-map.md) · Jev → [`jev-interaction.md`](jev-interaction.md) · live entrypoint →
+[`live-harness.md`](live-harness.md).
 
 ## Threads
 ```
-ControlLoop (20 Hz)  Guard.step → ExecutionRuntime.tick → backend.step → latest Capture
+ControlLoop (20 Hz)  Guard.step → ExecutionRuntime.tick → backend.step → newest Capture
 S1Runner             runtime.target() → policy → TimedChunk → runtime.submit
 DecisionWorker ×1–2  ObservationSnapshot → decider → DecisionProposal | DecisionFailure → owner
-StateOwner           events (instruction, proposal, failure, deviation) + 50 ms tick → accept / renew / review / revoke
-ACKs                 runtime outbox → owner (drained every owner tick); nothing waits for a model
+StateOwner           events + 50 ms tick → accept / renew / review / revoke; drains ACKs; guard heartbeat
 ```
+- Nothing waits for a model; every consumer reads the newest observation, never a backlog.
+- Lockstep (`realtime.py --lockstep`, the simulator evaluation mode, decisions 2026-10-23): no loop or runner thread;
+  the main thread runs `runner.step()` then one tick, and skips the tick while a decision lane is busy, so S1 and S2
+  computation take zero simulated time. Real time is reported alongside.
 
-## Messages (`rojev/protocol/`; every message carries `epoch`, times on the robot clock)
+## Messages (`rojev/protocol/`; every message carries `epoch`; times on the robot clock)
 - `Observation{images, state, task}` · `Capture{obs_id, t, observation}` (`obs_id` + 1 per tick).
-- `Operation{kind, subtask, target, dest, template, objects}`; kinds CONTINUE · SWITCH_TO · RETRY · ABORT · GUARDED_WAIT · ASK · OBSERVE · COMPLETE; moving = SWITCH_TO / RETRY / OBSERVE; `subtask=None` = S1 plans its own subtasks.
-- `AcceptedGoal{cmd_id, instruction_rev, operation, transition: immediate | pause_hold, expires_t (lease), instruction}`; S1 is conditioned on `instruction`, never on stale task text.
-- `Revoke{cmd_id, reason}` · `TimedChunk{cmd_id, obs_id, t_start, dt, actions H×D, timings_ms}`: action k due at `t_start + k·dt`.
-- `ExecutionAck{cmd_id, seq, status, t, applied_index, detail}`; status `activated` · `revoked` · `rejected` (a command message) · `chunk_rejected` (one chunk; the command stands) · `expired` · `stopped`; `seq` strictly increasing.
-- `UserInstruction{text}` · `Deviation{cmd_id, t, score, threshold, source}` · `DecisionFailure{request_id, error}`.
-- `Keyframe{cmd_id, subtask, instruction_rev, capture, evidence}`: a step judged done, with the observation the judgement used.
-- `ObservationSnapshot{request_id, now, capture, instruction_rev, instruction, active_cmd, active_operation, active_since, keyframes, trigger, review, deviation}`.
-- `DecisionProposal{request_id, obs_id, t_capture, instruction_rev, base_active_cmd, operation, scores, preconditions, expires_t, evidence}`; `Precondition`, `Advice` defined, not used yet.
+- `Operation{kind, subtask, target, dest, template, objects}`. Moving kinds: SWITCH_TO, RETRY, OBSERVE; the runtime
+  holds for ABORT, GUARDED_WAIT, ASK, COMPLETE; CONTINUE never becomes a command (the owner renews the lease).
+  `subtask=None` = S1 plans its own steps.
+- `AcceptedGoal{cmd_id, instruction_rev, operation, transition, expires_t, instruction}`: `expires_t` is the lease;
+  S1 is conditioned on `instruction` (the task text in force), never on the environment's text.
+- `TimedChunk{cmd_id, obs_id, t_start, dt, actions}`: action k due at `t_start + k·dt`. `Revoke{cmd_id, reason}`.
+- `ExecutionAck{cmd_id, seq, status, t, applied_index, detail}`, `seq` strictly increasing. Status: `activated` ·
+  `revoked` · `rejected` (a command message) · `chunk_rejected` (one chunk; the command stands) · `expired` ·
+  `dropped` (a safety hold ended it) · `stopped`.
+- Into the owner: `UserInstruction{text}` · `Deviation{cmd_id, t, score, threshold, source}` ·
+  `StepEvent{cmd_id, t, source, step, detail, checked}` · `PlannedSubtask{cmd_id, t, subtask}` · `DecisionFailure`.
+- Owner state: `Keyframe{cmd_id, subtask, capture, evidence, checked}` · `Hold{operation, since, interrupted}` ·
+  `Turn` (dialogue line) · out: `Utterance{template, objects}` (`ACK`, `UNANSWERED`, or an operation's template).
+- `ObservationSnapshot`: capture, revision, `instruction`, desired command and operation, `active_since`, keyframes,
+  `trigger`, `review`, `deviation`, `step_event`, `planned`, `hold`, `dialogue`; `latest_utterance` = newest user line.
+- `DecisionProposal`: request id, revision, `base_active_cmd`, operation, scores, preconditions, `expires_t`,
+  evidence, `task` (new task text or None). `Precondition`, `Advice` are defined, not used.
 
-## Execution runtime (`control/execution.py`, `ExecutionRuntime`)
-- One action per tick; modes IDLE · RUNNING · TRANSITION · HOLD · STOPPED; one lock (owner, S1 runner and loop threads call it).
-- `accept`: refused (`rejected`) on another epoch, STOPPED, revoked id, id not newer, lease already over. A newer goal supersedes a pending one (`revoked`). Non-moving operations (wait / abort / ask / complete) hold at once and are `activated` at once.
-- Transitions: `immediate` keeps the old command until the new chunk is due (blended); `pause_hold` (or not RUNNING) drops the queue and holds.
-- Active only when its first action is applied (`activated`); a pending goal whose lease ends first `expired`.
-- `renew` extends the lease of the active or pending command and ends its review; `revoke` drops its queued actions at once (a queued gripper release never happens).
-- `review(cmd, until_t)`: keeps moving, freezes irreversible switches (`TickResult.review`), lease capped at `until_t`; renew or a new command ends it.
-- Lease ends a command in any mode (running, held, starved) → `expired` + hold.
-- `submit` → `chunk_rejected` on: epoch, STOPPED, revoked, neither active nor pending, lease over, `dt` ≠ control period (resample in the adapter), wrong shape, non-moving command, active paused for a transition, holding for any reason but "starved", entirely in the past.
-- Elapsed actions skipped (`TickResult.skipped`), never replayed; a new chunk replaces the queue from its first due time; an old command's chunk cannot delay a scheduled takeover.
-- Tick order: lease expiry → skip elapsed → activate pending → incoming action checked and clamped (`violations`, upstream only) → blend → decelerate → starvation count → irreversible gating → projection onto the bounds (not reported).
-- Blend: each new segment keeps 1 − s(k/n) of the jump in continuous dims over `blend_s` (0.2 s), s = quintic smoothstep; switches never blended.
-- Decelerating hold: `stop_s` > 0 ramps continuous dims with a numeric hold value to it when motion turns into a hold (library default 0 = instant; `realtime.py` 0.3 s); also on `stop`.
-- Irreversible switches change only on a chunk action of a RUNNING command outside review; held otherwise (`held_switches`).
-- `starved_ticks`: ticks where an active moving command (running or starved-hold) had no due action.
-- `ActionSpec.hold` refuses to guess KEEP dims: seed `last` with the robot's current command.
+## Execution runtime (`control/execution.py`, `ExecutionRuntime`): the authority on what is active
+- Modes IDLE · RUNNING · TRANSITION · HOLD · STOPPED; one lock (owner, runner and loop threads call it).
+- `accept`: refused (`rejected`) on another epoch, STOPPED, a revoked id, an id not newer, a lease already over. A newer
+  goal supersedes a pending one (`revoked`). A holding operation is active at once (`activated`, hold).
+- A moving command is pending until its first action is applied (`activated`); `immediate` keeps the old motion until
+  then (blended), `pause_hold` (or not RUNNING) holds. A pending goal whose lease ends first is `expired`.
+- `renew` extends the lease and ends review; `review(cmd, until_t)` keeps motion, freezes irreversible switches, caps
+  the lease; `revoke` drops the command's queued actions at once (a queued gripper release never happens).
+- A lease ends a command in any mode (running, held, starved) → `expired` + hold.
+- `submit` → `chunk_rejected` on: epoch, STOPPED, revoked, neither active nor pending, lease over, `dt` ≠ control
+  period, wrong shape, holding command, active paused for a transition, a hold other than "starved", entirely past.
+- Elapsed actions are skipped, never replayed; a chunk replaces its command's queue from its first due time; an old
+  command's chunk cannot delay a scheduled takeover.
+- Tick order: lease expiry → skip elapsed → activate pending → clamp the incoming action (`violations`, upstream only)
+  → blend → decelerate → count starvation → freeze irreversible switches → project onto the bounds (not reported).
+- Blend: a new segment keeps 1 − s(k/n) of the jump in continuous dims over `blend_s` (0.2 s), s = quintic smoothstep.
+- Decelerating hold: `stop_s` ramps continuous dims to their hold value (library default 0; `realtime.py` 0.3 s).
+- `starved_ticks`: ticks where an active moving command had no due action. `queued_from` / `queued_until` feed the
+  runner; `last_action()` is the switch state in effect.
 
 ## Guard (`control/guard.py`)
-- No owner heartbeat for `owner_timeout_s` (2 s) → hold "owner lost", active and pending command dropped (`dropped` ACK; a new command from the owner moves again); RUNNING without a valid chunk action for `watchdog_s` (0.5 s) → hold "starved" (resumes when chunks return); runtime exception → hold, commands dropped, counted in `errors`.
-- `stop()` needs nothing but the loop; STOPPED is final for the epoch.
+- No owner heartbeat for `owner_timeout_s` (2 s) → hold "owner lost", active and pending dropped (`dropped`).
+- RUNNING without a valid chunk action for `watchdog_s` (0.5 s) → hold "starved"; the next chunk resumes it.
+- Runtime exception → hold, commands dropped, counted in `errors`. `stop()` is final for the epoch.
 
 ## Control loop (`control/loop.py`, `ControlLoop`)
-- Backend with its own `clock` (any `rojev.robot.Robot`) → `Rate` on that clock; without one (RoboCasa) tick k due at k·dt, wall-paced (`realtime=True`) or back to back; `run_ticks(n)` for lockstep.
-- Lag reported (`lag_s`, `max_lag_s`), never skipped; newest observation in a latest-value slot (`latest()`).
-- `TickRecord{tick, before, after, step_ms, lag_s}`: the observation the action was applied to and the one it produced (no tick lost to the monitor).
+- Backend with its own `clock` (any `rojev.robot.Robot`) → `Rate` on that clock; without one (RoboCasa) tick k is due
+  at k·dt, wall-paced (`realtime=True`) or back to back; `run_ticks(n)` drives lockstep.
+- Lag reported (`lag_s`, `max_lag_s`), never skipped. `TickRecord{tick, before, after, step_ms, lag_s}` to `on_tick`.
+- Robot plug-ins: `ActionSpec` per dim (bounds, hold value or `KEEP`, switch threshold, irreversible);
+  `RobotBackend` + `joint_target_spec` for any `Robot`; PandaOmron in `executors/robocasa-pi052/embodiment.py`
+  ([`robot-interface.md`](robot-interface.md)).
 
-## Robot plug-ins (the runtime never assumes a robot)
-- `ActionSpec` per dim: bounds, hold (number or `KEEP`), switch threshold, irreversible (must be a switch).
-- Any `rojev.robot.Robot`: `RobotBackend` + `joint_target_spec(robot, switches, irreversible)`; actions = joint targets, robot safety filter still applies.
-- RoboCasa PandaOmron: `executors/robocasa-pi052/embodiment.py` (12-D, 20 Hz; arm / torso deltas and base velocity hold 0; gripper and base mode KEEP switches at 0.5; gripper irreversible).
+## State owner (`owner/state_owner.py`, `StateOwner`): the single writer of intent
+- One thread: event queue + tick every `period_s` (heartbeat, ACK drain, interaction deadline, hold upkeep, planning
+  heartbeat every `decide_every_s` unless holding, complete or a lane is busy).
+- Instruction: revision + 1, `ACK` said at once, user `Turn` added, decision asked (trigger `instruction`). The task
+  text changes only when an accepted proposal carries `task`. A moving command goes under review until the answer is
+  due (`review_window_s` = `interaction_timeout_s` with an interaction lane, else `review_s`); `--on-change revoke`
+  revokes instead (stop-and-go baseline).
+- Proposal refused (logged with why) unless: same epoch and revision, newer than the last applied, made by this owner,
+  not planning while an interaction request pends, not a superseded interaction request, about the desired command,
+  not a routine planning proposal while a hold stands, not expired, no preconditions.
+- Apply: CONTINUE or the same operation renews the lease (`renewed` logged); with new task text a moving command is
+  reaffirmed (same operation, new id, always `immediate`). COMPLETE sets `complete` and holds. Anything else = new
+  command; `pause_hold` into or out of a hold, the configured transition between moving commands.
+- Lanes: triggers `instruction`, `deviation`, `hold` → interaction worker; heartbeat, `step`, `planned` and ended
+  commands → planning. While an interaction request pends, planning requests are deferred (the latest is replayed
+  after the answer) and planning proposals refused. `interaction=None` = one lane.
+- Unanswered change (failure, refusal, deadline): GUARDED_WAIT `UNANSWERED` as a standing hold, said to the user;
+  planning never answers a change. After a failure or refusal the lane is asked again every `hold_recheck_s`.
+- Late answer (decisions 2026-10-24): after the deadline the answer is still awaited; when it arrives it is applied to
+  the situation it was decided on (the placeholder hold is not its base; CONTINUE restores the operation then in force).
+- Holds: ABORT / GUARDED_WAIT / ASK answering a change = `Hold` (no heartbeat, routine planning refused, owner keeps
+  its lease); released by a moving operation or COMPLETE answering a change; `interrupted` lets a decider resume.
+- Keyframes: when an accepted SWITCH_TO another subtask or COMPLETE moves past the step actually running, with the
+  decision's observation; evidence = the step event about it, else the decider. For a subtask-less command only a
+  checked `StepEvent` is a keyframe. Never for aborts, waits, asks, retries, reaffirms.
+- ACKs: newest `seq` only; `activated` sets the active command (clears older deviation, step event, plan, review);
+  `rejected` / `expired` / `dropped` of the desired command → fall back to the running one and decide again.
 
-## State owner (`owner/state_owner.py`, `StateOwner`)
-- Single writer of instruction + revision, desired command, active record, keyframes, hold, dialogue. One thread: event queue + tick every `period_s` (heartbeat, ACK drain, interaction deadline, hold upkeep, heartbeat decision every `decide_every_s` = 1 s unless holding).
-- Instruction: revision + 1, `complete` cleared, user `Turn` added, `ACK` utterance at once (`say`), then a decision (`instruction`). The task text is unchanged until an accepted decision adopts new text (`DecisionProposal.task`); review lasts until the interaction deadline (`review_window_s`). Moving command: `review` (default) → `runtime.review`, lease shrinks to `review_s` (1 s); `revoke` (or a refused review) → revoked at once (stop-and-go baseline).
-- Proposal refused (logged with the reason) unless: same epoch, same revision, newer than the last applied request, a request this owner made, not a planning proposal while an interaction request pends, not a superseded interaction request, about the current desired command, not a routine planning proposal while a hold stands, not expired, no preconditions (unchecked until step 6).
-- CONTINUE or the same operation renews the lease (`lease_s` 3 s) and ends review; if the desired command predates the current revision and moves, it is **reaffirmed**: same operation, new command id, new instruction, always `immediate`, no pause. The `continue` event records `renewed`. COMPLETE sets `complete` (no more heartbeat decisions) and holds; anything else = new command.
-- Transition: configured one between two moving commands; `pause_hold` into or out of a hold.
-- `active_since` kept across a reaffirmation (same operation activated again).
-- ACKs: newest `seq` only; `activated` sets active (clears an old command's deviation, step event and review); `rejected` / `expired` / `dropped` of the desired command → desired falls back to the still-running command, new decision (`cmd N rejected|expired|dropped`); `chunk_rejected` logged only.
-- Deviation of the active command → `snapshot.deviation`, trigger `deviation`; `StepEvent` about it → `snapshot.step_event`, trigger `step` (planning); other command or epoch → logged as stale.
-- Templated operation accepted (ASK, report) → `Utterance` + robot `Turn`; snapshots carry the last `dialogue_turns` (8) turns.
+## S2 worker and planning deciders
+- `Decider.decide(snapshot) → Verdict{operation, reason, scores, preconditions, evidence, task}` (`system2/decider.py`).
+- `DecisionWorker` (`system2/worker.py`): own thread; newest request wins (`replaced` counted); `busy` gates the
+  heartbeat and lockstep; proposal expiry `proposal_ttl_s` (2 s); decider error → `DecisionFailure` at once.
+- Baselines (`eval/deciders.py`, evaluation only): `ScriptedSequence` (authored steps on a time budget),
+  `TruthSequence` (oracle on simulator truth, may go back), `NativePlanner` (one SWITCH_TO without subtask: S1 plans;
+  the v1 planning lane with XR-1), `AlwaysContinue` (interaction baseline: the utterance becomes the task).
+- `CommitVerifyPlanner` (`system2/planning.py`, `--arm commit`): pins S1's planned subtask until a checked step event,
+  else releases after `max_commit_s`. With MJev out (decisions 2026-10-22) only the bound releases it.
 
-### Holds (2026-10-22; fixes the stop-then-restart bug)
-- ABORT / GUARDED_WAIT / ASK accepted in answer to a change (`instruction`, `deviation`, `hold`) = standing `Hold{operation, since, interrupted}` (`snapshot.hold`).
-- While it stands: no heartbeat; routine planning requests not sent (`planning held`) and their proposals refused; the owner renews the hold command's lease itself; every `hold_recheck_s` (if set) the interaction lane is asked again (trigger `hold`).
-- Released by a moving operation or COMPLETE answering a change (`hold released`); `interrupted` lets the decider resume the step.
-
-### Two lanes (step 4.4)
-- `interaction=None` → one lane. Given: triggers `instruction`, `deviation`, `hold` → interaction worker; heartbeat, `step` and failed / expired / dropped commands → planning.
-- Priority: while an interaction request pends, planning requests are deferred (the latest is sent once the interaction decision is applied; an unanswered change drops it) and planning proposals refused.
-- Release by its proposal, its `DecisionFailure`, or `interaction_timeout_s` (1 s); on failure, timeout or refusal the robot holds (`UNANSWERED`, said) and the interaction lane is asked again on the hold recheck; planning never answers a change, so an unread "stop" cannot move the robot.
-
-### Progress keyframes (always on)
-- Recorded when an accepted SWITCH_TO to another subtask, or COMPLETE, moves past the step that is actually running; with the observation the decision used.
-- Not for ABORT, waits, asks, retries, reaffirms or never-started steps; kept across deviations and revisions; `snapshot.keyframes`.
-- Evidence = the step event about the running command (`"<source>: <detail>"`) if one came, else the decider's judgement.
-
-## S2 worker (`system2/worker.py`, `DecisionWorker`)
-- Contract `system2/decider.py`: `Decider.decide(snapshot) → Verdict{operation, reason, scores, preconditions, evidence}`.
-- Own thread; newest request wins (older unstarted one replaced, `replaced` counted); `busy` gates heartbeat requests.
-- Proposal stamped with the snapshot's epoch, request id, revision, base command, observation; expiry `proposal_ttl_s` (2 s); evidence adds reason, trigger, decide_ms, decider.
-- Decider error → `DecisionFailure` posted at once (releases the interaction lane); the robot keeps doing what it was doing.
-
-## Baseline deciders (`eval/deciders.py`, evaluation only)
-- `ScriptedSequence` (`scripted`): each authored subtask for its budget after activation (`realtime.py`: `chunks_per_subtask` × 2.5 s), COMPLETE after the last; ignores instruction changes.
-- `TruthSequence` (`oracle`): step after the latest one whose simulator truth holds now (`next_after_latest_done`); may go back.
-- `NativePlanner` (`native`): one SWITCH_TO without subtask; π0.5²'s own planner chooses subtasks.
-- `AlwaysContinue` (`continue`): interaction-lane baseline; every change answered with CONTINUE (= reaffirm).
-
-## v1 role split (decided 2026-10-21) and what is planned
-- v1 = plan Route A: π0.5² picks the next step and moves; Jev answers only changes (continue / revise / wait / ask / abort) and ambiguous checks; MJev checks end states and grounds objects. Helix-type route B (small S1 on a learned Jev latent, trained) = v2.
-- **Built 2026-10-22:** step-completion events (`StepEvent` → planning lane; end-state checks in `features/jev-interaction.md`); Jev v1 interaction decider (same doc).
-- **Built 2026-10-22:** π0.5²'s planner switching subtask as a step event (keyframe in native mode); heartbeat 0.8 × lease when events cover progress (`realtime.py`). Phase boundaries rejected as a source.
-- **Waiting for perception:** precondition checks (proposals carrying preconditions stay refused).
-
-## Tests (no models; `uv run pytest`, re-run 2026-10-22: 74 passed, 2 `timing` deselected)
+## Tests (no models; `uv run pytest`, re-run 2026-10-24: 329 passed, 1 skipped, 2 `timing` deselected)
 | File | Tests | Pins |
 |---|---|---|
-| `tests/test_control_execution.py` | 33 | intake / rejection reasons, activation, skip, revoke of a queued release, irreversible gating, leases (also starved), transitions, supersede, blend in bounds, violations upstream only, review, decelerating hold, starvation counting, guard paths (owner-lost drop + recovery), PandaOmron spec |
-| `tests/test_owner.py` | 39 | proposal refusal reasons, revoke / review / reaffirm (always immediate), ACK fallback incl. `dropped`, COMPLETE, deviations, two lanes (routing, deferral replayed, supersede, escalation on failure / timeout / refusal), keyframes (step-event evidence), `DecisionFailure`, holds (stop stays through heartbeats, resume, recheck, one-lane race), dialogue + utterances, step events, continue `renewed`; live multi-thread arm runs |
-| `tests/test_system1_runner.py` | 10 + 2 `timing` | runner timing on simulated / lockstep time; SO-101 plugs in; `@pytest.mark.timing` real-time budgets run alone with `uv run pytest -m timing` (2026-10-22: 5 of 6 runs passed; one SO-101 lag-budget failure while other processes loaded the Mac) |
-| `tests/test_architecture.py` | 3 | layering: imports point down the stack, nothing depends on `legacy_v2` |
+| `tests/test_control_execution.py` | 34 | rejection reasons, activation, skip, revoke of a queued release, irreversible gating, leases (also starved), transitions, supersede, blend in bounds, upstream-only violations, review, decelerating hold, starvation, guard paths, PandaOmron spec, `queued_from` |
+| `tests/test_owner.py` | 45 | refusal reasons, review / revoke / reaffirm, ACK fallback incl. `dropped`, COMPLETE, deviations, two lanes, deferral replay, unanswered hold + recheck, late answers, keyframes, holds, dialogue, step events, review window = deadline; live multi-thread runs |
+| `tests/test_system2_planning.py` | 4 | commit-and-verify: commit, release only on a checked event, bound, no re-commit |
+| `tests/test_architecture.py` | 3 | imports point down the stack; nothing depends on `legacy_v2` |
+Runner and timing tests: [`s1-supply-and-commitment.md`](s1-supply-and-commitment.md).
 
-## Measured live (RoboCasa on the Mac, 20 Hz, `executors/robocasa-pi052/realtime.py`)
-Stand-in S1 (`wiggle`, a sleep + sine chunk; 2026-10-20, step 2):
-| Latency, refill, run | Real-time factor | Max lag | Env step p50 / p95 | Chunk ticks | First chunk |
-|---|---|---|---|---|---|
-| 0.3 s, 1.0 s, 15 s | 1.00 | 3.5 ms | 41 / 45 ms | 295 / 302 | 0.35 s |
-| 0.6 s, 0.8 s, 12 s | 1.00 | 3.3 ms | 38 / 42 ms | 236 / 249 | 0.65 s |
-
-- Arms with a change of mind (MicrowaveThawingFridge, `wiggle` 0.3 s, revoke mode, 2026-10-20): scripted (14 s) and oracle (8 s) pick → revoke → pick, native (8 s) own planner → revoke → own planner; real-time factor 1.00, max lag ≤ 3.9 ms, 0 errors, 0 violations; scripted also refused one late chunk.
-- Review vs revoke (native arm, `wiggle`, change at 4 s, 2026-10-20): review → 30/30 ticks in motion after the change, 1 reaffirm, 0 revokes; revoke → 6 hold ticks (0.3 s stop) before motion resumes; real-time factor 1.00, 0 errors, 0 violations.
-- Two lanes (MicrowaveThawingFridge, scripted arm, `wiggle` 0.3 s, `--interaction continue`, change at 8 s, 2026-10-21): reaffirmed by the interaction lane at 8.0 s, 40/40 chunk ticks in the next 2 s, keyframe "pick up the steak" (rev 1, scripted evidence), 0 starved ticks, 0 violations.
-
-π0.5² as S1 (A100, us-east, over the WAN; MicrowaveThawingFridge seed 1000, `revisable` arm, `--interaction rules`, "wait" at 12 s, "go on" at 15 s, review mode, fixed commitment, 30 s; 2026-10-21; `results/runs/pi052-live-*`; invariants re-checked 2026-10-22):
-| Run | Real-time factor | Starved | S1 request p50 / p90 (after the first) | Floor | Violation ticks | Other 4 invariants |
-|---|---|---|---|---|---|---|
-| `pi052-live-1404` (before the adapter fix) | 0.97 | 0 | 732 / 841 ms | 34 | 486 (gripper, base mode) | 0 findings |
-| `pi052-live-v2` (after) | 0.971 | 0 | 650 / 845 ms (cold first request 3.96 s: chunk in the past, first motion 4.65 s) | 37 | 9 (`base_y` ≤ 1.0077, last 0.4 s) | 0 findings |
-- Both: "wait" → GUARDED_WAIT from the interaction lane at 12.0 s (moving command under review, its late chunk `chunk_rejected`), "go on" → the interrupted pick resumed at 15.0 s; no refused proposals; steak not picked in 30 s; keyframe for "pick up the steak" is the planner's time budget, not truth.
-- Switch violations were the adapter's (`serve.py` `to_action_space`, decisions 2026-10-21); the 9 continuous overshoots are reported upstream as designed.
-- Not run with π0.5²: a destination change, native planner mode, `revoke` mode, consensus / phase commitment.
+## Measured live (RoboCasa on the Mac, `executors/robocasa-pi052/realtime.py`)
+| Run | Result | Status |
+|---|---|---|
+| XR-1 + Jev, lockstep with S2 paused, "wait" / "go on" (2026-10-23) | wait at 3.05 s, resume 6.05 s, success 10.5 s; with S2 not paused both answers were late | valid (decisions 2026-10-23) |
+| XR-1 real time, F13 (`results/campaign/20261024-134629/F13`) | real-time factor 0.806, 651 of 985 ticks starved, no success | valid (E24) |
+| Live rerun of late answers, 0.3 s deadline (`results/campaign/20261024-rerun/`) | both late answers applied, not re-decided; stop / go on ×2: 4 / 4 | valid (E30) |
+| Stand-in `wiggle` S1, review vs revoke (2026-10-20, decisions "Step 4.1 built") | review: no pause after a change of mind; revoke: a 0.3 s stop | before the render fix; the stand-in ignores images, so the mechanism result stands (rule of E15) |
+| π0.5² over the WAN (2026-10-21, `results/runs/pi052-live-*`) | — | withdrawn: corrupted frames. The bug it exposed (switch dims regressed as numbers, 486 violation ticks) stands, fixed by `to_action_space` (decisions 2026-10-21) |
 
 ## Open / not validated
-- Reaffirm grasp delay (gripper frozen up to `review_s`) not measured (roadmap T8).
-- All stand-in numbers are mechanism-level; performance claims need π0.5² runs (T8a / T8).
+- No completion signal: XR-1's native planner never yields COMPLETE, so a finished task keeps running (run 5, E25).
+- Preconditions: proposals carrying any stay refused until perception exists.
+- Reaffirm grasp delay (gripper frozen up to the review window) not measured.
+- Lockstep resumes ticking when the worker finishes, not when the owner has applied the answer (up to one owner
+  period, 50 ms wall, in between).
+- Real-time behaviour with XR-1 is supply-bound (F13); hardware needs real-time passes first.

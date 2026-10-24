@@ -169,7 +169,7 @@
 **Risks / edge cases found:** Unreleased branch; Gemma fp16 overflow (hence validation; fallback = fp32 across 2×T4); PaliGemma tokenizer gated; 4.14B params (2.82B bf16 + 1.32B fp32).
 
 ## [2026-10-17] Code reuse: what we borrow
-**Decision:** Per `docs/features/v2-engineering-notes.md (§1)`. Import π0.5² (actions, its own planner as Arm A, subtask vocabulary as OneJev's candidates); port LeRobot's external-VLM planner (Arm C, Qwen3.5-0.8B) and RoboCombine's switching/metrics; MemER and Goal2Skill as ideas only; SkillNet not used.
+**Decision:** Per `docs/features/history/v2-engineering-notes.md`. Import π0.5² (actions, its own planner as Arm A, subtask vocabulary as OneJev's candidates); port LeRobot's external-VLM planner (Arm C, Qwen3.5-0.8B) and RoboCombine's switching/metrics; MemER and Goal2Skill as ideas only; SkillNet not used.
 **Why:** Avoid rebuilding what exists, and keep every arm on identical candidates and identical low-level weights.
 **Rejected alternatives:** Forking π0.5² to change its planner; copying MemER code (no licence).
 **Risks / edge cases found:** The planner lives on another unreleased branch (port, pin commit); the subtask vocabulary must be extracted from the dataset's `language_persistent` column.
@@ -205,7 +205,7 @@
 **Risks / edge cases found:** Hook lives on an unreleased branch (pinned @9d00293).
 
 ## [2026-10-17] Curate the paper bibliography
-**Decision:** `docs/paper/references.bib` keeps 29 entries: load-bearing research papers, SmolVLA/π0-family papers/blogs/checkpoints, OneJev and MJev-Spatial. Codebases, tool docs, one-off side references removed; build notes moved to `docs/features/v2-engineering-notes.md`.
+**Decision:** `docs/paper/references.bib` keeps 29 entries: load-bearing research papers, SmolVLA/π0-family papers/blogs/checkpoints, OneJev and MJev-Spatial. Codebases, tool docs, one-off side references removed; build notes moved to `docs/features/v2-engineering-notes.md` (now `docs/features/history/`).
 **Why:** User call: the paper folder holds only what the paper cites.
 **Rejected alternatives:** Citing every source touched (141 entries).
 **Risks / edge cases found:** Removed sources (e.g. EmbodiedJev, Jev blog, Goal2Skill) are no longer cited; re-add deliberately if the paper text needs them.
@@ -709,7 +709,7 @@
 **Rejected alternatives:** An executor-side client that remembers its last chunk (wrong after partial commits, revokes or new commands; no observation time in `act`, so wall-clock guesses); RTC in the core (model-specific); passing the continuation to every policy (stand-ins would have to accept and ignore it).
 **Risks / edge cases found:** RTC guidance runs under `no_grad` (autograd) instead of `inference_mode`: server latency to measure; the execution horizon (25 steps) is a declared choice; wire v2 clients are refused.
 
-## [2026-10-22] Lockstep mode for the live harness (diagnostic)
+## [2026-10-22] Lockstep mode for the live harness (diagnostic; superseded 2026-10-23: lockstep is the sim evaluation mode)
 **Decision:** `realtime.py --lockstep`: one thread alternates S1 supply and one control tick, so simulated time stops while S1 thinks; real time stays the default.
 **Why:** π0.5² completed no task in real time; lockstep is how it was trained and evaluated, so it separates the policy's own skill from the cost of the delay; LeRobot's own runner needs the RoboCasa assets on the GPU box (absent; the simulator runs on the Mac).
 **Rejected alternatives:** `drive.py` / lerobot-eval on the box (tens of GB of scene assets); slowing the simulator (still couples sim time to latency).
@@ -734,7 +734,7 @@
 **Risks / edge cases found:** XR-1's environment pins transformers 4.57.1, so it installs only the core's S1-side dependencies (`dependency-metadata` override); flash-attn 2.8.3's wheel names a local version its metadata lacks, so `uv sync --frozen --check` never passes and `gpu_setup` stops at `env:robocasa-xr1` (service started by hand with the same launcher for this test; packaging fix open); SDPA is not supported by the model (flash-attn required, Ampere+ GPU).
 
 ## [2026-10-22] Camera images in live runs were corrupted by robosuite's render-context teardown; fixed in the RoboCasa executor
-**Decision:** `executors/robocasa-pi052/render_context.py` installs a teardown that frees a robosuite render context in its own GL context (then restores the current one); `RoboCasaBackend` installs it before building the environment; regression test `tests/test_render_context.py`. Every live result from `realtime.py` before this fix is withdrawn until re-run: π0.5² memory A/B, delay A/B (lockstep / real time / RTC), full-budget lockstep, oracle, SAM live tracking, XR-1's first 1/6.
+**Decision:** `executors/robocasa-pi052/render_context.py` installs a teardown that frees a robosuite render context in its own GL context (then restores the current one); `RoboCasaBackend` installs it before building the environment; regression test `executors/robocasa-pi052/tests/test_render_context.py`. Every live result from `realtime.py` before this fix is withdrawn until re-run: π0.5² memory A/B, delay A/B (lockstep / real time / RTC), full-budget lockstep, oracle, SAM live tracking, XR-1's first 1/6.
 **Why:** robosuite frees a replaced simulator's MuJoCo context (`mjr_freeContext`) in whatever GL context is current, deleting the live simulator's framebuffer and textures (same ids); `realtime.py` calls `gc.collect()` before `gc.freeze()`, so from the first step the policy saw noise (neighbour-pixel difference 70–84 vs 5 for real frames; reproduced with a stand-in policy, no network, lockstep and real time). Still-frame sets (done-check, SAM check) never collect: 0 of 444 images corrupt, those results stand.
 **Rejected alternatives:** Dropping `gc.collect()` (any later automatic collection triggers the same; the cause is the teardown); editing the vendored robosuite clone (lost on re-clone; the box re-clones at the pinned commit); recreating the live context after a collection (stale contexts appear on every reset).
 **Risks / edge cases found:** The fix is GLFW/CGL-specific (macOS; EGL contexts have no `_context` and keep robosuite's behaviour); remove when robosuite frees in its own context; earlier "the checkpoint is the limit" and "delay is not the cause" conclusions are unverified until re-run.
@@ -810,3 +810,21 @@
 **Why:** Of ~1.26 s per decision only 75–140 ms is the server; qev's client opened a connection per request, costing an extra wide-area round trip over the tunnel (~650 ms). Kept: median 604 ms, identical probabilities.
 **Rejected alternatives:** A separate vision encoder (vision is ~20 ms per image of the total); smaller JPEG / WebP (changed the top option in 1 / 6 cases for ≤ 100 ms); patching the vendored qev (lost on re-clone).
 **Risks / edge cases found:** `KeptClient` overrides qev's private `_post` / `_get` (pinned in uv.lock; re-check on a qev upgrade); requests on one client are serialised.
+
+## [2026-10-24] GPU setup runs independent steps at once
+**Decision:** After `packages`, the driver branch, Mac-side assets and the code branch (with every component's env / assets / weights chain) run as parallel jobs synchronised by marker files; services start in order with GPU memory projected across them, then health waits and tunnels run at once.
+**Why:** The fresh-box setup ran the driver install, two environment builds (torch, flash-attn) and two weight downloads one after another.
+**Rejected alternatives:** Driver in parallel with `packages` (both use apt / dpkg); service starts in parallel (two starts could claim the same free GPU memory).
+**Risks / edge cases found:** Logs appear per group, after it finishes; a component's weight step waits for the driver because readiness may load CUDA kernels.
+
+## [2026-10-24] Live rerun confirms effect hesitation and late answers; OneJev keep-alive still open
+**Decision:** Effect-based hesitation and the late-answer rule stand as built (E30); the next speed step is a longer keep-alive on the OneJev server (its service hook), not a client-side ping.
+**Why:** Live: stop / go on ×2 4 / 4 (was 2 / 4); "ruko" asks; with a 0.3 s deadline both late answers were applied, not re-decided. Jev in the loop stayed ~930 ms because the server drops a connection idle ~5 s and decisions are seconds apart.
+**Rejected alternatives:** A client ping every few seconds to keep the connection open (a workaround for a server setting).
+**Risks / edge cases found:** "stop" can resolve to wait (both hold, no question); "go on" after success still restarts the finished task (completion gap).
+
+## [2026-10-24] Superseded feature pages move to `docs/features/history/`; one current levers registry
+**Decision:** The four v2-era pages (`v2-levers`, `v2-pi052-executor`, `v2-engineering-notes`, `phase0-install`) move to `docs/features/history/`, each cut to what it was, what replaced it and the lessons that still apply; `docs/features/levers.md` lists current knobs only (default, where set, trade-off), read from the code.
+**Why:** The v2 pages presented superseded values as current (e.g. "current value" for the v2 supervisor, `raw` as the codec default).
+**Rejected alternatives:** Deleting them (loses lessons and the sources E1 / E8 cite); keeping a "v3 section" inside the v2 registry (mixes eras again).
+**Risks / edge cases found:** `levers.md` duplicates defaults that also appear on owning pages; a changed default must update both.

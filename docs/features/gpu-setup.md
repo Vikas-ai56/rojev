@@ -1,43 +1,39 @@
-# GPU setup: one command from the Mac to serving S1 + S2 models (2026-10-21)
+# GPU setup: one command from the Mac to serving S1 + S2 models (2026-10-21, parallel since 2026-10-24)
+
+Code: `scripts/gpu_setup.sh` (Mac orchestrator, bash 3.2), `scripts/gpu_box.sh` (box-side step library, streamed over SSH per call), `scripts/hf_pins.py` (pinned HF snapshots), `<kind>/<name>/gpu/hook.sh` (one per component). Decisions 2026-10-21 (components, one hook interface) and 2026-10-24 (independent steps at once). Transport and services: [`remote-models.md`](remote-models.md).
 
 ## Usage
-- `scripts/gpu_setup.sh <ssh-host> --executor robocasa-pi052 --services onejev,mjev`: fresh Ubuntu GPU box → π0.5², OneJev and MJev running, one SSH tunnel each, one service JSON for the box.
+- `scripts/gpu_setup.sh <ssh-host> [--executor robocasa-pi052|robocasa-xr1] [--services onejev,mjev,sam2]` (at least one component): fresh Ubuntu GPU box → services running, one SSH tunnel each, one service JSON for the box.
 - `--dry-run` (alias `--check`): every check runs, nothing changes on the box or the Mac; prints `would …` with the files that differ, and `blocked: …` for a foreign process or too little GPU memory.
 - `--tunnel`: only reopen the tunnels and check health (e.g. after the Mac slept). `--skip-serve`: set up, leave services and tunnels alone. `--restart`: restart every selected service.
 - `--local-port KEY=N` (repeatable; default: the port already in the JSON, else the first free 8010–8099), `--driver-branch B` (default 580).
-- Service JSON `~/.config/rojev/services/<host>.json`: `{"pi052": {url, token}, "mjev": {url, token}, "onejev": {url}}`; other entries, and other keys inside an entry, are kept. `realtime.py` passes the whole `pi052` entry to `RemotePolicy(**entry)`, so `"codec": "webp90"` (the decided remote default; the code default is `raw`) goes there. `url` is always rewritten to the tunnel's `http://127.0.0.1:<port>`: an `h3://` entry needs its own JSON file ([`remote-models.md`](remote-models.md)).
-- Then: `cd executors/robocasa-pi052 && uv run python realtime.py --policy remote --service ~/.config/rojev/services/<host>.json` (`service_addresses` reads the `pi052` entry; workflow arm D also reads `mjev`; OneJev: `--onejev <url>` / `QEV_BASE_URL`).
-- Needs: an SSH alias with key login (BatchMode; ssh-agent for passphrases), passwordless sudo on the box, an HF login on the Mac with access to `google/paligemma-3b-pt-224`.
+- Service JSON `~/.config/rojev/services/<host>.json` (dir 700, file 600): one entry per component key, `{url, token}` (`onejev`: url only). Other entries, and other keys inside an entry (e.g. `codec`), are kept; `url` is always rewritten to the tunnel's `http://127.0.0.1:<port>`, so an `h3://` service needs its own JSON file.
+- Use from the Mac: `cd executors/robocasa-pi052 && uv run python realtime.py --policy remote [--s1 xr1] --service <json>`. `realtime.py` reads `pi052` / `xr1` (`RemotePolicy(**entry)`), `onejev` (`--chooser onejev`, `--verify onejev`; `onejev.KeptClient(url)`) and `mjev` (`--verify mjev`); `gpu_suite.py` and `calibrate_jev.py` take the same file.
+- Needs: an SSH alias with key login (BatchMode; ssh-agent for passphrases), passwordless sudo on the box; for `robocasa-pi052` an HF login on the Mac with access to `google/paligemma-3b-pt-224`.
 
 ## Components
-| Component | Key | Box port | Auth | GPU need | Weights |
-|---|---|---|---|---|---|
-| `executors/robocasa-pi052` (S1) | `pi052` | 8000 | token | 10240 MiB | `lerobot/pi052_robocasa` + FAST tokenizer; gated PaliGemma tokenizer from the Mac |
-| `services/onejev` (S2) | `onejev` | 8002 | none (qev has no auth; `--host 127.0.0.1` mandatory) | 14336 MiB | `config/onejev_weights.txt` (OneJev1.6-4B) |
-| `services/mjev` (S2) | `mjev` | 8001 | token | 9728 MiB | `config/mjev_weights.txt` + base model read from its `config.json` |
-- Measured on one A100 40 GB with all three: 32.6 GB used (π0.5² ~9.6, MJev ~9.0, OneJev ~13.2 GB).
-- π0.5² and MJev hooks start their services with `--idle-min 600` (exit after 10 h without requests; re-running the setup restarts them).
-- HTTP only: the π0.5² hook runs `serve.py --tokenizer-dir … --port 8000 --idle-min 600`, without `--h3-port --cert --key`. No certificate is made, no UDP port opened, no `cert_pem` written; HTTP/3 is started by hand (`make_certificate`, then `serve.py --h3-port N --cert C --key K`, then a separate service JSON with `h3://host:N` and `cert_pem`).
-
-## Files
-| File | Role |
-|---|---|
-| `scripts/gpu_setup.sh` | Mac orchestrator: components, steps, rsync, tokens, service JSON, GPU memory check, tunnels (bash 3.2) |
-| `scripts/gpu_box.sh` | box-side step library, streamed over SSH per call (`*_ready` checks, `*_install`, systemd units) |
-| `scripts/hf_pins.py` | pinned HF snapshot fetch / offline lookup / path, run with the component's env |
-| `<kind>/<name>/gpu/hook.sh` | component interface (below) |
-| `executors/robocasa-pi052/gpu/hub.py` | gated tokenizer (Mac) and π0.5² weights (box) |
-| `config/onejev_weights.txt`, `config/mjev_weights.txt` | weight pins (`repo <id> @ <revision>`) |
+| Component | Key | Box port | Auth | GPU need (MiB) | Idle exit | Weights / env |
+|---|---|---|---|---|---|---|
+| `executors/robocasa-pi052` (S1) | `pi052` | 8000 | token | 10240 | 600 min | `lerobot/pi052_robocasa` + FAST tokenizer (box); gated PaliGemma tokenizer from the Mac; vendors LeRobot steerable, RoboCasa, robosuite |
+| `executors/robocasa-xr1` (S1) | `xr1` | 8004 | token | 11776 | 600 min | `config/xr1_weights.txt` (Xiaomi-Robotics-1-RoboCasa365, ~10.2 GB); flash-attn 2.8.3 from its sdist, readiness imports `flash_attn_2_cuda`; no vendor |
+| `services/onejev` (S2) | `onejev` | 8002 | none | 14336 | none | `config/onejev_weights.txt` (OneJev1.6-4B), `qev serve --multimodal --dtype bfloat16 --host 127.0.0.1` |
+| `services/mjev` (S2) | `mjev` | 8001 | token | 9728 | 600 min | `config/mjev_weights.txt` + the base model named in its `config.json`; bf16 trunk; out of the v1 loop |
+| `services/sam2` (measurement) | `sam2` | 8003 | token | 3072 | 600 min | `config/sam2_weights.txt` (SAM 2.1 Hiera Tiny); not in the loop |
+- With an executor, the core's OneJev vendor (`config/onejev.commit`) is cloned too; vendors are deduplicated across components.
+- Measured on one A100 40 GB with π0.5² + MJev + OneJev resident: 32.6 GB (π0.5² ~9.6, MJev ~9.0, OneJev ~13.2 GB; 2026-10-21). XR-1 alone: 10.2 GB (E23).
+- HTTP only: no hook starts HTTP/3. By hand: `make_certificate`, `serve.py --h3-port N --cert C --key K`, a separate service JSON with `h3://host:N` and `cert_pem`.
+- `PI052_SERVE_FLAGS` (e.g. `--planner-memory`) is read by the π0.5² hook's `serve`; `gpu_setup.sh` never sets it and rewrites the launcher on every start, so an A/B run sets it by hand.
 
 ## Steps (each prints `[step] ok | would … | done`)
-- `ssh` → `gpu` → `local-assets:<n>` (first: a missing HF login fails before a long install).
-- `driver`: skipped if `nvidia-smi` works; else `nvidia-driver-<B>-server` + `linux-headers-$(uname -r)`, then `nvidia-utils-<major of the built module>-server`, `modprobe nvidia`, `nvidia-smi`.
-- `packages` (build-essential git rsync curl) → `uv` (≥ the Mac's version).
-- `code:core` (rojev/ + root pyproject/uv.lock/README; only with an executor) → `code:shared` (config/, scripts/) → `code:<n>` (hook files + gpu/). Trees mirrored with `--delete`, compared by checksum.
-- `vendor:<dir>`: clone + checkout of `config/*.commit` pins (core OneJev + each hook's vendors, deduplicated).
-- Per component: `env:<n>` (`uv sync --frozen`, uv-managed Python) → `assets:<n>` → `prepare-remote:<n>` → `torch:<n>` (CUDA visible). All components' chains run at once (one background job each, 2026-10-24); their logs print after all finish; a failure in any stops the setup; restart marks are passed back to the main run.
-- `service-json` → `token:<key>` (auth=token only) → `service:<n>` per component (start sequentially, each waits for `GET /health`) → `tunnel:<key>`.
-- Restart scope: a component's service restarts only when its own steps changed (its code, env, assets, weights, token), or a shared step changed (driver, packages, uv, config/scripts, vendors); `code:core` restarts only the executor.
+1. `ssh` (BatchMode, accepts a new host key) → `gpu` (NVIDIA display / 3D controller on PCI).
+2. `packages` (apt: build-essential git rsync curl), alone: apt holds the dpkg lock.
+3. Three branches at once, synchronised by marker files:
+   - per component `local-assets:<n>` on the Mac (hook `check_local` / `prepare_local`; a missing HF login fails here, early);
+   - driver: `driver` (skipped if `nvidia-smi` works; else `nvidia-driver-<B>-server` + headers, utils by the built module's version, `modprobe`) → `gpu-mode` (MIG off; refused while GPU processes run);
+   - code: `uv` (≥ the Mac's version) → `code:core` (rojev/ + root pyproject / uv.lock / README; only with an executor) → `code:shared` (config/, scripts/) → `code:<n>` (hook files + `gpu/`) → `vendor:<dir>` (clones at `config/*.commit`) → every component's chain at once: `env:<n>` (`uv sync --frozen`, uv-managed Python) → waits for its local assets → `assets:<n>` → waits for the driver (readiness may load CUDA kernels) → `prepare-remote:<n>` (weights) → `torch:<n>` (CUDA visible).
+4. `service-json` → `token:<key>` (auth = token) → `service:<n>` started one at a time, GPU memory projected across the starts → health waits (`GET /health`, up to 1200 s) at once → `tunnel:<key>` at once.
+- Trees mirror with `--delete`, compared by checksum; each job's log prints after its group finishes; any failure stops the setup.
+- Restart scope: a service restarts only when its own steps changed (code, env, assets, weights, token) or a shared one did (driver, gpu-mode, packages, uv, config / scripts, vendors); `code:core` restarts only the executor.
 
 ## Component interface: `<kind>/<name>/gpu/hook.sh <subcommand>` (working dir = component dir, `ROJEV_ROOT` = repo root)
 | Side | Subcommand | Contract |
@@ -50,37 +46,37 @@
 | Mac | `check_local` / `prepare_local` / `assets` | Mac-side assets: ready? / fetch / `<local file>\t<box dir>` lines |
 | Mac | `client_hint JSON URL` | how to use the service from the Mac |
 | Box | `check_remote` / `prepare_remote` | box-side preparation done? / do it |
-| Box | `serve` | exec the service in the foreground; reads `$ROJEV_TOKEN` when auth=token |
+| Box | `serve` | exec the service in the foreground; reads `$ROJEV_TOKEN` when auth = token |
+- Full contract: `executors/robocasa-pi052/gpu/hook.sh` header. A new component = one hook; `gpu_setup.sh` refuses clashing names, keys or ports.
 
 ## Box layout
-- `~/rojev/` code + `vendor/`; `~/.rojev/<name>/{token, serve.sh, serve.log}` (`serve.sh` exports `ROJEV_TOKEN` from the token file); transient unit `rojev-<name>` (`systemd-run`; `systemctl status rojev-<name>`; output in `serve.log`).
+- `~/rojev/` code + `vendor/`; `~/.rojev/<name>/{token, serve.sh, serve.log}` (`serve.sh` exports `ROJEV_TOKEN` from the token file); transient unit `rojev-<name>` (`systemd-run`; `systemctl status rojev-<name>`; output appended to `serve.log`).
 
 ## Pitfalls (cause → fix)
 - `nvidia-driver-570-server` is transitional to the 580 kernel module; `nvidia-utils-570-server` then mismatches → utils installed by the built module's version (`modinfo -F version nvidia`).
+- MIG enabled with no instances hides the GPU from CUDA → `gpu-mode` turns MIG off (only with no GPU processes).
 - System Python 3.12 has no `Python.h`; evdev (robosuite → pynput → evdev) builds from source → `UV_PYTHON_PREFERENCE=only-managed` + `build-essential`.
-- `pkill -f 'python serve.py'` inside `ssh host '…'` kills its own shell → services run as systemd units; stop/status by unit name.
+- `pkill -f 'python serve.py'` inside `ssh host '…'` kills its own shell → services run as systemd units; stop / status by unit name.
 - qev binds 0.0.0.0 by default and has no auth → OneJev is always served with `--host 127.0.0.1`; the tunnel is the only access path.
 - MJev loads its vision tower from a base model named in the checkpoint's `config.json` → the base is resolved from there, never hard-coded.
-- macOS openrsync: `-c -L` checksums the symlink, not its target (every HF-cache file reads as changed, exit 23) → assets compare by size + mtime; `-R --delete` deletes inside implied parent dirs (removed `.venv` in a local test) → trees with `--delete` synced one by one.
+- flash-attn's prebuilt wheel names a local version its metadata lacks, so `uv sync --frozen --check` never passed → built from the sdist with `FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE` (fetches the matching wheel); a kernel-less build fails readiness.
+- macOS openrsync: `-c -L` checksums the symlink, not its target (every HF-cache file reads as changed, exit 23) → assets compare by size + mtime; `-R --delete` deletes inside implied parent dirs → trees with `--delete` synced one by one.
 - Fresh boxes hold the dpkg lock (unattended-upgrades) → apt waits (`DPkg::Lock::Timeout=600`).
 - `modprobe nvidia` fails (nouveau, Secure Boot) or `nvidia-smi` version mismatch → `ssh <host> sudo reboot`, re-run.
 - A process on a component's box port not started by this script → `blocked: foreign process`; never stopped. Free GPU memory below `gpu_mem_mib` → start refused with the GPU process list.
 
 ## Security
-- Tokens (one per auth=token component): made on the Mac, kept in the service JSON (dir 700, file 600) and `~/.rojev/<name>/token` (600); sent only inside the SSH-streamed script as a here-document; compared by sha256; never printed, never on a command line (`curl -K -` reads the header from stdin).
-- No Hugging Face token leaves the Mac: the gated tokenizer is downloaded there and only its files are copied; S2 weights are public.
-- All services this script starts bind 127.0.0.1 on the box; only the SSH tunnels reach them. A hand-started `serve.py --h3-port` binds UDP on all interfaces (bearer token + pinned certificate).
+- Tokens (one per auth = token component): made on the Mac, kept in the service JSON (600) and `~/.rojev/<name>/token` (600); sent only inside the SSH-streamed script as a here-document; compared by sha256; never printed, never on a command line (`curl -K -` reads the header from stdin).
+- No Hugging Face token leaves the Mac: the gated tokenizer is downloaded there and only its files are copied; every other weight is public.
+- Every service this script starts binds 127.0.0.1 on the box; only the SSH tunnels reach them. A hand-started `serve.py --h3-port` binds UDP on all interfaces (bearer token + pinned certificate).
 
-## Verified (2026-10-21)
-- `bash -n` + shellcheck 0.11 clean on all scripts and hooks; hook Mac subcommands for all three components; `hf_pins.py` pin parsing, errors, offline lookup; MJev base resolved from `config.json`.
-- Mac-side logic run locally: component loading and clash detection, vendor dedup, local port picking, service JSON write/check (modes, tokens kept across rewrites, no token for onejev), restart scoping; the JSON loads through `workflow.service_addresses`.
-- Box library simulated locally: token here-document, file modes, digest equality, launchers with and without token.
-- `--dry-run` against `lambda` (A100, set up by hand): driver, packages, uv, vendors, envs, torch ×3 `ok`; code / assets / prepare-remote / tokens / JSON `would`; all three services reported `blocked: foreign process`; nothing written on the box. Pinned S2 weights confirmed in its HF cache.
-- 2026-10-22, first real run on a fresh box (`lambda`: A100 SXM4 40 GB, Ubuntu 24.04 without a driver, Phoenix AZ): driver install, packages, envs, weights, tokens, the OneJev and MJev units came up healthy; the π0.5² unit died at import because the hook did not ship `embodiment.py` (imported by `serve.py` since the 2026-10-21 switch mapping) → added to `files()` and re-run (idempotent). Not yet exercised: memory refusal.
-- `lambda` was terminated after a backup on 2026-10-21 (`results/gpu-backups/lambda-v1-test-20261021-1456/`); the WAN transport numbers in [`remote-models.md`](remote-models.md) come from it.
+## Verified
+- 2026-10-21: `bash -n` + shellcheck 0.11 clean on all scripts and hooks; Mac-side logic run locally (component loading and clash detection, vendor dedup, port picking, service JSON modes and tokens, restart scoping); `--dry-run` against an A100 box set up by hand.
+- 2026-10-22, first real run on a fresh box (A100 SXM4 40 GB, Ubuntu 24.04 without a driver): driver, packages, envs, weights, tokens, OneJev and MJev healthy; π0.5² died at import (hook did not ship `embodiment.py`) → added to `files`, re-run idempotent.
+- 2026-10-24: parallel steps checked with `--dry-run`; XR-1 env with flash-attn from its sdist on the A100 box.
+- Not exercised: the GPU memory refusal.
 
 ## After setup: the GPU test suite
-- `cd executors/robocasa-pi052 && uv run python gpu_suite.py --service ~/.config/rojev/services/<host>.json [--only …] [--quick]`.
-- Steps, sequential on purpose (one GPU; π0.5²'s service serves one request at a time, parallel runs would measure each other): `baseline` (π0.5² native per task), `k_samples` (K = 1 / 3 / 5 latency, draw spread, GPU memory), `jev` (OneJev latency; live wait / stop / ask runs with the deadline set to 1.5 × the slowest measured decision; calibration cases recorded), `mjev` (oracle arm + MJev step watcher; P(done) vs truth per check), `t8a_gate` (commitment ablation + gate run with video).
-- Opt-in steps: `done_check` (MJev vs OneJev on simulator-labelled frames, `--done-frames DIR` from `done_check_ab.py build`) and `commit_ab` (π0.5² alone vs commit and verify with each checker).
+- `cd executors/robocasa-pi052 && uv run python gpu_suite.py --service <json> [--only …] [--quick]` (π0.5²-based v1 suite).
+- Steps, sequential on purpose (one GPU; π0.5²'s service serves one request at a time): `baseline` (π0.5² native per task), `k_samples` (K = 1 / 3 / 5 latency, spread, GPU memory), `jev` (OneJev latency; live wait / stop / ask runs with the deadline from the measured latency; calibration cases recorded), `mjev` (oracle arm + MJev step watcher; P(done) vs truth), `t8a_gate` (commitment ablation + gate run with video). Opt-in: `done_check` (`--done-frames DIR` from `done_check_ab.py build`), `commit_ab`.
 - Output `results/gpu-suite/<stamp>/{<step>/…, suite.json, suite.md}`; a failed step is recorded and the suite goes on.
