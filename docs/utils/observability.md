@@ -50,7 +50,9 @@ episode (CHAIN)                    ERROR if anything below failed, reasons liste
 - Evaluator truth = the box's pixel count in a segmentation render from the same camera (never sent to OneJev):
   `box_visible` must sit on the correct side of 0.5; `next` must be `approach_box` iff the box is visible.
 - `make qev` serves OneJev 1.5 0.8B (Makefile `GGUF`), not the 1.6 4B the v1 loop uses; demo answers are evidence
-  for E1–E4 only, all superseded (`docs/paper/experiments.md`).
+  for E1–E4 only, all superseded (`docs/paper/experiments.md`). The 1.6 4B GGUF (`mradermacher/OneJev1.6-4B-GGUF`)
+  does not load on the local llama.cpp (build 11429: `tensor 'blk.32.attn_norm.weight' not found`, 2026-10-25); the
+  v1 model runs only on the GPU service (bf16, `services/onejev`).
 - Measured 2026-10-16: final error ≤ 0.0006 rad per segment, 0 floor contacts, viewer in real time.
 
 ## Gotchas

@@ -828,3 +828,15 @@
 **Why:** The v2 pages presented superseded values as current (e.g. "current value" for the v2 supervisor, `raw` as the codec default).
 **Rejected alternatives:** Deleting them (loses lessons and the sources E1 / E8 cite); keeping a "v3 section" inside the v2 registry (mixes eras again).
 **Risks / edge cases found:** `levers.md` duplicates defaults that also appear on owning pages; a changed default must update both.
+
+## [2026-10-25] Lockstep drives the owner on the main thread; workers post before they go idle
+**Decision:** In `--lockstep`, `realtime.py` runs `owner.step()` (every posted event, then a tick) on the main thread and ticks the world only when no S2 lane is `busy` and, read after the lanes, `owner.has_events` is false; `DecisionWorker` posts its outcome before clearing `busy`.
+**Why:** The world could tick between a worker finishing and the owner (own 50 ms thread) applying the answer, so an answer was not guaranteed to land at the simulated time it was decided for.
+**Rejected alternatives:** A settle delay before ticking (a timing heuristic); an owner-side counter of outstanding requests (replaced requests never answer, so it leaks).
+**Risks / edge cases found:** Lockstep now depends on the read order (lanes, then owner); an owner `handle` that raises stops the run's main loop instead of a background thread.
+
+## [2026-10-25] Harness defaults follow the v1 stack
+**Decision:** `realtime.py --s1` defaults to `xr1`; `make qev` stays on OneJev 1.5 0.8B (local demo only); the `harmless` scenario expects a plain interaction-lane `continue`; `blocked` is labelled the rules stand-in's case and `jev-blocked` checks Jev's deviation answer (wait, never retry).
+**Why:** The old defaults (π0.5², OneJev 1.5 0.8B) and expectations (reaffirm, retry) predated decisions 2026-10-22 / 24.
+**Rejected alternatives:** Removing `blocked` (it still covers the stand-in's retry path and the scorecard's recorded-retry mapping); `make qev` on the 1.6 4B GGUF (fails to load on the local llama.cpp build 11429: `blk.32.attn_norm.weight` missing).
+**Risks / edge cases found:** Local OneJev answers come from a different, smaller model than the v1 loop; `blocked` / `jev-blocked` never raise a deviation with the scripted-skill monitor (max 2.15 vs 2.54), so their decision checks are unexercised.

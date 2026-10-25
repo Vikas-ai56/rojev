@@ -20,8 +20,8 @@ Related: [`v3-runtime.md`](v3-runtime.md) · [`s1-supply-and-commitment.md`](s1-
 - `RoboCasaBackend.read(fn)` evaluates the kitchen under a lock between two steps; latches RoboCasa's own success
   (`success_t`); `--block-at` zeroes the arm dims inside `step` (fault).
 - Time modes (decision 2026-10-23):
-  - **lockstep** (`--lockstep`) = the simulator evaluation mode: one thread runs S1 supply then one control tick, and
-    no tick while either S2 lane is busy, so model computation takes zero simulated time; `--seconds` is simulated;
+  - **lockstep** (`--lockstep`) = the simulator evaluation mode: one thread runs the owner, S1 supply and one control
+    tick, and no tick while either S2 lane is busy or its answer is unhandled, so model computation takes zero simulated time; `--seconds` is simulated;
   - **real time** (without `--lockstep`) = reported alongside: control at 20 Hz on the wall clock, every part on its
     own thread; measures the latency a robot will have (E24: XR-1 over the WAN cannot keep up).
 - Setup heap frozen (`gc.collect(); gc.freeze()`) before threads start (full GC pass 45–96 ms otherwise).
@@ -30,7 +30,7 @@ Related: [`v3-runtime.md`](v3-runtime.md) · [`s1-supply-and-commitment.md`](s1-
 |---|---|---|
 | `--task`, `--seed`, `--seconds` | LoadCondimentsInFridge, 1000, 20 | run length: simulated in lockstep, wall in real time |
 | `--arm` (+ `--subtask`, `--max-commit`) | `fixed` | `fixed` · `scripted` · `oracle` · `revisable` · `revisable-truth` · `native` · `commit` (25 s) |
-| `--policy`, `--service`, `--s1` | `skills`, —, `pi052` | `skills` scripted S1 · `remote` (`--s1 pi052\|xr1`; xr1 gets 4 frames 2 ticks apart) · `wiggle` plumbing |
+| `--policy`, `--service`, `--s1` | `skills`, —, `xr1` | `skills` scripted S1 · `remote` (`--s1 xr1\|pi052`; xr1 gets 4 frames 2 ticks apart) · `wiggle` plumbing |
 | `--latency`, `--sample-noise` | 0.3 s, 0 | skills / wiggle: simulated inference time, per-sample noise |
 | `--interaction`, `--interaction-timeout` | `none`, 1.0 s | `none` (one lane) · `continue` · `rules` (keyword spoof) · `jev` |
 | `--chooser`, `--reviser`, `--skills`, `--max-asks`, `--jev-calibration` | `onejev`, `canonical` if remote else `rewrite`, —, 2, — | Jev: act scorer (`keywords` = spoof); REVISE = trained sentence / rewritten step; extra trained sentences (run instruction always included); question budget; `{act, task}` JSON |
@@ -72,7 +72,7 @@ Related: [`v3-runtime.md`](v3-runtime.md) · [`s1-supply-and-commitment.md`](s1-
 - `no_violations`: no incoming action clamped by the bounds.
 - `frames_real`: every sampled camera frame was real.
 
-## `scenarios.py`: the matrix (19 cases)
+## `scenarios.py`: the matrix (20 cases)
 - Each case = one `realtime.py` subprocess, MicrowaveThawingFridge seed 1000, `revisable` arm, real time (scripted S1
   on the Mac); checked against the invariants and its own expectations.
 - `uv run python scenarios.py [--only NAME…] [--viewer] [--policy remote --service S.json] [--monitor M.json]
@@ -86,7 +86,7 @@ Related: [`v3-runtime.md`](v3-runtime.md) · [`s1-supply-and-commitment.md`](s1-
 |---|---|---|---|
 | nominal | 16 s | first two steps in order, a keyframe, 0 starved | — |
 | speculative / -phase | K = 3, noise 0.01 (+ phase policy) | a consensus rule fired / a commitment shorter than the chunk; 0 starved | — |
-| harmless | rules, "nice work" 5 s | interaction-lane reaffirm (stale, see Measured); moving 2 s after | 5: harmless → continue |
+| harmless | rules, "nice work" 5 s | interaction-lane `continue`, no new command from it; moving 2 s after | 5: harmless → continue |
 | revise | rules, "…on the plate" 4 s, "no, …microwave" 14 s | place step → plate; in-step revision → microwave by the interaction lane | 4: goal_swap → continue · 14: goal_swap → revise |
 | stop / stop-stays | rules, "stop" 6 s / 5 s | ABORT; holding after (stop-stays: standing hold, no moving command, to the end) | stop → abort |
 | wait-resume / jev-wait-resume | rules / jev + keyword chooser; "wait" 5, "go on" 9 | GUARDED_WAIT, then the interrupted step (jev: two ACKs) | 5: pause → wait · 9: resume → revise |
@@ -98,7 +98,8 @@ Related: [`v3-runtime.md`](v3-runtime.md) · [`s1-supply-and-commitment.md`](s1-
 | s2-fail | rules, decider raises | `decision failed`, unanswered hold within 1 s, planning never answers, holding | 5: pause → wait |
 | s1-slow | S1 latency 0.9 s | floor ≥ 37, 0 starved | — |
 | step-events | `revisable-truth` + `--verify truth`; needs `--policy remote` | a step event; a keyframe with the checker's evidence | — |
-| blocked | monitor on, arm blocked 6–8 s; needs `--monitor` | a deviation, RETRY from the interaction lane | 6: deviation → revise |
+| blocked | rules stand-in, monitor on, arm blocked 6–8 s; needs `--monitor` | a deviation, RETRY from the interaction lane (the stand-in's own act) | 6: deviation → revise |
+| jev-blocked | jev + keyword chooser, same block | a deviation, GUARDED_WAIT from the interaction lane, never a retry (Jev offers continue / wait on a deviation) | 6: deviation → wait |
 
 ## Spoofs (declared) and faults
 - `harness/skills.py` `SkillScriptPolicy`: reads object / fixture poses, grasp and contact from the simulator; a
@@ -117,17 +118,14 @@ Related: [`v3-runtime.md`](v3-runtime.md) · [`s1-supply-and-commitment.md`](s1-
   Cocoa both need the main thread); physics only. `harness/video.py`: raw frames in the run, H.264 after it.
 
 ## Measured
-- **2026-10-24** (`results/scenarios/20261024-125433`; scripted S1, real time, no video, no monitor): **16/17 pass**;
-  `step-events` and `blocked` skipped (no remote S1, no monitor). Real-time factor 1.000–1.001, 0 starved, 0 violations,
-  frames valid in all. Ran before the effect-hesitation change (E28).
-- `harmless` fails only "reaffirmed by the interaction lane": a stale expectation. Since the 2026-10-22 owner fix an
-  utterance never becomes the task text, so "nice work" is answered `continue` with no reaffirm; the arm kept moving
-  and the scorecard scores the act correct. The expectation needs updating, not the owner.
-- `blocked` (last run 2026-10-22, `20261022-155022`): no deviation, max score 2.15 vs threshold 2.54; scripted grasps
-  press into contact, so the nominal calibration already holds blocked-like motion. Needs contact-aware calibration;
-  no threshold tuning.
+- **2026-10-25** (`results/scenarios/20261025-hygiene`; scripted S1, real time, no video, monitor `results/monitor/skills-20261021`; after the lockstep owner
+  fix and the scenario updates): **17/19 run cases pass**, `step-events` skipped. Real-time factor 1.000–1.001,
+  0 starved, 0 violations. `harmless` now passes (interaction-lane `continue`, no command from it).
+- `blocked` and `jev-blocked` fail the same way: no deviation raised (max score 2.15 vs threshold 2.54, as on
+  2026-10-22); scripted grasps press into contact, so the nominal calibration already holds blocked-like motion. Their
+  decision expectations are unexercised until the monitor gets contact-aware calibration (no threshold tuning).
 - `step-events` runs only with `--policy remote`: the scripted S1 has completed no step in any recorded run.
-  Earlier matrices (2026-10-21 13/14, 2026-10-22 17/19) are superseded by the 10-24 run.
+  Earlier matrices (2026-10-21 13/14, 2026-10-22 17/19, 2026-10-24 16/17) are superseded by the 10-25 run.
 - Bugs the matrix found, fixed at their owner: runtime blend pushed actions past a bound (core: incoming action checked,
   blend projected); in-run video encoding stalled the loop (harness: encode after); `RemotePolicy` dropped chunk `info`.
 

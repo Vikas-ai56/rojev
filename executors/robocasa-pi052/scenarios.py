@@ -140,10 +140,12 @@ SCENARIOS = [
         "--speculative-predict", "--samples", "3", "--sample-noise", "0.01", "--commit-policy", "phase"],
              [("commitments shorter than the chunk", lambda r: any(c["steps"] < c["horizon"] for c in r.commits)),
               ("no starvation", lambda r: r.summary["starved_ticks"] == 0)], seconds=12),
-    Scenario("harmless", "harmless speech: interaction lane reaffirms, no pause", [
-        "--interaction", "rules", "--say", "5:nice work"],
-             [("reaffirmed by the interaction lane", lambda r: bool(commands(r, "interaction", "switch_to"))
-               and any(e["kind"] == "reaffirm" and e.get("lane") == "interaction" for e in r.events)),
+    Scenario("harmless", "harmless speech: the interaction lane continues (the words never become the task), no pause",
+             ["--interaction", "rules", "--say", "5:nice work"],
+             [("continued by the interaction lane", lambda r: any(
+                 e["kind"] == "continue" and e.get("lane") == "interaction" and e.get("trigger") == "instruction"
+                 for e in r.events)),
+              ("no new command from the interaction lane", lambda r: not commands(r, "interaction")),
               ("arm never paused", lambda r: moving_after(r, 5.0, 2.0))], seconds=10,
              changes=(Change("harmless", CONTINUE),)),
     Scenario("revise", "new destination: later step rewritten, then an in-step revision", [
@@ -242,11 +244,19 @@ SCENARIOS = [
               ("a keyframe with the checker's evidence", lambda r: any(k["evidence"].startswith("truth")
                                                                      for k in r.summary["keyframes"]))],
              seconds=20, needs="remote"),
-    Scenario("blocked", "blocked arm: monitor deviation → interaction RETRY", [
+    Scenario("blocked", "blocked arm: monitor deviation → RETRY from the keyword stand-in (`rules`; Jev has no retry "
+             "act, see jev-blocked)", [
         "--interaction", "rules", "--block-at", "6", "--block-s", "2"],
              [("deviation raised", lambda r: first(r, "deviation") is not None),
               ("retry from the interaction lane", lambda r: bool(commands(r, "interaction", "retry")))],
              seconds=12, needs="monitor", changes=(Change("deviation", REVISE),)),
+    Scenario("jev-blocked", "Jev (keyword scores): blocked arm → monitor deviation → guarded wait (a deviation offers "
+             "only continue / wait)", [
+        "--interaction", "jev", "--chooser", "keywords", "--block-at", "6", "--block-s", "2"],
+             [("deviation raised", lambda r: first(r, "deviation") is not None),
+              ("guarded wait from the interaction lane", lambda r: bool(commands(r, "interaction", "guarded_wait"))),
+              ("never retried", lambda r: not commands(r, op="retry"))],
+             seconds=12, needs="monitor", changes=(Change("deviation", WAIT),)),
 ]
 
 

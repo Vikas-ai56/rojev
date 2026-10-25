@@ -97,6 +97,31 @@ def test_valid_proposal_becomes_a_command_with_the_current_instruction():
     assert runtime.pending.operation == A
 
 
+def test_a_driven_owner_handles_every_posted_event_on_step():
+    owner, runtime, _, _ = unit_owner()
+    owner.post(proposal(owner, A))
+    assert owner.has_events and owner.desired is None
+    owner.step()
+    assert not owner.has_events and owner.desired.operation == A
+
+
+def test_a_worker_posts_its_answer_before_it_stops_being_busy():
+    seen = []
+    clock = {"t": 0.0}
+    worker = DecisionWorker(AlwaysContinue(), lambda p: seen.append(worker.busy), lambda: clock["t"])
+    owner, _, _, _ = unit_owner()
+    ask(owner)
+    worker.start()
+    try:
+        worker.request(owner.workers[PLANNING].requests[-1])
+        deadline = time.perf_counter() + 2.0
+        while worker.busy and time.perf_counter() < deadline:
+            time.sleep(0.001)
+    finally:
+        worker.stop()
+    assert seen == [True] and not worker.busy
+
+
 def test_stale_proposals_are_refused_with_a_reason():
     owner, runtime, _, _ = unit_owner()
     old, new = ask(owner), ask(owner)

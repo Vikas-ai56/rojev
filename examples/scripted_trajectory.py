@@ -4,6 +4,12 @@ No teleop and no model control: the arm follows WAYPOINTS at the robot's control
 safety filter, and the same loop would drive the real arm. With --onejev, the overhead camera frame at each checkpoint
 is sent to OneJev for observation only; a separate evaluator checks the answers against simulator ground truth.
 
+WAYPOINTS are (name, {joint: target}, move seconds, checkpoint); unlisted joints keep their previous target. PICKUP is
+the ctrl of the "pickup" keyframe in Menagerie's robotstudio_so101/scene_box.xml. After each move the arm holds HOLD_S
+(included in the final-error measurement); a segment fails if any joint ends more than JOINT_TOL_RAD from its target.
+A waypoint outside the joint limits is never sent. `--hide-box` is scenario setup on the simulated world, not
+something the pipeline can do.
+
   uv run python examples/scripted_trajectory.py                    # headless
   uv run mjpython examples/scripted_trajectory.py --viewer         # watch it in real time (macOS needs mjpython)
   uv run python examples/scripted_trajectory.py --onejev           # also query OneJev (needs `make qev`)
@@ -26,10 +32,8 @@ from rojev.system2.models import onejev
 from rojev.robot import TIME_MODES, CameraSpec, Rate, so101
 
 HOME = {"shoulder_pan": 0.0, "shoulder_lift": 0.0, "elbow_flex": 0.0, "wrist_flex": 0.0, "wrist_roll": 0.0, "gripper": 0.0}
-# ctrl of the "pickup" keyframe in Menagerie's robotstudio_so101/scene_box.xml
 PICKUP = {"shoulder_pan": 0.0, "shoulder_lift": 0.0, "elbow_flex": 0.4732, "wrist_flex": 1.17718, "wrist_roll": 1.58438,
           "gripper": 0.727665}
-# (name, {joint: target}, move seconds, checkpoint). Unlisted joints keep their previous target.
 WAYPOINTS = [
     ("home", HOME, 1.0, True),
     ("pan_left", {"shoulder_pan": 0.8}, 1.5, False),
@@ -39,8 +43,8 @@ WAYPOINTS = [
     ("gripper_back", {"gripper": PICKUP["gripper"]}, 1.0, False),
     ("home_again", HOME, 2.0, True),
 ]
-HOLD_S = 0.5  # settle time after each move, included in the final-error measurement
-JOINT_TOL_RAD = 0.01  # a segment fails if any joint ends further than this from its target
+HOLD_S = 0.5
+JOINT_TOL_RAD = 0.01
 CAMERA = "overhead"
 QUESTIONS = {
     "box_visible": Noul("A green box is visible in the image"),
@@ -99,7 +103,7 @@ def main():
     tracer = trace.get_tracer("examples.scripted_trajectory")
     time_mode = args.time_mode or ("realtime" if args.viewer else "lockstep")
     robot = so101.simulated(cameras=(CameraSpec(CAMERA),), time_mode=time_mode)
-    if args.hide_box:  # scenario setup on the simulated world, not something the pipeline can do
+    if args.hide_box:
         robot.model.geom_rgba[robot.model.geom("box").id, 3] = 0.0
     names = robot.joint_names
     client = Client(args.qev_url) if args.onejev else None
@@ -131,7 +135,7 @@ def main():
                 seg.set_attribute("input.mime_type", "application/json")
                 problems = robot.limits.position_violations(target)
                 peak, floor_hits, clamps = 0.0, 0, []
-                if not problems:  # never send a waypoint that is outside the joint limits
+                if not problems:
                     n_move, n_hold = round(move_s * robot.control_rate_hz), round(HOLD_S * robot.control_rate_hz)
                     for k in range(n_move + n_hold):
                         s = min(1.0, (k + 1) / n_move)

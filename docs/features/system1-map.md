@@ -37,14 +37,13 @@ realtime.main → executors/robocasa-pi052/realtime.py          builds and wires
 - `S1Runner(runtime, RecordingPolicy(make_policy(...)), loop.latest, loop.now, refill_s, commit, on_step, on_plan,
   deadline=not a.lockstep)` (`:509`).
 - `make_policy` (`:301`): `--policy remote` + `--s1 pi052` → `RemotePolicy`; `--s1 xr1` → `HistoryPolicy(remote,
-  history, *XR1_HISTORY, to_action_space)`; `skills` / `wiggle` are stand-ins. The `--s1` flag defaults to `pi052`;
-  v1 runs pass `--s1 xr1` (`campaign.py`).
+  history, *XR1_HISTORY, to_action_space)`; `skills` / `wiggle` are stand-ins. `--s1` defaults to `xr1` (2026-10-25).
 - `FrameCheck(loop.latest, CAMS, every_s)` (`:548`) is one of the run's threads.
 - `gc.collect(); gc.freeze()` (`:562`) before the threads start (a full GC pass measured 45–96 ms).
 - Run loop (`:567`):
   - real time: the loop and runner run on their own threads; the main thread only posts user speech;
-  - **lockstep**: no loop / runner threads; per iteration, if the planning or interaction lane is busy → wait (no
-    tick); else `runner.step()` then `loop.run_ticks(1)`. Every model's computation takes zero simulated time.
+  - **lockstep**: no loop / runner / owner threads; per iteration `owner.step()`, then if the planning or interaction
+    lane is busy or the owner still has an event → wait (no tick); else `runner.step()` then `loop.run_ticks(1)`. Every model's computation takes zero simulated time.
 - Flags (S1 side): `--s1`, `--policy remote|skills|wiggle`, `--service`, `--lockstep`, `--commit-policy
   fixed|phase`, `--speculative-predict --samples K`, `--execution-monitor M.json`, `--refill`, `--blend`, `--stop-s`,
   `--lease`, `--frame-check-every S`, `--record-frames S`, `--video`, `--viewer`.

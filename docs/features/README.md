@@ -54,6 +54,7 @@ Current values only, read from the code. Library default = the constructor defau
 ## S1 service and wire ([`remote-models.md`](remote-models.md))
 | Lever | Default | Set at | Trade-off |
 |---|---|---|---|
+| S1 model | `xr1` (with `--policy remote`; the harness default policy is the scripted `skills` stand-in) | `realtime.py --s1 xr1\|pi052` | π0.5² kept for comparison only |
 | Frame codec | `webp90` | `wire.DEFAULT_CODEC`; `"codec"` key in the service JSON entry | request size vs fidelity (within sampling noise, 8 frames) |
 | Transport | HTTP/1.1 keep-alive (`http://` url from `gpu_setup.sh`); `h3://` + `cert_pem` by hand | service JSON `url` → `open_transport` | aioquic not better on the WAN run |
 | π0.5² planner memory | off | `serve.py --planner-memory` | decision 2026-10-22 kept it off; its A/B (E19) is withdrawn (corrupted frames), not re-run |

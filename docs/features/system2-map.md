@@ -38,8 +38,10 @@ models/sam2.py (RemoteSam2)                                     measurement only
   onejev|mjev|truth`; `make_verifier` (`:369`) wraps it in `RecordingVerifier` (every check logged with the truth).
 - User speech: `--say T:TEXT` (scripted) or `--interactive` (`Console`, `typed.jsonl`), both → `owner.post(UserInstruction)`.
   Robot speech: `Speaker.say` prints and logs `utterances.jsonl`.
-- **Lockstep** (`--lockstep`, run loop `:587`; the simulator evaluation mode, decision 2026-10-23): the world does not
-  tick while either lane is `busy` (`worker.py:41`), so a decision takes zero simulated time and the owner's deadlines
+- **Lockstep** (`--lockstep`, run loop `:588`; the simulator evaluation mode, decisions 2026-10-23 / 25): the owner
+  runs on the main thread (`owner.step()`), and the world does not tick while either lane is `busy` (`worker.py:44`;
+  cleared only after the answer is posted) or, read after the lanes, `owner.has_events`, so a decision takes zero
+  simulated time and is applied before the next tick and the owner's deadlines
   stay meaningful (smoke test: OneJev's 1.1–1.5 s wall had become 1.75–1.85 s simulated against a 1.0 s deadline).
 - `--record-interaction DIR`: exact model inputs per question asked (act, task) + `labels.jsonl` to fill (calibration).
 

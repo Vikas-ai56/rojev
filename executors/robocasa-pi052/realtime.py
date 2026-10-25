@@ -1,9 +1,9 @@
 """RoboCasa in real time under the v3 runtime: every part on its own thread, nothing waits for a model.
 `--interactive` puts a person in the loop: each line typed while the run goes is a user instruction (as `--say`), `quit`
 ends the run; `--instruction TEXT` gives the overall task (default: the environment's own sentence).
-`--lockstep` instead stops simulated time while any model thinks: one thread alternates S1 supply and one control tick,
-and does not tick while an S2 decision is in flight (planning or interaction lane), so model computation takes no
-simulated time and deadlines in simulated seconds do not depend on how fast the simulator runs. The setting benchmarks
+`--lockstep` instead stops simulated time while any model thinks: one thread alternates S1 supply, the state owner
+(every posted event handled, then its tick) and one control tick, and does not tick while an S2 decision is in flight
+(planning or interaction lane) or its answer is still unhandled, so model computation takes no simulated time and deadlines in simulated seconds do not depend on how fast the simulator runs. The setting benchmarks
 are scored in; it separates the models' own skill from the cost of real-time execution.
 
   control loop   env.step at 20 Hz (wall clock) ← guard ← execution runtime
@@ -11,8 +11,8 @@ are scored in; it separates the models' own skill from the cost of real-time exe
   S2 workers     planning lane (the arm's decider) and, optionally, the interaction lane
   state owner    turns proposals and user instructions into commands; ACKs say what is active
 
-S1 (`--policy`): `remote` a model on a GPU, `--s1 pi052|xr1` (π0.5² or Xiaomi-Robotics-1; `--service` JSON with its
-entry) · `skills` scripted reach / grasp / place /
+S1 (`--policy`): `remote` a model on a GPU, `--s1 xr1|pi052` (Xiaomi-Robotics-1, the default, or π0.5²; `--service`
+JSON with its entry) · `skills` scripted reach / grasp / place /
 press from simulator poses (harness/skills.py; a declared spoof) · `wiggle` hand back and forth (plumbing only).
 Planning arms (`--arm`): `fixed` one command · `scripted` authored sequence on a time budget · `oracle` authored
 sequence switched by simulator truth · `revisable` / `revisable-truth` the same, rewritten to the destination the
@@ -207,9 +207,8 @@ def parse(argv=None) -> argparse.Namespace:
     p.add_argument("--subtask", help="fixed arm: text for S1 (default: the task instruction)")
     p.add_argument("--policy", choices=["remote", "skills", "wiggle"], default="skills")
     p.add_argument("--service", help="remote: JSON file with {url, token} (or `kaggle`)")
-    p.add_argument("--s1", choices=["pi052", "xr1"], default="pi052",
-                   help="remote S1: π0.5² (lerobot/pi052_robocasa) or Xiaomi-Robotics-1 RoboCasa365 "
-                        "(4 frames, 2 apart)")
+    p.add_argument("--s1", choices=["xr1", "pi052"], default="xr1",
+                   help="remote S1: Xiaomi-Robotics-1 RoboCasa365 (4 frames, 2 apart) or π0.5² (lerobot/pi052_robocasa)")
     p.add_argument("--latency", type=float, default=0.3, help="skills / wiggle: simulated inference time (s)")
     p.add_argument("--sample-noise", type=float, default=0.0, help="skills / wiggle: per-sample noise (m / rad)")
     p.add_argument("--interaction", choices=["none", "continue", "rules", "jev"], default="none")
@@ -553,8 +552,8 @@ def main(argv=None) -> int:
                    "max_wall_s": a.max_wall, "end_after_success_s": a.end_after_success})
     config["frame_check_every_s"] = a.frame_check_every
     (out / "config.json").write_text(json.dumps(config, indent=2))
-    driven = () if a.lockstep else (loop, runner)
-    threads = driven + (worker, owner, frame_check) + tuple(t for t in (responder, watcher, frames) if t is not None)
+    driven = () if a.lockstep else (loop, runner, owner)
+    threads = driven + (worker, frame_check) + tuple(t for t in (responder, watcher, frames) if t is not None)
     pending = sorted(a.say)
     console = Console(a.input_file) if a.interactive or a.input_file else None
     live = LiveView(out / "live", a.live_view) if a.live_view else None
@@ -586,7 +585,9 @@ def main(argv=None) -> int:
                 capture = loop.latest()
                 live.write(loop.now(), [capture.observation.images[c] for c in CAMS], watch(owner, backend, speaker))
             if a.lockstep:
-                if any(lane is not None and lane.busy for lane in (worker, responder)):
+                owner.step()
+                deciding = any(lane is not None and lane.busy for lane in (worker, responder))
+                if deciding or owner.has_events:
                     time.sleep(0.002)
                     continue
                 runner.step()

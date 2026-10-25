@@ -161,6 +161,25 @@ class StateOwner:
     def post(self, event: Event) -> None:
         self._events.put(event)
 
+    @property
+    def has_events(self) -> bool:
+        """Posted events not handled yet."""
+        return not self._events.empty()
+
+    def step(self) -> None:
+        """Handle every event posted so far, then tick: the owner driven from the caller's thread instead of `start`.
+
+        Lockstep evaluation calls this before each control tick and ticks only when no lane is busy and, read after the
+        lanes, `has_events` is false: a lane posts its answer before it stops being busy, so an answer is either still
+        being computed or already queued here, never in between."""
+        while True:
+            try:
+                event = self._events.get_nowait()
+            except queue.Empty:
+                break
+            self.handle(event)
+        self.tick()
+
     def start(self) -> None:
         self._running = True
         self._thread = threading.Thread(target=self._run, name="state-owner", daemon=True)

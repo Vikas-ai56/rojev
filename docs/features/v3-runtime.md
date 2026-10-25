@@ -8,9 +8,11 @@ DecisionWorker ×1–2  ObservationSnapshot → decider → DecisionProposal | D
 StateOwner           events + 50 ms tick → accept / renew / review / revoke; drains ACKs; guard heartbeat
 ```
 - Nothing waits for a model; every consumer reads the newest observation, never a backlog.
-- Lockstep (`realtime.py --lockstep`, the simulator evaluation mode, decisions 2026-10-23): no loop or runner thread;
-  the main thread runs `runner.step()` then one tick, and skips the tick while a decision lane is busy, so S1 and S2
-  computation take zero simulated time. Real time is reported alongside.
+- Lockstep (`realtime.py --lockstep`, the simulator evaluation mode, decisions 2026-10-23 / 25): no loop, runner or
+  owner thread; the main thread runs `owner.step()` (every posted event, then a tick), and skips the control tick while
+  a decision lane is busy or, read after the lanes, the owner still has an event; else `runner.step()` then one tick.
+  A worker posts its answer before it clears `busy`, so an answer is never applied after simulated time moved on; S1
+  and S2 computation take zero simulated time. Real time is reported alongside.
 
 ## Messages (`rojev/protocol/`; every message carries `epoch`; times on the robot clock)
 - `Observation{images, state, task}` · `Capture{obs_id, t, observation}` (`obs_id` + 1 per tick).
@@ -116,6 +118,4 @@ StateOwner           events + 50 ms tick → accept / renew / review / revoke; d
 - No completion signal: XR-1's native planner never yields COMPLETE, so a finished task keeps running (run 5, E25).
 - Preconditions: proposals carrying any stay refused until perception exists.
 - Reaffirm grasp delay (gripper frozen up to the review window) not measured.
-- Lockstep resumes ticking when the worker finishes, not when the owner has applied the answer (up to one owner
-  period, 50 ms wall, in between).
 - Real-time behaviour with XR-1 is supply-bound (F13); hardware needs real-time passes first.

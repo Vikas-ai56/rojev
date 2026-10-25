@@ -5,7 +5,9 @@ slow decider never works through a backlog). The decider returns a `Verdict`; th
 `DecisionProposal` stamped with the snapshot's epoch, request id, instruction revision, base command and observation,
 plus an expiry, so the owner can refuse it if the world or the instruction moved on meanwhile. A decider error is
 counted and posted as a `DecisionFailure` for that request, so whatever waits on it is released at once; the robot
-keeps doing what it was doing. `name` labels the worker's lane (thread name, logs).
+keeps doing what it was doing. `name` labels the worker's lane (thread name, logs). `busy` (a request waiting or being
+decided) clears only after the outcome is posted, so a caller that reads `busy` and then the owner's queue never misses
+an answer in flight (lockstep evaluation relies on it).
 """
 import threading
 import time
@@ -89,6 +91,6 @@ class DecisionWorker:
                     return
                 snap, self._next, self._busy = self._next, None, True
             outcome = self.decide(snap)
+            self.post(outcome)
             with self._cond:
                 self._busy = False
-            self.post(outcome)
