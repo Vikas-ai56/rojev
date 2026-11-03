@@ -65,14 +65,6 @@ from .policy import Continuation, Policy
 
 @dataclass
 class S1Stats:
-    """Per request: policy wall time, observation age when the chunk was submitted, accepted or not; `info` keeps what
-    the policy reported (e.g. the subtask its own planner chose); `committed` the committed length per request,
-    `commit_reasons` how often each commitment rule fired, `forced` the requests made by `refill_now`,
-    `refill_ignored` the refills refused because they named another command than the one being supplied, `floors` the
-    floor passed with each request, `floor_over_chunk` the requests whose measured floor exceeded the chunk, and
-    `planner_steps` the subtask switches of S1's own planner posted as step events, `timeouts` the requests abandoned at
-    their deadline, `continuations` the requests that carried a continuation."""
-
     requests: int = 0
     accepted: int = 0
     errors: int = 0
@@ -123,30 +115,22 @@ class S1Runner:
             self._thread = None
 
     def latency_s(self) -> float | None:
-        """Estimated request latency: the largest of the recent ones (None before the first)."""
         return max(self._latency) if self._latency else None
 
     def lead_s(self) -> float:
-        """Queue time left at which the next chunk is requested."""
         latency = self.latency_s()
         return self.refill_s if latency is None else max(self.refill_s, latency + self.runtime.spec.dt)
 
     def floor(self, horizon: int) -> int:
-        """Fewest actions to commit so the robot runs without gaps (the whole chunk before any measurement)."""
         latency = self.latency_s()
         if latency is None:
             return horizon
         return math.ceil(2 * latency / self.runtime.spec.dt) + 1
 
     def deadline_s(self) -> float | None:
-        """How long a request may take before its answer is useless: the last chunk's duration (None before one, or
-        without a deadline)."""
         return self._horizon_s if self.deadline else None
 
     def refill_now(self, cmd_id: int | None) -> bool:
-        """Request the next chunk for `cmd_id` at once, on the newest observation, whatever is queued (thread-safe).
-        Taken only if `cmd_id` is the command being supplied (`runtime.target()`); otherwise ignored and counted in
-        `stats.refill_ignored`. Returns whether it was taken."""
         goal = self.runtime.target()
         with self._refill_lock:
             if cmd_id is None or goal is None or goal.cmd_id != cmd_id:
@@ -156,7 +140,6 @@ class S1Runner:
             return True
 
     def step(self) -> bool:
-        """One supply decision; returns True if a chunk was requested."""
         goal = self.runtime.target()
         if goal is None:
             return False
@@ -215,8 +198,6 @@ class S1Runner:
         return True
 
     def _continuation(self, cmd_id: int, t: float) -> Continuation | None:
-        """What the robot runs from `t` while the policy thinks (see module docstring); None for a policy that cannot
-        continue, before a latency is measured, or with nothing queued for the command."""
         latency = self.latency_s()
         if not self.policy.accepts_continuation or latency is None:
             return None
@@ -226,7 +207,6 @@ class S1Runner:
         return Continuation(queued, min(len(queued), math.ceil(latency / self.runtime.spec.dt)))
 
     def _planner_moved_on(self, goal: AcceptedGoal, capture: Capture, subtask: str | None) -> None:
-        """Post a step event when S1's own planner switches subtask under the same command (see module docstring)."""
         if not subtask:
             return
         previous, self._planned = self._planned, (goal.cmd_id, subtask)
@@ -242,7 +222,6 @@ class S1Runner:
                                    {"next": subtask, "obs_id": capture.obs_id}))
 
     def _refill_for(self, cmd_id: int) -> bool:
-        """Whether a refill is pending for `cmd_id`; one taken for a command no longer supplied is dropped (counted)."""
         with self._refill_lock:
             if self._refill_cmd is not None and self._refill_cmd != cmd_id:
                 self._refill_cmd = None

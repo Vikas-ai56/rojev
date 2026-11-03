@@ -11,6 +11,7 @@ dependencies = [
   "numpy",
   "openinference-instrumentation>=0.1.71",
   "pillow",
+  "pylsqpack>=1.0.0",
   "pyyaml",
   "qev",
 ]

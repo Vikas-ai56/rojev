@@ -7,6 +7,7 @@ Where each kind of document lives. Code map: [`CODEBASE.md`](CODEBASE.md).
 |---|---|
 | [`plan/v3-roadmap.md`](plan/v3-roadmap.md) | **Single source of truth now**: architecture, plan amendments, phases P0–P5, tests T1–T10, gates, scorecard, failure → fix table |
 | [`plan/v3-v1-spec.md`](plan/v3-v1-spec.md) | v1 build spec: full S1/S2 loop from open-source frozen parts (π0.5², OneJev, MJev; SAM 2 deferred, decisions 2026-10-21) + our runtime; Route A role split; build steps 1–8 |
+| [`review/rojev-v1-review.html`](review/rojev-v1-review.html) | One-page v1 review (open in a browser): what, why, S1 / S2 flow, component choices, results, open blockers |
 | [`decisions.md`](decisions.md) | Every durable decision, newest last (decision · why · rejected · risks) |
 | [`CODEBASE.md`](CODEBASE.md) | How to read the code |
 

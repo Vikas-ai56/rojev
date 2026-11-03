@@ -38,10 +38,6 @@ from rojev.robot import EffectModel
 
 @dataclass
 class Recording:
-    """One run: `tracked[k]` measured after tick k, `command[k]` what tick k's action commanded (from the state before
-    it). Row k of both belongs to the same tick; the state before the first recorded tick is `start`. `conditions`
-    records how the run was made (e.g. real-time factor, policy, seed) so calibration can refuse unlike runs."""
-
     start: np.ndarray
     tracked: list[np.ndarray] = field(default_factory=list)
     command: list[np.ndarray] = field(default_factory=list)
@@ -63,8 +59,6 @@ class Recording:
 
 
 def regressors(tracked: np.ndarray, command: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per tick k ≥ 2·window − 1: measured change over the last `window` ticks, and the commands summed over that window
-    and over the window before it (n + n columns); also the tick index k of each row."""
     ends = np.arange(2 * window - 1, len(command))
     csum = np.vstack([np.zeros((1, command.shape[1])), np.cumsum(command, axis=0)])
     change = tracked[ends + 1] - tracked[ends + 1 - window]
@@ -75,10 +69,6 @@ def regressors(tracked: np.ndarray, command: np.ndarray, window: int) -> tuple[n
 
 @dataclass(frozen=True)
 class MonitorModel:
-    """`gain` (2n × m) maps the summed commands of this window and the one before to measured change; `scale` (m) is
-    the nominal residual spread; `threshold` the conformal score bound for false-alarm rate `alpha` per `segment`-tick
-    segment; `exercised` (2n) marks the regressors that were ever non-zero while fitting."""
-
     gain: np.ndarray
     scale: np.ndarray
     exercised: np.ndarray

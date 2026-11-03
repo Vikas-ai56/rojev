@@ -840,3 +840,15 @@
 **Why:** The old defaults (π0.5², OneJev 1.5 0.8B) and expectations (reaffirm, retry) predated decisions 2026-10-22 / 24.
 **Rejected alternatives:** Removing `blocked` (it still covers the stand-in's retry path and the scorecard's recorded-retry mapping); `make qev` on the 1.6 4B GGUF (fails to load on the local llama.cpp build 11429: `blk.32.attn_norm.weight` missing).
 **Risks / edge cases found:** Local OneJev answers come from a different, smaller model than the v1 loop; `blocked` / `jev-blocked` never raise a deviation with the scripted-skill monitor (max 2.15 vs 2.54), so their decision checks are unexercised.
+
+## [2026-10-30] RynnValue-4B measured as a frozen done signal; kept out of the v1 loop
+**Decision:** RynnValue-4B (pinned `config/rynnvalue_weights.txt`) is a measurement in `services/rynnvalue/` only (E31), not a `StepWatcher` verifier; it is a base candidate for the v2 critic, chosen against Robometer-4B by the identical-image AUROC on held-out pairs.
+**Why:** On E17's pairs its P(success) ranks the done step first on identical images at 0.82 (OneJev 0.46, MJev 0.28), the first frozen model above chance; but its verdict never says "Yes" (0 / 108), a usable cut (P > 0.026) was fitted on the test set itself, and a question takes 30 s on the Mac GPU.
+**Rejected alternatives:** Wiring it with a threshold fitted on these 222 pairs (no held-out data, still states only); finishing the single-frame and repeated-frame runs first (≈ 1.5 h more; the identical-image comparison already removes the frame-count effect); running on the macOS CPU (no fast bf16 matmul, no answer in 5 min).
+**Risks / edge cases found:** mps returns non-finite logits on long visual inputs (8 frames at 640 × 360), so answers carry `valid`; its remaining time falls with sequence length, so a pooled AUROC overstates it; teleported states and one camera may not transfer to robot-made states.
+
+## [2026-11-01] No critic training for now; the v2 critic starts frozen
+**Decision:** The v2 plan's LoRA critic (§5) is deferred; the done signal comes from a frozen progress model (RynnValue-4B or Robometer-4B) with a threshold set on held-out simulator-labelled frames, behind the `StepWatcher` verifier slot.
+**Why:** Owner's scope call (2026-11-01); the frozen-parts rule of v1 holds; E31 shows a frozen progress model already ranks done above chance (0.82 on identical images).
+**Rejected alternatives:** LoRA on Robometer-4B / RynnValue-4B (1–2 H100-days plus week-1 rollouts); plain Qwen3-VL-4B (untrained completion detection near zero in HiSTEVE).
+**Risks / edge cases found:** At a 5 % false-done cut RynnValue caught ~37 % of dones on E17 frames (cut fitted on the test set), so most completions are missed and run 5's no-stop failure stays partly open; no frozen Q head, so no feasibility check; GPU latency unmeasured.

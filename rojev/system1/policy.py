@@ -18,9 +18,6 @@ from rojev.protocol import Observation
 
 @dataclass(frozen=True)
 class ActionChunk:
-    """`actions` (n × action_dim, float32) run in order, one per control step. `timings_ms` per stage (preprocess,
-    infer, network, …). `info` is what the policy reports about itself, e.g. the subtask its own planner chose."""
-
     actions: np.ndarray
     timings_ms: dict[str, float] = field(default_factory=dict)
     info: dict = field(default_factory=dict)
@@ -28,10 +25,6 @@ class ActionChunk:
 
 @dataclass(frozen=True)
 class Continuation:
-    """The actions already queued for the command from the observation's time on (n × action_dim, robot action
-    space, one per control step) and `delay_steps`: how many of them run before the new chunk can arrive (the
-    measured latency in control steps). The new chunk's first `delay_steps` actions should equal them."""
-
     actions: np.ndarray
     delay_steps: int
 

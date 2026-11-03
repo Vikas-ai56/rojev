@@ -1,0 +1,22 @@
+# RynnValue-4B progress / success model (Alibaba DAMO, Apache-2.0), run locally on a Mac with int8 weights.
+# Own env: RynnValue's remote code targets transformers 4.57 (Qwen3-VL internals), independent of the other services.
+[project]
+name = "rojev-service-rynnvalue"
+version = "0.0.1"
+requires-python = "==3.12.*"
+dependencies = [
+    "accelerate>=1.0",
+    "einops>=0.8",
+    "huggingface-hub>=0.34,<1",
+    "imageio[ffmpeg]>=2.34",
+    "numpy>=1.26,<3",
+    "pillow>=10",
+    "psutil>=6",
+    "torch>=2.9,<2.10",
+    "torchao>=0.14,<0.15",
+    "torchvision>=0.24,<0.25",
+    "transformers>=4.57,<4.58",
+]
+
+[tool.uv]
+package = false

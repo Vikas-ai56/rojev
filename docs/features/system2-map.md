@@ -24,6 +24,8 @@ models/sam2.py (RemoteSam2)                                     measurement only
   imports S1 or control: it reaches the robot only through the owner.
 - v1 default stack: XR-1 (S1, plans its own steps from the task text) + Jev over OneJev (interaction) + `NativePlanner`
   (planning). MJev is not loaded (failed the done-check gate, `decisions.md` 2026-10-22).
+- RynnValue-4B (frozen) is the first model above chance on that gate (identical-image AUROC 0.82, E31) but is not a
+  verifier: its verdict never says done and a question takes 30 s on the Mac (`services/rynnvalue/`, `decisions.md` 2026-10-30).
 
 ## 1. Entrypoint (`realtime.py:462`)
 - Planning worker: `DecisionWorker(RecordingDecider(make_planner(a)))` (`:514`); `--arm fixed | scripted | oracle |

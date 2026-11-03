@@ -91,12 +91,6 @@ class TimedChunk:
 
 
 class AckStatus(str, Enum):
-    """ACTIVATED: first action of the command applied. REJECTED: a command message refused (stale epoch, revoked or
-    older command, expired lease, renewal of a command that is gone). CHUNK_REJECTED: one chunk refused (late, wrong
-    rate or shape, paused, holding); the command itself stands. EXPIRED: lease ran out. DROPPED: the runtime ended the
-    command itself because a safety hold took authority away (owner lost, runtime error); a new command is needed.
-    STOPPED: stop requested."""
-
     ACTIVATED = "activated"
     REVOKED = "revoked"
     REJECTED = "rejected"

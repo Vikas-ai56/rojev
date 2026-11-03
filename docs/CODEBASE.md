@@ -48,6 +48,7 @@ scripts/         gpu_setup.sh: one command from the Mac to a serving GPU box
 executors/robocasa/        earlier SmolVLA executor env (v2 G0)
 services/mjev/             MJev-Spatial service + checks (own env)
 services/sam2/             SAM 2.1 masks + streaming tracks (own env)
+services/rynnvalue/        RynnValue-4B done-signal check on the Mac GPU (own env; measurement, not in the loop)
 examples/ tests/ playground/ scenes/ config/ vendor/ (git-ignored)
 ```
 
@@ -200,6 +201,7 @@ Read in this order; each step adds one layer of the loop.
 | `services/onejev/` | OneJev 1.6 4B via `qev serve` (PyTorch backend), own env; loopback only (qev has no auth) |
 | [`executors/robocasa-xr1/serve.py`](../executors/robocasa-xr1/serve.py), [`xr1_inputs.py`](../executors/robocasa-xr1/xr1_inputs.py) | Xiaomi-Robotics-1 RoboCasa365 checkpoint (pinned `config/xr1_weights.txt`) as a remote S1 on our wire (never its pickle socket); inputs ported from its evaluation client (4 frames 2 ticks apart, 0.95 crop, end-effector-first 14-value state); own env (torch 2.8, transformers 4.57.1, flash-attn 2.8.3 from its sdist, fetching the prebuilt kernels; readiness imports them) |
 | [`services/sam2/serve_sam2.py`](../services/sam2/serve_sam2.py) | SAM 2.1 Hiera Tiny (transformers, pinned `config/sam2_weights.txt`): `/segment` and streaming `/track/*` (session state on CPU, idle sessions closed, errors → 500); own env, GPU hook |
+| [`services/rynnvalue/check_done.py`](../services/rynnvalue/check_done.py) | RynnValue-4B (pinned `config/rynnvalue_weights.txt`, int8 weight-only, Mac GPU) on the E17 done-check pairs: `smoke` on one video, `score --mode still / chain / repeat`, `report` (identical-image AUROC, length medians); answers carry `valid` (finite logits, value in support) (E31) |
 | `services/*/gpu/hook.sh`, `executors/*/gpu/hook.sh` | Component hooks for `scripts/gpu_setup.sh`: OneJev, MJev, SAM 2; π0.5², XR-1 |
 | `scripts/gpu_setup.sh`, `scripts/gpu_box.sh`, `scripts/hf_pins.py` | One command from the Mac: fresh GPU box → driver, uv, code, vendors at pins, envs, pinned weights, systemd units, tunnels, one service JSON per box (`docs/features/gpu-setup.md`) |
 | [`check_precision.py`](../services/mjev/check_precision.py), [`speed_check.py`](../services/mjev/speed_check.py), [`profile_mjev.py`](../services/mjev/profile_mjev.py), [`patch_embed_check.py`](../services/mjev/patch_embed_check.py), [`make_testdata.py`](../services/mjev/make_testdata.py) | Precision vs fp32, speed levers, profile, patch-embedding fix, test scenes (E11–E12) |

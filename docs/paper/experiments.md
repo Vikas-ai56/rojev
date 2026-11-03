@@ -41,6 +41,7 @@
 | E28 | 10-24 | Effect-based hesitation, offline replay | Unsafe "ruko" now asks; two stops now stop; one regression | valid (offline) | `docs/decisions.md` 10-24 |
 | E29 | 10-24 | OneJev latency breakdown; kept connection | 1269 → 604 ms median, identical probabilities | valid | `docs/features/remote-models.md` |
 | E30 | 10-24 | Live rerun: effect hesitation, kept connection, late answers | stop/go-on ×2 4/4; "ruko" asks; late answers applied; idle connection dropped after ~5 s | valid | `results/campaign/20261024-rerun/` |
+| E31 | 10-30 | RynnValue-4B (frozen) on the E17 done-check pairs | P(success) ranks the done step first on identical images 0.82 (OneJev 0.46, MJev 0.28); written verdict never "Yes" (0/108) | valid (still states, 1 camera) | `results/rynnvalue-check/20261030/` |
 
 ## E17 — Done-check A/B: neither model can tell a finished step (2026-10-22)
 - Setup: kitchen states set in the simulator (object placed, door closed, appliance on), labelled by the task's own completion test; 2 of 80 states dropped (predicate failed), never relabelled; 222 pairs (108 done, 114 not). Two question forms: "is this step done?" and yes / no postconditions. Still frames, 0 of 444 images corrupt.
@@ -166,6 +167,36 @@
   idle for ~5 s (health 263–302 ms after ≤ 4 s idle, 665–960 ms after 6–10 s), and decisions are seconds apart.
 - Meaning: effect hesitation removes the unsafe "ruko" and the stop/ask splits live; the late-answer rule works;
   the speed gain needs a longer server keep-alive (open).
+
+## E31 — RynnValue-4B as a frozen done signal (2026-10-30)
+- Setup: `Alibaba-DAMO-Academy/RynnValue-4B` @2e78c2c (`config/rynnvalue_weights.txt`), int8 weight-only on the Mac
+  GPU (mps), `services/rynnvalue/check_done.py`. E17's 222 (frame, step) pairs (108 done), the step as the
+  instruction, left agentview only. `chain`: the seed's states up to the labelled one as an ordered sequence (1–4
+  frames); `still` (E17's single frame) stopped at 15 answers. Smoke on the model's own example video first: grounding
+  right (Match Yes 0.91–0.997 on the true instruction, 0.0004 on a wrong one).
+
+| measure (chain, n = 222, 0 invalid) | RynnValue | OneJev (E17, views glued) | MJev (E17) |
+|---|---|---|---|
+| AUROC, done vs not-done step on identical images | **0.82** (P(success)) · 0.71 (remaining time) | 0.46 | 0.28 |
+| AUROC, all pairs | 0.75 (P(success)) · 0.82 (remaining time) | 0.53 | 0.34 |
+| "Success: Yes" (its own verdict): recall / false done | 0.00 / 0.00 | 0.06 / 0.01 | 0.00 / 0.00 |
+| P(success) cut at 10 % false done (fitted on this set) | recall 0.46 (P > 0.026) | — | — |
+| median latency per question (Mac GPU) | 30.4 s | 0.35 s (A100) | 0.06 s (A100) |
+- Inputs differ: E17 asked one still frame with all three views; here a 1–4 frame sequence from one camera. Same
+  pairs, same truth.
+- By step type (all pairs, P(success)): place 0.83, close 0.73, press 0.64. Max P(success) 0.148: the written verdict
+  never flips, the probability carries the signal.
+- Remaining time falls with chain length (median 3.67 → 2.33 → 1.98 → 1.49 s for 1–4 frames), and longer chains are
+  later states with more steps done, so its all-pairs 0.82 is partly length; the identical-image comparison removes it.
+  The repeated-first-frame control (`--mode repeat`) was stopped at 1 of 48 answers.
+- Meaning: the first frozen model with a done signal on these frames, but not a release signal as is (no "Yes", a
+  threshold fitted on the test set, still states set by the simulator, one camera, 30 s on the Mac). Not in the v1
+  loop; a base candidate for the v2 critic next to Robometer-4B.
+- Also found: on mps, 8 frames at 640 × 360 gave non-finite logits ("!!!!" text, negative remaining time) while one
+  256 × 256 frame matched across attention kernels; every answer now records `valid`. PyTorch's macOS CPU path has no
+  fast bf16 matmul (generic `bf16_dot_with_fp32_arith`), so the CPU is not an option at bf16.
+- Source: `results/rynnvalue-check/20261030/{answers.jsonl,report.json,run.log}`; E17 numbers recomputed from
+  `results/done-check/20261022/scores.jsonl` (P(done), same pairs).
 
 ## Superseded findings still worth knowing (one line each)
 - E2/E3: an instruction in the prompt raises the model's *visibility* answers; evidence questions must not share the instruction's state (now: `task` and `user_just_said` kept apart).

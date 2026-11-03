@@ -3,8 +3,7 @@
 Asked only after the act question chose REVISE. The options are `sentences` (given by the robot side: the task
 sentences its S1 was trained on that can run in this scene, verbatim) plus `none`. The user's words reach the model
 only as evidence in the situation; the chosen sentence, never the user's words, becomes the task text S1 is
-conditioned on, so a remark, a typo or a speed request cannot become S1's prompt (live 2026-10-23: "make it fast pls"
-was revised into the task; "close the cabinet door" could not be chosen because it was never offered).
+conditioned on, so a remark, a typo or a speed request cannot become S1's prompt.
 
 `none` wins, or the calibrated margin between the two best options is below `calibration.margin` → no revision
 (`Revision.operation` None): the interaction decider asks the user instead. A task the list does not hold cannot be

@@ -1,0 +1,601 @@
+<title>rojev v1 Review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;600&family=Inter:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap">
+<style>
+/* Layout: one 54rem column on white paper, square 1px stone frames, a single deep-orange accent for System 2 and emphasis (Fenon palette). Deliberately light-only: a printed review sheet. */
+:root {
+  --paper: #ffffff;
+  --ink: #090a09;
+  --stone-50: #f5f5f1;
+  --stone-100: #edede7;
+  --stone-200: #d9d9d0;
+  --stone-300: #b5b6ad;
+  --stone-600: #5e605a;
+  --graphite: #424340;
+  --orange: #d14300;
+  --orange-tint: #fff3ec;
+  --sand: #f7f2ea;
+  --sand-300: #dcd0bf;
+  --on-accent: #ffffff;
+  --display: "Funnel Display", "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --body: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: "Fira Code", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink); font: 15.5px/1.65 var(--body);
+  padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px));
+  padding-block: 56px 80px;
+}
+main { max-width: 54rem; margin: 0 auto; display: grid; gap: 72px; }
+section { display: grid; gap: 18px; min-width: 0; scroll-margin-top: 24px; }
+h1, h2 { font-family: var(--display); font-weight: 500; letter-spacing: -0.03em; line-height: 1.1; margin: 0; text-wrap: balance; }
+h1 { font-size: 2.6rem; }
+h2 { font-size: 1.8rem; }
+h3 { font: 600 0.98rem/1.35 var(--body); margin: 0; letter-spacing: -0.005em; }
+p, ul { margin: 0; max-width: 68ch; }
+ul { padding-left: 1.1em; display: grid; gap: 7px; }
+li::marker { color: var(--stone-300); }
+strong { font-weight: 600; }
+em { font-style: italic; }
+a { color: var(--ink); text-decoration-color: var(--stone-300); text-underline-offset: 3px; }
+a:hover { text-decoration-color: var(--orange); }
+a:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.label { font: 500 0.72rem/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--stone-600); }
+.label.accent { color: var(--orange); }
+.muted { color: var(--stone-600); }
+.small { font-size: 0.86rem; }
+code { font-family: var(--mono); font-size: 0.84em; background: var(--stone-50); border: 1px solid var(--stone-100); padding: 0 4px; overflow-wrap: anywhere; }
+.head { display: grid; gap: 14px; }
+.lede { font-size: 1.1rem; max-width: 64ch; }
+
+.toc { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 500 0.78rem/1.6 var(--mono); }
+.toc a { color: var(--stone-600); text-decoration: none; }
+.toc a:hover, .toc a:focus-visible { color: var(--orange); }
+
+.tag { display: inline-block; font: 500 0.68rem/1 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; padding: 4px 6px; border: 1px dashed var(--stone-300); color: var(--stone-600); background: var(--paper); white-space: nowrap; vertical-align: 1px; }
+
+.figure { padding: 22px; overflow-x: auto; background: var(--stone-50); border: 1px solid var(--stone-200); }
+.figure svg { display: block; width: 100%; min-width: 660px; height: auto; }
+.caption { font-size: 0.84rem; color: var(--stone-600); }
+
+.goals { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--stone-200); }
+.goals > div { padding: 20px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.goals > div + div { border-left: 1px solid var(--stone-200); }
+
+.compare { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--stone-200); }
+.compare > div { padding: 20px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.compare > div + div { border-left: 1px solid var(--stone-200); background: var(--stone-50); }
+.say { font-family: var(--mono); font-size: 0.86rem; padding: 8px 10px; background: var(--paper); border: 1px solid var(--stone-200); }
+.say b { font-weight: 500; color: var(--orange); }
+
+.parts { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--stone-200); }
+.part { padding: 18px 20px; display: grid; gap: 8px; align-content: start; min-width: 0; border-top: 1px solid var(--stone-200); }
+.part:nth-child(-n+2) { border-top: 0; }
+.part:nth-child(even) { border-left: 1px solid var(--stone-200); }
+.part.wide { grid-column: 1 / -1; border-left: 0; }
+.part ul { font-size: 0.92rem; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.chip { font: 500 0.76rem/1 var(--mono); padding: 5px 8px; border: 1px solid var(--stone-200); background: var(--paper); }
+.chip.move { border-color: var(--graphite); }
+.chip.hold { border-color: var(--sand-300); background: var(--sand); }
+.chip.switch { border-color: var(--orange); color: var(--orange); }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--stone-200); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 0.9rem; line-height: 1.55; color: var(--ink); }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--stone-100); vertical-align: top; font-size: 0.9rem; }
+tr:last-child td { border-bottom: 0; }
+th { font: 500 0.7rem/1.2 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--stone-600); background: var(--stone-50); border-bottom: 1px solid var(--stone-200); }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.term { font-weight: 600; white-space: nowrap; }
+
+.panel { border: 1px solid var(--stone-200); padding: 20px; display: grid; gap: 14px; }
+.stack { display: flex; height: 26px; border: 1px solid var(--stone-200); }
+.stack span { display: block; height: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 0.84rem; color: var(--stone-600); }
+.legend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: 0; }
+.ba { display: grid; gap: 16px; }
+.ba-row { display: grid; grid-template-columns: minmax(11rem, 18rem) 1fr; gap: 16px; align-items: center; font-size: 0.88rem; }
+.tracks { display: grid; gap: 4px; min-width: 0; }
+.track { background: var(--stone-50); height: 22px; }
+.fill { height: 100%; display: flex; align-items: center; padding-left: 8px; font: 500 0.74rem var(--mono); white-space: nowrap; }
+.fill.before { background: var(--stone-200); color: var(--ink); }
+.fill.after { background: var(--orange); color: var(--on-accent); }
+
+.steps { display: grid; border: 1px solid var(--stone-200); }
+.steps > div { padding: 16px 20px; display: grid; gap: 6px; min-width: 0; }
+.steps > div + div { border-top: 1px solid var(--stone-200); }
+.steps p { font-size: 0.92rem; }
+
+.tried { display: grid; border: 1px solid var(--stone-200); }
+.tried > div { padding: 16px 20px; display: grid; gap: 8px; min-width: 0; }
+.tried > div + div { border-top: 1px solid var(--stone-200); }
+.tried > div.now { background: var(--orange-tint); }
+.tried-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
+.tried p { font-size: 0.92rem; }
+.flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font: 500 0.76rem/1.3 var(--mono); }
+.flow span { padding: 4px 8px; border: 1px solid var(--stone-200); background: var(--paper); }
+.flow i { font-style: normal; color: var(--stone-600); }
+.state { font: 500 0.68rem/1 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; padding: 4px 6px; border: 1px solid var(--stone-300); color: var(--stone-600); white-space: nowrap; }
+.state.now { border-color: var(--orange); color: var(--orange); }
+
+.codemap { display: grid; border: 1px solid var(--stone-200); }
+.codemap > div { display: grid; grid-template-columns: minmax(12rem, 17rem) 1fr; gap: 14px; padding: 11px 16px; font-size: 0.9rem; min-width: 0; }
+.codemap > div + div { border-top: 1px solid var(--stone-100); }
+.codemap code { background: transparent; border: 0; padding: 0; font-size: 0.82rem; }
+
+@media (max-width: 680px) {
+  h1 { font-size: 2rem; }
+  h2 { font-size: 1.5rem; }
+  .goals, .compare, .parts { grid-template-columns: 1fr; }
+  .goals > div + div, .compare > div + div { border-left: 0; border-top: 1px solid var(--stone-200); }
+  .part:nth-child(even) { border-left: 0; }
+  .part:nth-child(2) { border-top: 1px solid var(--stone-200); }
+  .ba-row, .codemap > div { grid-template-columns: 1fr; gap: 6px; }
+}
+</style>
+
+<main>
+
+<section id="top">
+  <div class="head">
+    <span class="label">rojev · v1 review · updated 2026-11-03</span>
+    <h1>A robot you can talk to while it works</h1>
+    <p class="lede">rojev is a System 1 / System 2 robot runtime. A vision-language-action model (S1) moves the arm. A vision-language model (S2) decides what each thing the person says means for the running task. Between them, a state owner is the only component allowed to change what the robot does. v1 uses only frozen open-source models, with no training, in the RoboCasa365 kitchen simulator (a Franka arm on a mobile base).</p>
+    <p class="muted small">Code: <a href="https://github.com/Vikas-ai56/rojev">github.com/Vikas-ai56/rojev</a></p>
+  </div>
+  <nav class="toc" aria-label="Sections">
+    <a href="#problem">Problem</a><a href="#terms">Terms</a><a href="#approach">Approach</a><a href="#pipeline">Architecture</a><a href="#event">One event</a><a href="#history">Approaches</a><a href="#choices">Choices</a><a href="#compose">Composite tasks</a><a href="#results">Results</a><a href="#v2">v2</a><a href="#code">Code map</a>
+  </nav>
+</section>
+
+<section id="problem">
+  <span class="label">The problem</span>
+  <h2>Why talking to a moving robot is hard</h2>
+  <p>A VLA policy takes camera images, the robot's state and one task sentence, and returns a <em>chunk</em> of actions: here 16 actions, 0.8 s of motion at 20 Hz. It does what it was trained on, one task per sentence. A person next to the robot changes their mind, interrupts and makes remarks while the arm moves. That raises five problems:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Problem</th><th>What it looks like on the robot</th></tr></thead>
+      <tbody>
+        <tr><td class="term">Timing</td><td>Control needs an action every 50 ms; a model answer takes 0.5–1 s. Every answer describes a world that has already moved.</td></tr>
+        <tr><td class="term">Partial information</td><td>The person has spoken, but for about a second nobody knows what they meant, and the arm may be about to grasp.</td></tr>
+        <tr><td class="term">Revision</td><td>The goal changes halfway through a motion.</td></tr>
+        <tr><td class="term">Compute allocation</td><td>Which model runs when, on what deadline, and what happens when it is late or silent.</td></tr>
+        <tr><td class="term">Commitment</td><td>How much of a predicted chunk to execute before asking the model again.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="goals">
+    <div>
+      <span class="label accent">Goal 1</span>
+      <h3>Interruptible execution</h3>
+      <p class="muted">The person can say <em>wait</em>, <em>stop</em>, <em>go on</em> or name another task while the arm moves. Each line becomes a typed decision with a probability per option. Raw text never reaches the VLA.</p>
+    </div>
+    <div>
+      <span class="label accent">Goal 2</span>
+      <h3>Long tasks from trained skills</h3>
+      <p class="muted">No new motor skills. A task, composite ones included, is one of the task sentences the VLA was trained on. System 2 chooses and switches between them.</p>
+    </div>
+  </div>
+  <p class="muted small">Why frozen models: the runtime and the decision logic can be tested without training confounds. Each model sits behind a fixed interface, so a trained part can replace it later without touching the runtime.</p>
+</section>
+
+<section id="terms">
+  <span class="label">Terms</span>
+  <h2>Words this page uses</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Term</th><th>Meaning here</th></tr></thead>
+      <tbody>
+        <tr><td class="term">VLA</td><td>Vision-language-action model: images + robot state + a sentence → actions.</td></tr>
+        <tr><td class="term">S1 / S2</td><td>System 1 moves the robot, continuously. System 2 decides what to do, about once a second, and never sends actions.</td></tr>
+        <tr><td class="term">XR-1</td><td>Xiaomi-Robotics-1, RoboCasa365 checkpoint: a 5B open VLA (Apache-2.0). Our S1, running on a remote A100.</td></tr>
+        <tr><td class="term">OneJev</td><td>OneJev 1.6 4B, a vision-language model that answers a multiple-choice question with one probability per option.</td></tr>
+        <tr><td class="term">Jev</td><td>Our interaction layer on OneJev. It turns one user line into one decision (continue, wait, switch task, …).</td></tr>
+        <tr><td class="term">State owner</td><td>The single writer of intent: current task, commands, pauses, dialogue.</td></tr>
+        <tr><td class="term">Command</td><td>An accepted instruction to the robot side. It expires unless renewed, and counts as running only once the robot has applied its first action.</td></tr>
+        <tr><td class="term">Lockstep</td><td>Simulation mode in which simulated time stops while any model computes, as published simulator benchmarks are scored. <em>Real time</em> runs the loop on the wall clock.</td></tr>
+        <tr><td class="term">Composite task</td><td>A multi-step task given as one sentence, e.g. “pick the kettle, place it on a burner, then turn the burner on”. RoboCasa365's test set has 50 tasks: 18 single-step, 16 composite tasks seen in training, 16 composite tasks never seen.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="approach">
+  <span class="label">Approach</span>
+  <h2>A robot model should never read raw speech</h2>
+  <div class="compare">
+    <div>
+      <h3>Speech straight into the VLA</h3>
+      <p class="say">“make it fast pls” → <b>task text</b></p>
+      <p class="muted small">Happened in an early live test. A VLA only understands sentences like the ones it was trained on, so a remark became its goal.</p>
+    </div>
+    <div>
+      <h3>Speech into a typed decision first</h3>
+      <p class="say">“make it fast pls” → <b>continue</b></p>
+      <p class="muted small">Jev picks from a closed list. A new task can only be one of the trained task sentences. In testing, 4 of 5 speed requests were read as continue, and no user words ever reached XR-1.</p>
+    </div>
+  </div>
+  <ul>
+    <li><strong>Fast and slow kept apart</strong>, as in Figure's Helix (a 7B S2 at 7–9 Hz over an 80M S1 at 200 Hz) and Hi Robot. S1 streams actions at 20 Hz; S2 decides at about 1 Hz and never blocks motion.</li>
+    <li><strong>Nothing stale, unclear or unanswered moves the robot.</strong> Late actions are skipped, stale decisions refused, unanswered changes paused.</li>
+    <li><strong>Proposal ≠ command ≠ running.</strong> S2 proposes, the owner commands, the robot side confirms what is actually running.</li>
+    <li><strong>Hesitate between consequences, not labels.</strong> “Stop” and “wait” both pause the robot, so being unsure between them is no reason to ask.</li>
+    <li><strong>Safety in code, not in models.</strong> A guard inside the control loop pauses the arm when anything above it goes quiet.</li>
+  </ul>
+</section>
+
+<section id="pipeline">
+  <span class="label">Architecture</span>
+  <h2>How System 1 and System 2 fit together</h2>
+  <div class="figure" role="img" aria-label="Pipeline: the person's instruction goes to the state owner, which asks the interaction lane (Jev) or the planning lane for a proposal over an observation snapshot; the owner validates proposals and commands the S1 runner; XR-1's action chunks pass the execution runtime and the guarded 20 Hz control loop to the robot; ACKs return to the owner; the newest observation feeds S1 and both S2 lanes.">
+    <svg viewBox="0 0 840 430" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#5e605a"/>
+        </marker>
+        <marker id="arrO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#d14300"/>
+        </marker>
+      </defs>
+      <text x="20" y="18" font-size="11" font-family="'Fira Code', Menlo, monospace" fill="#d14300" letter-spacing="0.6">SYSTEM 2 · DECIDES · ~1 Hz</text>
+      <text x="20" y="422" font-size="11" font-family="'Fira Code', Menlo, monospace" fill="#424340" letter-spacing="0.6">SYSTEM 1 · ACTS · 20 Hz</text>
+
+      <rect x="20" y="34" width="130" height="70" fill="#ffffff" stroke="#d9d9d0"/>
+      <text x="85" y="64" text-anchor="middle" font-size="14" font-weight="600" fill="#090a09">Person</text>
+      <text x="85" y="84" text-anchor="middle" font-size="12" fill="#5e605a">speech / text</text>
+
+      <rect x="220" y="34" width="250" height="88" fill="#fff3ec" stroke="#d14300"/>
+      <text x="345" y="58" text-anchor="middle" font-size="14" font-weight="600" fill="#d14300">Interaction lane · Jev</text>
+      <text x="345" y="78" text-anchor="middle" font-size="12" fill="#090a09">OneJev 4B: act question,</text>
+      <text x="345" y="94" text-anchor="middle" font-size="12" fill="#090a09">then task question over trained sentences</text>
+      <text x="345" y="112" text-anchor="middle" font-size="11" fill="#5e605a">1 s deadline · late answers applied as decided</text>
+
+      <rect x="220" y="138" width="250" height="52" fill="#ffffff" stroke="#d14300" stroke-dasharray="4 3"/>
+      <text x="345" y="160" text-anchor="middle" font-size="13" font-weight="600" fill="#d14300">Planning lane</text>
+      <text x="345" y="178" text-anchor="middle" font-size="11" fill="#5e605a">heartbeat every 1 s · keeps the task running</text>
+
+      <rect x="560" y="34" width="260" height="156" fill="#f7f2ea" stroke="#090a09"/>
+      <text x="690" y="58" text-anchor="middle" font-size="14" font-weight="600" fill="#090a09">State owner · single writer</text>
+      <text x="690" y="80" text-anchor="middle" font-size="12" fill="#090a09">snapshot → lane → proposal</text>
+      <text x="690" y="98" text-anchor="middle" font-size="11" fill="#5e605a">checks epoch · request id · instruction rev</text>
+      <text x="690" y="114" text-anchor="middle" font-size="11" fill="#5e605a">base command · expiry · preconditions</text>
+      <text x="690" y="134" text-anchor="middle" font-size="11" fill="#5e605a">review on change: grasp / release frozen</text>
+      <text x="690" y="150" text-anchor="middle" font-size="11" fill="#5e605a">standing holds · unanswered → hold</text>
+      <text x="690" y="170" text-anchor="middle" font-size="11" fill="#5e605a">active only from runtime ACKs</text>
+
+      <path d="M85,104 L85,214 L600,214 L600,194" fill="none" stroke="#5e605a" stroke-width="1.3" marker-end="url(#arr)"/>
+      <text x="96" y="208" font-size="11" fill="#5e605a">instruction (text) → owner</text>
+      <line x1="556" y1="96" x2="474" y2="96" stroke="#d14300" stroke-width="1.3" marker-end="url(#arrO)"/>
+      <text x="515" y="90" text-anchor="middle" font-size="10" fill="#d14300">request</text>
+      <line x1="474" y1="112" x2="556" y2="112" stroke="#d14300" stroke-width="1.3" marker-end="url(#arrO)"/>
+      <text x="515" y="126" text-anchor="middle" font-size="10" fill="#d14300">proposal</text>
+      <line x1="474" y1="166" x2="556" y2="166" stroke="#d14300" stroke-width="1.3" marker-end="url(#arrO)"/>
+
+      <rect x="20" y="300" width="130" height="96" fill="#ffffff" stroke="#d9d9d0"/>
+      <text x="85" y="330" text-anchor="middle" font-size="14" font-weight="600" fill="#090a09">Robot</text>
+      <text x="85" y="350" text-anchor="middle" font-size="12" fill="#5e605a">RoboCasa365</text>
+      <text x="85" y="366" text-anchor="middle" font-size="12" fill="#5e605a">Franka (sim)</text>
+
+      <rect x="180" y="300" width="130" height="96" fill="#ffffff" stroke="#424340"/>
+      <text x="245" y="326" text-anchor="middle" font-size="13" font-weight="600" fill="#090a09">Control loop</text>
+      <text x="245" y="346" text-anchor="middle" font-size="11" fill="#424340">20 Hz · one action</text>
+      <text x="245" y="364" text-anchor="middle" font-size="11" fill="#424340">guard: hold if starved</text>
+      <text x="245" y="380" text-anchor="middle" font-size="11" fill="#424340">0.5 s or owner lost 2 s</text>
+
+      <rect x="340" y="300" width="190" height="96" fill="#ffffff" stroke="#424340"/>
+      <text x="435" y="326" text-anchor="middle" font-size="13" font-weight="600" fill="#090a09">Execution runtime</text>
+      <text x="435" y="346" text-anchor="middle" font-size="11" fill="#424340">actions placed at capture time</text>
+      <text x="435" y="362" text-anchor="middle" font-size="11" fill="#424340">elapsed ones skipped · 0.2 s blend</text>
+      <text x="435" y="378" text-anchor="middle" font-size="11" fill="#424340">leases · review · revoke · bounds</text>
+
+      <rect x="560" y="300" width="260" height="96" fill="#f5f5f1" stroke="#424340"/>
+      <text x="690" y="326" text-anchor="middle" font-size="13" font-weight="600" fill="#090a09">S1 runner → XR-1 (5B VLA)</text>
+      <text x="690" y="346" text-anchor="middle" font-size="11" fill="#424340">3 cams × 4 frames + 14-D state + sentence</text>
+      <text x="690" y="362" text-anchor="middle" font-size="11" fill="#424340">→ 16 steps = 0.8 s chunk</text>
+      <text x="690" y="378" text-anchor="middle" font-size="11" fill="#424340">requests ahead by measured latency</text>
+
+      <line x1="720" y1="190" x2="720" y2="296" stroke="#090a09" stroke-width="1.6" marker-end="url(#arr)"/>
+      <text x="728" y="232" font-size="11" fill="#090a09">command</text>
+      <text x="728" y="247" font-size="11" fill="#090a09">(trained sentence,</text>
+      <text x="728" y="262" font-size="11" fill="#090a09">epoch, lease)</text>
+      <path d="M520,300 L520,240 L660,240 L660,194" fill="none" stroke="#090a09" stroke-width="1.1" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+      <text x="530" y="234" font-size="11" fill="#090a09">ACKs: activated · refused</text>
+
+      <line x1="560" y1="348" x2="534" y2="348" stroke="#5e605a" stroke-width="1.4" marker-end="url(#arr)"/>
+      <line x1="340" y1="348" x2="314" y2="348" stroke="#5e605a" stroke-width="1.4" marker-end="url(#arr)"/>
+      <line x1="180" y1="348" x2="154" y2="348" stroke="#5e605a" stroke-width="1.4" marker-end="url(#arr)"/>
+
+      <path d="M85,300 L85,262 L600,262 L600,296" fill="none" stroke="#b5b6ad" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+      <path d="M340,262 L340,194" fill="none" stroke="#b5b6ad" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+      <text x="96" y="282" font-size="11" fill="#5e605a">newest observation only (no backlog) → S1 and both S2 lanes</text>
+    </svg>
+  </div>
+  <p class="caption">Solid: control flow. Dashed: camera frames and confirmations. Every part runs on its own thread, and nothing waits for a model. The simulator runs on a laptop; XR-1 and OneJev run on a remote GPU.</p>
+
+  <div class="parts">
+    <div class="part">
+      <span class="label">Control loop and guard</span>
+      <h3>Moves the arm, and stops it if anything goes quiet</h3>
+      <ul>
+        <li>Every 50 ms: apply one action, take a new camera frame. Everyone reads only the newest frame.</li>
+        <li>The guard pauses the arm if actions stop arriving for 0.5 s, or the owner goes silent for 2 s, even if everything else has crashed.</li>
+      </ul>
+    </div>
+    <div class="part">
+      <span class="label">Execution runtime</span>
+      <h3>Decides what is actually running</h3>
+      <ul>
+        <li>Each chunk is timed from the frame it was computed on. Actions that are already late are skipped, never replayed, and new chunks blend in smoothly.</li>
+        <li>When the person speaks, the arm keeps moving but the gripper is frozen until the meaning is known.</li>
+      </ul>
+    </div>
+    <div class="part">
+      <span class="label">S1 runner</span>
+      <h3>Keeps actions flowing</h3>
+      <ul>
+        <li>Measures how long XR-1 takes and asks for the next chunk early enough that the arm never runs out.</li>
+        <li>An answer too late to be useful is dropped and asked again on the newest frame.</li>
+      </ul>
+    </div>
+    <div class="part">
+      <span class="label">State owner</span>
+      <h3>The only part that can change the plan</h3>
+      <ul>
+        <li>Every user line, model proposal and robot confirmation passes through it. Decisions made before the person last spoke are refused.</li>
+        <li>No answer within 1 s → the robot pauses and says so. A late answer is still applied to the moment it was about. “Stop” and “wait” stay in force until the person says otherwise.</li>
+      </ul>
+    </div>
+    <div class="part wide">
+      <span class="label accent">System 2 · Jev</span>
+      <h3>Turns one user line into one decision</h3>
+      <ul>
+        <li>It offers OneJev only the reactions that make sense right now. While moving: continue, switch task, wait, ask, stop. While paused: resume, keep holding, switch task, ask, stop.</li>
+        <li>Reactions are grouped by what they do to the robot, and Jev asks the person only when the top two groups are close.
+          <span class="chips"><span class="chip move">keeps moving: continue, resume</span><span class="chip hold">pauses: wait, stop, ask, keep holding</span><span class="chip switch">changes task: switch</span></span></li>
+        <li>After “switch task”, a second question picks one of XR-1's trained task sentences, or none. XR-1 only ever sees that sentence, never the user's words.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="event">
+  <span class="label">One event, end to end</span>
+  <h2>“wait”, then “go on”</h2>
+  <p>A recorded run: XR-1 closing a toaster-oven door, with Jev listening. Times are simulated seconds.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>What happens</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0.0 s</td><td>The whole task sentence goes to XR-1, which starts moving.</td></tr>
+        <tr><td class="num">3.0 s</td><td>The person types “wait”. The owner acknowledges at once, freezes the gripper while the arm keeps moving, and asks Jev. Simulated time stops while OneJev thinks.</td></tr>
+        <tr><td class="num">3.05 s</td><td>Jev answers <strong>wait</strong> (88 % probability). The robot pauses and remembers the task it interrupted.</td></tr>
+        <tr><td class="num">6.0 s</td><td>“go on”. The robot is paused, so the options are now resume, keep holding, switch task, ask, stop.</td></tr>
+        <tr><td class="num">6.05 s</td><td><strong>resume</strong> (72 %). The interrupted task is re-issued and XR-1 starts moving again.</td></tr>
+        <tr><td class="num">10.5 s</td><td>The task succeeds, as the simulator sees it. Nothing in S2 knows it is done: v1 has no completion signal (see v2).</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="history">
+  <span class="label">How we got here</span>
+  <h2>Approaches we tried</h2>
+  <div class="tried">
+    <div>
+      <div class="tried-head"><h3>1 · OneJev picks every next step for π0.5², MJev checks</h3><span class="state">dropped</span></div>
+      <p class="flow"><span>task</span><i>→</i><span>list of possible next steps</span><i>→</i><span>MJev checks them on the image</span><i>→</i><span>OneJev picks one</span><i>→</i><span>π0.5² does it</span></p>
+      <p><strong>How it did:</strong> OneJev picked the right next step 40 % of the time (its 0.8B version 22.5 %). On new tasks, a quarter of the steps needed had never appeared as exact phrases in π0.5²'s training data, so they could not even be offered.</p>
+      <p><strong>Why we moved on:</strong> too unreliable to steer every step, and the robot model plans its own steps better. S2's job shrank to answering the person.</p>
+    </div>
+    <div>
+      <div class="tried-head"><h3>2 · The robot model: SmolVLA → π0.5² → XR-1</h3><span class="state">replaced</span></div>
+      <p class="flow"><span>SmolVLA</span><i>→</i><span>π0.5²</span><i>→</i><span>XR-1</span></p>
+      <p><strong>How it did:</strong> SmolVLA solved 4 of 20 test episodes. π0.5²'s own step planner seemed to flip between “fridge” and “freezer” and fail multi-step tasks, but those runs turned out to have broken camera images, so that evidence was withdrawn and never re-run. XR-1 had the best published result (57 %) and matched it in our runtime (18 of 20).</p>
+      <p><strong>Why we moved on:</strong> SmolVLA was too weak; XR-1 was the strongest open model with numbers we could reproduce. π0.5² is still supported as an option.</p>
+    </div>
+    <div>
+      <div class="tried-head"><h3>3 · MJev and SAM 2 as “is it done?” checkers</h3><span class="state">dropped</span></div>
+      <p class="flow"><span>camera frame</span><i>→</i><span>MJev / OneJev: is this step done?</span><i>·</i><span>SAM 2 tracks the object</span><i>→</i><span>is it inside?</span></p>
+      <p><strong>How it did:</strong> on 222 kitchen scenes labelled by the simulator, MJev and OneJev were at chance (50 % and 52 % balanced accuracy); MJev never once said “done”. SAM 2 tracked well from a good start, but a bad first mask never recovered, and its “inside the freezer” check was wrongly “done” 90 % of the time.</p>
+      <p><strong>Why we moved on:</strong> no better than chance. MJev left the loop; SAM 2 is kept for measurement only.</p>
+    </div>
+    <div>
+      <div class="tried-head"><h3>4 · Commit-and-verify</h3><span class="state">off</span></div>
+      <p class="flow"><span>π0.5² proposes a step</span><i>→</i><span>pin it</span><i>→</i><span>release when checked done, or after 25 s</span></p>
+      <p><strong>How it did:</strong> step flip-flopping fell from 19 switches to 2, but with no working checker nothing was ever confirmed, and a wrong first step stayed pinned until the 25 s limit. These runs also had the broken camera images.</p>
+      <p><strong>Why we moved on:</strong> it needs a working done checker, and XR-1 does not report its steps. The code is built and switched off.</p>
+    </div>
+    <div class="now">
+      <div class="tried-head"><h3>5 · Now: S1/S2 runtime, Jev answers only changes</h3><span class="state now">current</span></div>
+      <p class="flow"><span>XR-1 runs the whole task</span><i>·</i><span>person speaks</span><i>→</i><span>Jev picks one reaction</span><i>→</i><span>owner applies it</span></p>
+      <p><strong>How it does:</strong> matches XR-1's published results (18 of 20); reads 55 of 82 user lines right, and “stop” / “go on” 4 of 4 after grouping reactions by effect; 17 of 19 fault scenarios pass.</p>
+      <p><strong>Still missing:</strong> knowing when a task is done, and running in real time. That is v2.</p>
+    </div>
+  </div>
+</section>
+
+<section id="choices">
+  <span class="label">Component choices</span>
+  <h2>What was picked, and why</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Part</th><th>Choice</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td class="term">Robot model</td><td>XR-1</td><td>Best published open result on RoboCasa365 when chosen in October 2026: 57 % across the 50-task test set, far ahead of π0.5 on multi-step tasks. Inside our runtime it matched its own published test episodes, 18 of 20 against the authors' 20 of 20.</td></tr>
+        <tr><td class="term">Decision model</td><td>OneJev 1.6 4B</td><td>It answers multiple-choice questions with a probability per option, so every decision can be thresholded and logged. The 4B model beat the 0.8B one in an early test (40 % vs 22.5 %).</td></tr>
+        <tr><td class="term">Decision format</td><td>Pick from a list</td><td>Free text sent to the robot model broke it: remarks and typos became its task. A choice from a fixed list cannot do that.</td></tr>
+        <tr><td class="term">Coordination</td><td>One state owner</td><td>Early bugs came from two parts each holding half a fact, like the planner restarting a task the person had stopped. One owner removes that kind of bug.</td></tr>
+        <tr><td class="term">Testing mode</td><td>Lockstep, real time measured too</td><td>The models run on a GPU on another continent. One XR-1 request takes about 0.5 s against 0.8 s of motion per chunk, so in real time the arm runs out of actions and we would be measuring the network.</td></tr>
+        <tr><td class="term">Network</td><td>Kept-open HTTP connections</td><td>Most of the delay was opening a new connection per request, not the models. Keeping one open roughly halved it. HTTP/3 was built and tested, and was not faster on this link.</td></tr>
+        <tr><td class="term">Knowing “done”</td><td>Nothing yet</td><td>No model we tried could tell a finished step from an unfinished one better than chance. v2 fixes this.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="muted small">XR-1's benchmark numbers are the vendor's own.</p>
+</section>
+
+<section id="compose">
+  <span class="label">Composite tasks</span>
+  <h2>Long tasks today</h2>
+  <p>A composite task is given to XR-1 as one trained sentence, and XR-1 runs it end to end. System 2 decides which trained sentence is in force: the person can switch to another trained task mid-run, and Jev maps their words onto that sentence.</p>
+  <div class="figure" role="img" aria-label="A spoken request is mapped by Jev to one trained task sentence; the owner commands it; XR-1 runs the whole composite task.">
+    <svg viewBox="0 0 840 150" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif">
+      <defs>
+        <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#5e605a"/>
+        </marker>
+      </defs>
+      <rect x="10" y="40" width="170" height="70" fill="#ffffff" stroke="#d9d9d0"/>
+      <text x="95" y="68" text-anchor="middle" font-size="12" fill="#5e605a">person says</text>
+      <text x="95" y="90" text-anchor="middle" font-size="13" font-family="'Fira Code', Menlo, monospace" fill="#090a09">“put the kettle on”</text>
+      <line x1="180" y1="75" x2="216" y2="75" stroke="#5e605a" stroke-width="1.3" marker-end="url(#arr3)"/>
+      <rect x="220" y="40" width="130" height="70" fill="#fff3ec" stroke="#d14300"/>
+      <text x="285" y="70" text-anchor="middle" font-size="13" font-weight="600" fill="#d14300">Jev</text>
+      <text x="285" y="90" text-anchor="middle" font-size="11" fill="#090a09">picks a trained sentence</text>
+      <line x1="350" y1="75" x2="386" y2="75" stroke="#5e605a" stroke-width="1.3" marker-end="url(#arr3)"/>
+      <rect x="390" y="30" width="270" height="90" fill="#f7f2ea" stroke="#090a09"/>
+      <text x="525" y="56" text-anchor="middle" font-size="11" fill="#5e605a">trained sentence (KettleBoiling)</text>
+      <text x="525" y="78" text-anchor="middle" font-size="12" fill="#090a09">“Pick the kettle from the counter and</text>
+      <text x="525" y="95" text-anchor="middle" font-size="12" fill="#090a09">place it on a stove burner. Then turn</text>
+      <text x="525" y="112" text-anchor="middle" font-size="12" fill="#090a09">the burner on.”</text>
+      <line x1="660" y1="75" x2="696" y2="75" stroke="#5e605a" stroke-width="1.3" marker-end="url(#arr3)"/>
+      <rect x="700" y="40" width="130" height="70" fill="#f5f5f1" stroke="#424340"/>
+      <text x="765" y="70" text-anchor="middle" font-size="13" font-weight="600" fill="#090a09">XR-1</text>
+      <text x="765" y="90" text-anchor="middle" font-size="11" fill="#424340">runs every step</text>
+    </svg>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>What</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Three composite tasks, no speech, one run each</td><td>Boil the kettle 24.3 s · wash the lettuce 41.8 s · store leftovers in a bowl 87.6 s, all succeeded</td></tr>
+        <tr><td>Rinse the sink basin, on XR-1's own test episodes</td><td>4 of 5</td></tr>
+        <tr><td>Switching task by voice mid-run</td><td>Switched to turning on the faucet and XR-1 did it; switched back to the kettle task by name (99 % probability)</td></tr>
+        <tr><td>Words that are not a task</td><td>8 of 8 gibberish, negated or vague lines left the task unchanged</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="muted small">Composite tasks never seen in training have not been tested in our setup yet; the XR-1 paper reports 32 % on them. In v1 the task options are a short hand-written list per run.</p>
+</section>
+
+<section id="results">
+  <span class="label">Results</span>
+  <h2>Where v1 stands</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Question</th><th>How we tested</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Does the robot model behave the same inside our system?</td><td>XR-1's own published test episodes: 4 tasks × 5 seeds</td><td><strong>18 of 20</strong> succeeded; the authors report 20 of 20. So failures in our loop point at the decision side.</td></tr>
+        <tr><td>Does Jev understand what people say?</td><td>82 lines from scripted users, random typo-filled text and 2 live sessions, each judged against what the robot was doing at that moment</td><td><strong>55 right</strong>, 24 safe misses (it asked or paused when it could have acted), 2 unsafe, 1 unanswered on purpose</td></tr>
+        <tr><td>Did grouping reactions by effect help?</td><td>All 82 lines replayed, and the 4 affected cases re-run live</td><td>“stop” / “go on” twice: 2 of 4 → <strong>4 of 4</strong>. “ruko” (Hindi for stop) now asks instead of starting a task. One small regression.</td></tr>
+        <tr><td>Are late answers handled?</td><td>Real time, with the answer deadline forced down to 0.3 s</td><td>The robot paused at the deadline, then applied both late answers correctly</td></tr>
+        <tr><td>Does the safety logic hold under faults?</td><td>19 fault scenarios in real time (slow or crashing decision model, slow robot model, stop, wait / resume, switch, questions), with a scripted arm and rule-based deciders standing in for the models</td><td><strong>17 of 19</strong> pass; the arm never ran out of actions and no limit was crossed. The 2 failures are blocked-arm cases the motion monitor misses.</td></tr>
+        <tr><td>Can it run in real time with XR-1?</td><td>Laptop in India, GPU in the US</td><td>Not yet: the arm had no action to run on 651 of 985 ticks, and the task failed</td></tr>
+        <tr><td>How fast is one decision?</td><td>OneJev with 3 camera images</td><td>604 ms median when measured alone, of which the model is 75–140 ms; about 930 ms inside the loop, because the server closes idle connections</td></tr>
+        <tr><td>Can anything tell when a step is done?</td><td>222 kitchen scenes set up in the simulator, about half of them finished</td><td>OneJev: chance. A frozen progress model, RynnValue-4B, picks the finished step over the unfinished one 82 % of the time on the same images, but never says “done” outright</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h3>The 82 user lines, before reactions were grouped by effect</h3>
+    <div class="stack" role="img" aria-label="55 right, 24 safe misses, 2 unsafe, 1 unanswered by design">
+      <span style="width:67.1%; background: var(--ink)"></span>
+      <span style="width:29.3%; background: var(--sand-300)"></span>
+      <span style="width:2.4%; background: var(--orange)"></span>
+      <span style="width:1.2%; background: var(--stone-200)"></span>
+    </div>
+    <div class="legend">
+      <span><i style="background: var(--ink)"></i>55 right</span>
+      <span><i style="background: var(--sand-300)"></i>24 safe misses</span>
+      <span><i style="background: var(--orange)"></i>2 unsafe</span>
+      <span><i style="background: var(--stone-200)"></i>1 unanswered by design</span>
+    </div>
+    <p class="muted small">The two unsafe lines: “ruko” read as a new task (now fixed), and “go on” after the task had already succeeded, which restarted the finished task (needs the v2 completion signal). Typos still reached the right task (“trun on teh sink fuacet” → “Turn on the sink faucet.”).</p>
+  </div>
+
+  <div class="panel">
+    <h3>Changes that moved the numbers</h3>
+    <div class="ba">
+      <div class="ba-row"><span>One OneJev decision: a new connection per request vs one kept open</span>
+        <div class="tracks">
+          <div class="track"><div class="fill before" style="width:100%">1,269 ms</div></div>
+          <div class="track"><div class="fill after" style="width:47.6%">604 ms</div></div>
+        </div></div>
+      <div class="ba-row"><span>XR-1 network time per request: new connection vs kept open</span>
+        <div class="tracks">
+          <div class="track"><div class="fill before" style="width:100%">680 ms</div></div>
+          <div class="track"><div class="fill after" style="width:37.5%">255 ms</div></div>
+        </div></div>
+      <div class="ba-row"><span>“stop” / “go on” handled right: grouping reactions by effect</span>
+        <div class="tracks">
+          <div class="track"><div class="fill before" style="width:50%">2 of 4</div></div>
+          <div class="track"><div class="fill after" style="width:100%">4 of 4</div></div>
+        </div></div>
+    </div>
+    <div class="legend"><span><i style="background: var(--stone-200)"></i>before</span><span><i style="background: var(--orange)"></i>after</span><span>bars in a row share a scale</span></div>
+  </div>
+</section>
+
+<section id="v2">
+  <span class="label">Next</span>
+  <h2>v2: new multi-step tasks, and knowing when they are done</h2>
+  <p><strong>Goal:</strong> run composite tasks the robot has never seen as a whole, built from skills XR-1 already has, and finish them cleanly. New objects and kitchens come as a byproduct. No new motor skills or new robots in this phase.</p>
+  <p><strong>Why:</strong> v1 cannot tell when a task is done, cannot tell whether a task can be done from where the robot is, and can only switch to tasks from a short hand-written list.</p>
+  <div class="steps">
+    <div>
+      <h3>A critic that watches the robot <span class="tag">planned</span></h3>
+      <p class="muted">One vision-language model that, for any task sentence, answers three things: how far along it is, whether it is done, and how likely XR-1 is to succeed at it from here. The last answer is the missing “can this task run now?” check.</p>
+    </div>
+    <div>
+      <h3>A supervisor that uses it <span class="tag">planned</span></h3>
+      <p class="muted">On the planning side: ends the task when the critic says done, retries when progress stalls, and never moves on without done. Steering XR-1 step by step is added only if it beats XR-1 running the whole sentence.</p>
+    </div>
+    <div>
+      <h3>Step 1, no training</h3>
+      <p class="muted">Start from frozen progress models (RynnValue-4B or Robometer-4B), with the “done” threshold set on simulator-labelled frames from kitchens kept aside for testing.</p>
+    </div>
+    <div>
+      <h3>Step 2, train the critic if step 1 falls short</h3>
+      <p class="muted">The bar: catch at least 70 % of completions at no more than 5 % false “done” on unseen tasks. If the frozen model misses it, fine-tune Robometer-4B with LoRA (about 1–2 GPU-days). Labels come free from the simulator's own success check on every frame, with failed runs and frames after success as negatives. The “can XR-1 succeed from here” answer is trained by running XR-1 3–5 times from the same state and using the success rate as the label.</p>
+    </div>
+    <div>
+      <h3>Step 3, train the robot model only if needed</h3>
+      <p class="muted">If XR-1 does much worse when starting where a previous step left off (a drop of more than 30 points), fine-tune it on those in-between states.</p>
+    </div>
+    <div>
+      <h3>How we know it worked</h3>
+      <p class="muted">On unseen composite tasks, success beats plain XR-1 by at least 5 points, with under 1 % wasted motion after the task is done. Unseen tasks and kitchens are never used for training or for setting thresholds.</p>
+    </div>
+    <div>
+      <h3>Later</h3>
+      <p class="muted">Fine-tune XR-1 for a second robot (SO-101). A learned S2 → S1 link like Helix's, only if it beats this setup.</p>
+    </div>
+  </div>
+</section>
+
+<section id="code">
+  <span class="label">Code map</span>
+  <h2>Where to look in the repository</h2>
+  <p>The core is the <code>rojev/</code> package; robot- and model-specific code sits beside it in <code>executors/</code> and <code>services/</code>. Packages import one way, bottom to top, and a test enforces it. A suggested reading order:</p>
+  <div class="codemap">
+    <div><code>rojev/protocol/</code><span>Shared message types: observations, commands, confirmations, proposals.</span></div>
+    <div><code>rojev/robot/</code><span>Robot interface: action limits, which actions are irreversible (the gripper), a MuJoCo SO-101.</span></div>
+    <div><code>rojev/control/</code><span><code>execution.py</code> (what is running), <code>guard.py</code>, <code>loop.py</code>.</span></div>
+    <div><code>rojev/system1/</code><span><code>runner.py</code> (action supply), <code>commit.py</code> (how much of a chunk to run), <code>monitor.py</code>, <code>remote.py</code>.</span></div>
+    <div><code>rojev/system2/</code><span><code>jev/</code> (the decision layer), <code>models/onejev.py</code>, <code>worker.py</code>.</span></div>
+    <div><code>rojev/owner/state_owner.py</code><span>The state owner.</span></div>
+    <div><code>rojev/transport/</code><span>Connections to the remote models.</span></div>
+    <div><code>executors/robocasa-pi052/</code><span><code>realtime.py</code> runs one RoboCasa session (the folder name predates XR-1); <code>harness/</code> holds the test tooling.</span></div>
+    <div><code>executors/robocasa-xr1/</code><span>The XR-1 server.</span></div>
+    <div><code>docs/paper/</code><span><code>method.md</code> (the system as built), <code>experiments.md</code> (every experiment), <code>failure-cases.md</code>.</span></div>
+  </div>
+  <p class="muted small">Tests: <code>uv run pytest tests</code> → 331 passed, 1 skipped (2026-11-02).</p>
+</section>
+
+</main>

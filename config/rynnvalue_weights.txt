@@ -1,0 +1,2 @@
+repo Alibaba-DAMO-Academy/RynnValue-4B @ 2e78c2c0118d5143fe5806b1b928f1e074da17b9
+RynnValue-4B (Alibaba DAMO, Apache-2.0): Qwen3-VL-4B (RynnBrain-4B) with remaining-time value heads and a Match / Success analysis; remote code (trust_remote_code) read before use, no network or process calls; resolved 2026-10-30.

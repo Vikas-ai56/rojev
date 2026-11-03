@@ -11,17 +11,11 @@ from .observation import Capture
 
 @dataclass(frozen=True)
 class UserInstruction:
-    """Something the user said. The owner bumps `instruction_rev` and adds it to the dialogue; it changes the task text
-    S1 is conditioned on only when an accepted decision adopts new task text (`DecisionProposal.task`)."""
-
     text: str
 
 
 @dataclass(frozen=True)
 class Deviation:
-    """The world did not respond to the applied actions as the robot's effect model predicts (execution monitor →
-    owner). `score` crossed the calibrated `threshold` at `t` while `cmd_id` was active; `source` names the monitor."""
-
     epoch: int
     cmd_id: int | None
     t: float
@@ -36,7 +30,6 @@ class Keyframe:
     `capture` (the observation the judgement used). `evidence` names who judged it; `checked` is True when that was a
     confirmed end-state check (a checked `StepEvent`), False when a decider moved on by its own judgement. Kept across
     repairs and revisions, so a decider never redoes a done step."""
-
     cmd_id: int
     subtask: str
     instruction_rev: int
@@ -47,9 +40,9 @@ class Keyframe:
 
 @dataclass(frozen=True)
 class StepEvent:
-    """Evidence that a step of the running command is done, posted to the owner by whoever observes it (spec §4
-    step-completion events): an end-state check (MJev, a sensor) or S1's own planner moving on to another subtask.
-    `cmd_id` is the command the evidence is about; `step` the step judged done; `source` names the observer; `detail`
+    """Evidence that a step of the running command is done, posted to the owner by whoever observes it 
+    an end-state check (MJev, a sensor) or S1's own planner moving on to another subtask. `cmd_id` is the 
+    command the evidence is about; `step` the step judged done; `source` names the observer; `detail`
     is what it saw; `checked` is True when an end-state check found the step done (a claim, such as S1's planner moving
     on, is not). The owner asks the planning lane at once and, when the step is then left (or, for S1's own steps, when
     the event is checked), records `source` and `detail` as the keyframe's evidence."""
@@ -130,16 +123,6 @@ class DecisionFailure:
 
 @dataclass(frozen=True)
 class ObservationSnapshot:
-    """What a decider sees, frozen when the owner asks: the newest observation (`capture`, a loop `Capture`) plus the
-    owner's state at that moment. `instruction` is the task text in force (what S1 is conditioned on); what the user
-    last said is `latest_utterance`. `active_cmd` / `active_operation` describe the desired command (pending or active);
-    `active_since` is when its operation started (kept across a reaffirmation; None before); `keyframes` are the steps
-    judged done, in order; `trigger` says why the decision was requested; `review` is True while the desired command is
-    under review after an instruction change; `deviation` is the latest execution deviation of the desired command;
-    `step_event` the latest step-completion evidence about it; `planned` the latest subtask S1's own planner chose
-    for it; `hold` the interaction hold that stands, if any; `dialogue` the latest turns between user and robot,
-    oldest first (bounded by the owner)."""
-
     epoch: int
     request_id: int
     now: float
@@ -160,15 +143,11 @@ class ObservationSnapshot:
 
     @property
     def latest_utterance(self) -> str:
-        """The user's most recent words (the newest user turn), "" if none: what a change decider answers. `instruction`
-        is the task text in force, which an utterance alone never replaces."""
         return next((t.text for t in reversed(self.dialogue) if t.speaker == USER), "")
 
 
 @dataclass(frozen=True)
 class Precondition:
-    """A fact the decision relied on; `kind` is holding | not_holding | object_visible | object_near."""
-
     kind: str
     object_id: str | None = None
     tol: float = 0.0
@@ -176,9 +155,6 @@ class Precondition:
 
 @dataclass(frozen=True)
 class Advice:
-    """Evidence from a slower worker. `t_source_obs` is the capture time of the observation it was computed from;
-    `scope_cmd` is the command it is about (None = task level)."""
-
     epoch: int
     advice_id: int
     source: str
@@ -192,9 +168,6 @@ class Advice:
 
 @dataclass(frozen=True)
 class DecisionProposal:
-    """Jev's proposal. `base_active_cmd` is the active command the decision assumed; `scores` maps candidate labels
-    to the decision model's probabilities; `task` is new task text to condition S1 on (a revision), None to keep it."""
-
     epoch: int
     request_id: int
     obs_id: int
