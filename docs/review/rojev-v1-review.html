@@ -149,7 +149,7 @@ td.term { font-weight: 600; white-space: nowrap; }
     <p class="muted small">Code: <a href="https://github.com/Vikas-ai56/rojev">github.com/Vikas-ai56/rojev</a></p>
   </div>
   <nav class="toc" aria-label="Sections">
-    <a href="#problem">Problem</a><a href="#terms">Terms</a><a href="#approach">Approach</a><a href="#pipeline">Architecture</a><a href="#event">One event</a><a href="#history">Approaches</a><a href="#choices">Choices</a><a href="#compose">Composite tasks</a><a href="#results">Results</a><a href="#v2">v2</a><a href="#code">Code map</a>
+    <a href="#problem">Problem</a><a href="#terms">Terms</a><a href="#approach">Approach</a><a href="#pipeline">Architecture</a><a href="#event">One event</a><a href="#history">Approaches</a><a href="#choices">Choices</a><a href="#compose">Composite tasks</a><a href="#results">Results</a><a href="#issues">Issues</a><a href="#v2">v2</a><a href="#code">Code map</a>
   </nav>
 </section>
 
@@ -198,7 +198,7 @@ td.term { font-weight: 600; white-space: nowrap; }
         <tr><td class="term">Jev</td><td>Our interaction layer on OneJev. It turns one user line into one decision (continue, wait, switch task, …).</td></tr>
         <tr><td class="term">State owner</td><td>The single writer of intent: current task, commands, pauses, dialogue.</td></tr>
         <tr><td class="term">Command</td><td>An accepted instruction to the robot side. It expires unless renewed, and counts as running only once the robot has applied its first action.</td></tr>
-        <tr><td class="term">Lockstep</td><td>Simulation mode in which simulated time stops while any model computes, as published simulator benchmarks are scored. <em>Real time</em> runs the loop on the wall clock.</td></tr>
+        <tr><td class="term">Lockstep</td><td>Simulation mode in which simulated time stops while any model computes, as published simulator benchmarks are scored. <em>Real time</em> runs the loop on the wall clock. Lockstep hides model delay, and a real robot cannot pause, so real time is always measured too.</td></tr>
         <tr><td class="term">Composite task</td><td>A multi-step task given as one sentence, e.g. “pick the kettle, place it on a burner, then turn the burner on”. RoboCasa365's test set has 50 tasks: 18 single-step, 16 composite tasks seen in training, 16 composite tasks never seen.</td></tr>
       </tbody>
     </table>
@@ -331,7 +331,8 @@ td.term { font-weight: 600; white-space: nowrap; }
       <h3>Decides what is actually running</h3>
       <ul>
         <li>Each chunk is timed from the frame it was computed on. Actions that are already late are skipped, never replayed, and new chunks blend in smoothly.</li>
-        <li>When the person speaks, the arm keeps moving but the gripper is frozen until the meaning is known.</li>
+        <li>Late actions happen only in real time. In lockstep the world waits for XR-1, so nothing is ever late. A real robot cannot pause physics: the arm keeps moving while XR-1 thinks, so the start of every chunk is already in the past when it arrives. Stopping the arm on every request instead would mean a 0.5 s pause every 0.8 s.</li>
+        <li>When the person speaks, the arm keeps moving, but actions that cannot be undone are frozen until the meaning is known. Each robot declares which those are; on this Franka it is the gripper.</li>
       </ul>
     </div>
     <div class="part">
@@ -540,6 +541,38 @@ td.term { font-weight: 600; white-space: nowrap; }
     </div>
     <div class="legend"><span><i style="background: var(--stone-200)"></i>before</span><span><i style="background: var(--orange)"></i>after</span><span>bars in a row share a scale</span></div>
   </div>
+</section>
+
+<section id="issues">
+  <span class="label">Known issues</span>
+  <h2>What v1 does not handle yet</h2>
+  <div class="steps">
+    <div>
+      <h3>The scene has to match the sentence</h3>
+      <p class="muted">RoboCasa always builds each scene so the task sentence is true: for the kettle task, the kettle is always on the counter. A real kitchen makes no such promise. XR-1 would still reach for where kettles usually were, and nothing in v1 first checks whether the task is possible, or already done.</p>
+    </div>
+    <div>
+      <h3>No step-by-step understanding</h3>
+      <p class="muted">XR-1 runs the whole sentence by itself, with no planner. Its 32 % on unseen composite tasks comes from that alone. When it goes wrong it stalls, repeats a finished step or does steps in the wrong order, and nothing in the system notices.</p>
+    </div>
+    <div>
+      <h3>No “done”</h3>
+      <p class="muted">Nothing knows when a task has finished. After a task had succeeded, “go on” restarted it.</p>
+    </div>
+    <div>
+      <h3>Real time over a long network link</h3>
+      <p class="muted">The loop works in lockstep. In real time, with the GPU on another continent, the arm ran out of actions on two thirds of ticks. XR-1 has to run close to the robot.</p>
+    </div>
+    <div>
+      <h3>The robot model is environment-specific</h3>
+      <p class="muted">This XR-1 checkpoint was fine-tuned on RoboCasa demonstrations for the Franka. A different kitchen or robot needs fine-tuning on that robot's own demonstrations, and the “done” model will likely need tuning on the new setting too.</p>
+    </div>
+    <div>
+      <h3>Limits of the decision layer</h3>
+      <p class="muted">Jev can switch only to tasks from a short list per run, and its confidence threshold is a chosen default, not fitted. “are you done?” once stopped a working robot, and only English is handled.</p>
+    </div>
+  </div>
+  <p class="muted small">v2 is aimed at the first three.</p>
 </section>
 
 <section id="v2">
