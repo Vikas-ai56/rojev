@@ -34,17 +34,22 @@ class RemotePolicy(Policy):
 
     def act_samples(self, obs: Observation, subtask: str, k: int, timeout_s: float | None = None,
                     continuation: Continuation | None = None) -> list[ActionChunk]:
-        """Per chunk: the service's stage times plus `network` = round trip − those stages, `round_trip` and
-        `request_kb` of the one shared request."""
+        """Per chunk: the service's stage times plus `network` = round trip − those stages, `round_trip`,
+        `request_kb` and the client's own `encode` / `decode` of the one shared request; `info` adds the `codec`."""
+        w0 = time.perf_counter()
         body = wire.encode_request(obs, subtask, k, self.codec, continuation)
         t0 = time.perf_counter()
-        chunks = wire.decode_response(self.transport.request("POST", "/act", body, timeout_s))
+        reply = self.transport.request("POST", "/act", body, timeout_s)
         rtt = (time.perf_counter() - t0) * 1000
+        chunks = wire.decode_response(reply)
+        client_ms = {"encode": round((t0 - w0) * 1000, 1),
+                     "decode": round((time.perf_counter() - t0) * 1000 - rtt, 1)}
         if len(chunks) != k:
             raise ValueError(f"asked the service for {k} samples, got {len(chunks)}")
         return [ActionChunk(c.actions, {**c.timings_ms, "network": round(rtt - sum(c.timings_ms.values()), 1),
-                                        "round_trip": round(rtt, 1), "request_kb": round(len(body) / 1024, 1)},
-                            c.info) for c in chunks]
+                                        "round_trip": round(rtt, 1), "request_kb": round(len(body) / 1024, 1),
+                                        **client_ms},
+                            {**c.info, "codec": self.codec}) for c in chunks]
 
     def reset(self) -> None:
         self.transport.request("POST", "/reset")

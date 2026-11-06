@@ -7,6 +7,7 @@
   recording   RecordingPolicy, RecordingCommit, RecordingDecider: per-call logs through the core's interfaces;
               InteractionCases: Jev decisions saved as calibration cases; RecordingVerifier: checks logged with truth
   frame_check FrameCheck: samples the camera frames during a run; a run with noise / blank frames is not scored
+  model_delay ModelDelay: lockstep with each model's measured delay added back (`--model-delay`)
   tracking    FrameRecorder: cameras + simulator state during a live run (scored afterwards by sam_check.py track);
               truth_masks and the 2D geometry shared with done_check_ab.py / sam_check.py
   viewer      MirrorPublisher: live MuJoCo viewer in its own process
@@ -19,6 +20,7 @@ from .deciders import (FailingDecider, KeywordChooser, RevisableSequence, Rewrit
                        SlowDecider, TruthVerifier)
 from .frame_check import FrameCheck
 from .live_view import LiveView
+from .model_delay import ModelDelay
 from .recording import InteractionCases, RecordingCommit, RecordingDecider, RecordingPolicy, RecordingVerifier
 from .skills import SkillScriptPolicy
 from .tracking import FrameRecorder
@@ -26,6 +28,6 @@ from .video import VideoRecorder
 from .viewer import MirrorPublisher
 
 __all__ = ["FailingDecider", "FrameCheck", "FrameRecorder", "InteractionCases", "KeywordChooser", "LiveView",
-           "MirrorPublisher", "RecordingCommit", "RecordingDecider", "RecordingPolicy", "RecordingVerifier", "RevisableSequence",
+           "MirrorPublisher", "ModelDelay", "RecordingCommit", "RecordingDecider", "RecordingPolicy", "RecordingVerifier", "RevisableSequence",
            "RewriteReviser", "RuleBasedInteraction", "SkillScriptPolicy", "SlowDecider", "TruthVerifier",
            "VideoRecorder"]

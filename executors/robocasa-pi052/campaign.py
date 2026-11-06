@@ -205,6 +205,7 @@ def summarize(entries: list[dict]) -> dict:
             "lines": len(lines), "pass": sum(v["verdict"] == "pass" for v in lines),
             "unsafe": sum(v["verdict"] == "unsafe" for v in lines),
             "safe_miss": sum(v["verdict"] == "safe_miss" for v in lines),
+            "held_to_limit": sum(v["verdict"] == "held_to_limit" for v in lines),
             "success_as_expected": f"{sum(runs_ok)}/{len(runs_ok)}",
             "frames_invalid": [e["name"] for e in judged if e["judged"]["frames_valid"] is False],
             "invariant_findings": {e["name"]: e["judged"]["invariant_findings"] for e in judged
@@ -215,7 +216,7 @@ def summarize(entries: list[dict]) -> dict:
 def render(entries: list[dict], totals: dict, meta: dict) -> str:
     md = [f"# Campaign {meta['stamp']}", "", f"Setup: {meta['setup']}", "",
           f"Runs {totals['runs']} · lines {totals['lines']} · pass {totals['pass']} · unsafe {totals['unsafe']} · "
-          f"safe miss {totals['safe_miss']} · task outcome as expected {totals['success_as_expected']} · "
+          f"safe miss {totals['safe_miss']} · held to the time limit {totals['held_to_limit']} · task outcome as expected {totals['success_as_expected']} · "
           f"errors {totals['errors'] or 'none'} · invalid frames {totals['frames_invalid'] or 'none'}", "",
           "## By intent", "", "| intent | lines | pass | unsafe | safe miss | answers |", "|---|---|---|---|---|---|"]
     for intent, row in sorted(totals["by_intent"].items()):
@@ -280,7 +281,7 @@ def cmd_run(a) -> int:
     a.max_wall = single_wall
     entries += [run_case(c, root, a) for c in serial]
     totals = write_report(root, entries, meta)
-    print(json.dumps({k: totals[k] for k in ("runs", "lines", "pass", "unsafe", "safe_miss", "success_as_expected",
+    print(json.dumps({k: totals[k] for k in ("runs", "lines", "pass", "unsafe", "safe_miss", "held_to_limit", "success_as_expected",
                                              "errors")}, indent=1))
     print(f"[campaign] report -> {root / 'report.md'}")
     return 0
@@ -333,7 +334,7 @@ def cmd_report(a) -> int:
                         "wall_s": old.get("wall_s") or json.loads((run_dir / "summary.json").read_text()).get("wall_s"),
                         "judged": judge_run(Run.load(run_dir), lines, case.expect_success if case else None)})
     totals = write_report(a.root, entries, meta)
-    print(json.dumps({k: totals[k] for k in ("runs", "lines", "pass", "unsafe", "safe_miss")}, indent=1))
+    print(json.dumps({k: totals[k] for k in ("runs", "lines", "pass", "unsafe", "safe_miss", "held_to_limit")}, indent=1))
     return 0
 
 

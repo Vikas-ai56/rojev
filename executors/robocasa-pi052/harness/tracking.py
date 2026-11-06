@@ -4,7 +4,8 @@ Simulator truth: `truth_masks` renders the simulator's per-camera segmentation a
 object (its own geoms), its container fixture and the gripper. Geometry: `central_pixel` (a point on a mask),
 `iou`, `filled` / `inside_share` (2D "inside": the share of object pixels inside the container's filled outline).
 
-`FrameRecorder` (live, `realtime.py --record-frames S`): on its own thread every S seconds, saves the newest capture's
+`FrameRecorder` (live, `realtime.py --record-frames S`): on its own thread, every S seconds of simulated time (the
+capture clock, so lockstep runs are sampled evenly too), saves the newest capture's
 camera images and the simulator state read between two steps (`sim.get_state().flatten()`). Nothing is rendered
 during the run: the offscreen renderer returns blank images inside the live process (CGL context shared by the
 control loop's renders), and rendering there would also steal control-loop time. `sam_check.py track` restores each
@@ -74,6 +75,9 @@ def inside_share(obj: np.ndarray, container: np.ndarray) -> float:
     return float((obj & filled(container)).sum() / obj.sum()) if obj.sum() else 0.0
 
 
+POLL_S = 0.005
+
+
 class FrameRecorder:
     def __init__(self, latest: Callable[[], Capture], read: Callable, cameras: list[str], folder: Path,
                  every_s: float = 1.0):
@@ -112,5 +116,8 @@ class FrameRecorder:
                             cameras=np.array(self.cameras))
 
     def _run(self) -> None:
-        while not self._stop.wait(self.every_s):
-            self.record_once()
+        due = self.latest().t + self.every_s
+        while not self._stop.wait(POLL_S):
+            if self.latest().t >= due:
+                self.record_once()
+                due += self.every_s

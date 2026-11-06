@@ -2,7 +2,8 @@
 
 The runtime keeps aggregate stats; tracing needs one record per call. Each wrapper implements the same interface as
 what it wraps (`Policy`, `CommitPolicy`, `Decider`) and only appends a dict to its `log`, so the core runs unchanged.
-Times are the robot clock (`now`).
+Times are the robot clock (`now`); S1 records carry the request's stage times (`timings_ms`). With a `ModelDelay`
+(`--model-delay`) each S1 request and S2 decision is one delayed call, so it costs its wall time in simulated time.
 
 `InteractionCases` saves every question a Jev decision asked the model as a calibration case (`<dir>/<case>/case.json`
 + one PNG per camera: the exact model inputs, the question and its options; `question` is `act`, or `task` for the
@@ -12,6 +13,7 @@ second question of a revision) and appends a line to `<dir>/labels.jsonl` with t
 import json
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -24,13 +26,15 @@ from rojev.system2 import Verdict
 from rojev.system2.jev import JevInteraction
 from rojev.system2.jev.chooser import situation
 
+from .model_delay import ModelDelay
+
 
 class RecordingPolicy(Policy):
     """Logs each request of `inner` (and whether it carried a continuation); accepts a continuation exactly when
     `inner` does and forwards it."""
 
-    def __init__(self, inner: Policy, now: Callable[[], float]):
-        self.inner, self.now, self.log = inner, now, []
+    def __init__(self, inner: Policy, now: Callable[[], float], delay: ModelDelay | None = None):
+        self.inner, self.now, self.log, self.delay = inner, now, [], delay
         self.accepts_continuation = inner.accepts_continuation
 
     def act(self, obs, subtask: str, timeout_s: float | None = None,
@@ -42,8 +46,9 @@ class RecordingPolicy(Policy):
         t0, w0 = self.now(), time.perf_counter()
         extra = (continuation,) if continuation is not None else ()
         try:
-            chunks = (self.inner.act_samples(obs, subtask, k, timeout_s, *extra) if k > 1
-                      else [self.inner.act(obs, subtask, timeout_s, *extra)])
+            with self.delay.call("s1") if self.delay is not None else nullcontext():
+                chunks = (self.inner.act_samples(obs, subtask, k, timeout_s, *extra) if k > 1
+                          else [self.inner.act(obs, subtask, timeout_s, *extra)])
         except Exception as e:
             self.log.append({"t_start": t0, "t_end": self.now(), "subtask": subtask, "samples": k,
                              "error": f"{type(e).__name__}: {e}"})
@@ -52,6 +57,7 @@ class RecordingPolicy(Policy):
                          "subtask": subtask, "samples": k, "instruction": obs.task,
                          "continuation": None if continuation is None else {
                              "steps": len(continuation.actions), "delay_steps": continuation.delay_steps},
+                         "timings_ms": chunks[0].timings_ms,
                          "info": {key: v for key, v in chunks[0].info.items() if key != "sample"}})
         return chunks
 
@@ -77,14 +83,15 @@ class RecordingCommit(CommitPolicy):
 
 
 class RecordingDecider:
-    def __init__(self, inner, now: Callable[[], float], lane: str):
-        self.inner, self.now, self.lane, self.log = inner, now, lane, []
+    def __init__(self, inner, now: Callable[[], float], lane: str, delay: ModelDelay | None = None):
+        self.inner, self.now, self.lane, self.log, self.delay = inner, now, lane, [], delay
         self.name = inner.name
 
     def decide(self, snapshot: ObservationSnapshot) -> Verdict:
         t0, w0 = self.now(), time.perf_counter()
         try:
-            v = self.inner.decide(snapshot)
+            with self.delay.call(self.lane) if self.delay is not None else nullcontext():
+                v = self.inner.decide(snapshot)
         except Exception as e:
             self.log.append({"t_start": t0, "t_end": self.now(), "lane": self.lane, "request": snapshot.request_id,
                              "trigger": snapshot.trigger, "error": f"{type(e).__name__}: {e}"})

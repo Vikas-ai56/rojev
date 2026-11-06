@@ -22,6 +22,11 @@ Related: [`v3-runtime.md`](../features/v3-runtime.md) · [`s1-supply-and-commitm
 - Time modes (decision 2026-10-23):
   - **lockstep** (`--lockstep`) = the simulator evaluation mode: one thread runs the owner, S1 supply and one control
     tick, and no tick while either S2 lane is busy or its answer is unhandled, so model computation takes zero simulated time; `--seconds` is simulated;
+  - **lockstep with model delay** (`--lockstep --model-delay`, `harness/model_delay.py`) = honest scoring: each S1
+    request and S2 decision costs simulated time equal to its measured wall time, simulator stepping costs none; the
+    runner and lanes run on threads, the loop never ticks past an open call's start + wall time so far, and an answer
+    returns once simulated time reaches start + its wall time (`model_delay.jsonl`). Latency, deadlines and slow-model
+    faults then act as on hardware, independent of simulator speed (decision 2026-11-06);
   - **real time** (without `--lockstep`) = reported alongside: control at 20 Hz on the wall clock, every part on its
     own thread; measures the latency a robot will have (E24: XR-1 over the WAN cannot keep up).
 - Setup heap frozen (`gc.collect(); gc.freeze()`) before threads start (full GC pass 45–96 ms otherwise).
@@ -42,6 +47,7 @@ Related: [`v3-runtime.md`](../features/v3-runtime.md) · [`s1-supply-and-commitm
 | `--live-view S` | off | `live/now.png` + `status.json` every S simulated s (for a live user) |
 | `--max-wall S`, `--end-after-success S` | off | end on wall time; end S simulated s after first success |
 | `--lockstep` | off | see time modes |
+| `--model-delay` | off | with `--lockstep`: measured model delay added back (see time modes) |
 | `--frame-check-every S`, `--record-frames S` | 1.0, off | frame integrity sampling; cameras + sim state for `sam_check.py track` |
 | `--on-change`, `--review-s`, `--stop-s`, `--refill`, `--blend`, `--lease`, `--decide-every` | `review`, 1.0, 0.3, 1.0, 0.2, 3.0, 1.0 (0.8 × lease with step events) | owner / runtime parameters |
 | `--commit-policy`, `--speculative-predict --samples K`, `--tolerance` | `fixed`, off | commitment (an inapplicable parameter is an error) |

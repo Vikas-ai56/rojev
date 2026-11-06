@@ -4,7 +4,10 @@ ends the run; `--instruction TEXT` gives the overall task (default: the environm
 `--lockstep` instead stops simulated time while any model thinks: one thread alternates S1 supply, the state owner
 (every posted event handled, then its tick) and one control tick, and does not tick while an S2 decision is in flight
 (planning or interaction lane) or its answer is still unhandled, so model computation takes no simulated time and deadlines in simulated seconds do not depend on how fast the simulator runs. The setting benchmarks
-are scored in; it separates the models' own skill from the cost of real-time execution.
+are scored in; it separates the models' own skill from the cost of real-time execution. `--lockstep --model-delay`
+adds that cost back: each S1 request and S2 decision costs simulated time equal to its measured wall time while
+simulator stepping costs none (harness/model_delay.py), so latency hurts as on hardware however slow the simulator is.
+Per-stage times go to s1_requests.jsonl (`timings_ms`), onejev_calls.jsonl and model_delay.jsonl.
 
   control loop   env.step at 20 Hz (wall clock) ← guard ← execution runtime
   S1 runner      keeps the command that needs actions supplied with chunks from the S1 policy
@@ -59,7 +62,7 @@ from lerobot.envs.robocasa import RoboCasaEnv
 
 from embodiment import ARM_DIMS, PANDA_OMRON, PandaOmronEffect, to_action_space
 from harness import (FailingDecider, FrameCheck, FrameRecorder, InteractionCases, KeywordChooser, LiveView,
-                     MirrorPublisher, RecordingCommit, RecordingDecider, RecordingPolicy, RecordingVerifier,
+                     MirrorPublisher, ModelDelay, RecordingCommit, RecordingDecider, RecordingPolicy, RecordingVerifier,
                      RevisableSequence, RewriteReviser, RuleBasedInteraction, SkillScriptPolicy, SlowDecider,
                      TruthVerifier, VideoRecorder)
 from history import FrameHistory, HistoryPolicy
@@ -231,6 +234,9 @@ def parse(argv=None) -> argparse.Namespace:
     p.add_argument("--lockstep", action="store_true",
                    help="simulated time stops while any model thinks (S1 supply, S2 decisions), then one control "
                         "tick (how benchmarks are scored; --seconds is simulated time)")
+    p.add_argument("--model-delay", action="store_true",
+                   help="with --lockstep: each S1 request and S2 decision costs simulated time equal to its measured "
+                        "wall time, simulator stepping costs none (harness/model_delay.py)")
     p.add_argument("--frame-check-every", type=float, default=1.0, metavar="S",
                    help="sample the camera frames every S seconds; a run with noise / blank frames is not scored")
     p.add_argument("--record-frames", type=float, metavar="S",
@@ -285,6 +291,8 @@ def parse(argv=None) -> argparse.Namespace:
     a.reviser = a.reviser or ("canonical" if a.policy == "remote" else "rewrite")
     if a.record_interaction and a.interaction != "jev":
         p.error("--record-interaction needs --interaction jev")
+    if a.model_delay and not a.lockstep:
+        p.error("--model-delay needs --lockstep")
     step_events = a.verify != "none" or (a.arm in ("native", "commit") and a.policy == "remote")
     a.decide_every = a.decide_every or (0.8 * a.lease if step_events else 1.0)
     try:
@@ -450,6 +458,26 @@ def watch(owner: StateOwner, backend: RoboCasaBackend, speaker: "Speaker") -> di
             "task_check_now": backend.success_now, "task_done_at": backend.success_t}
 
 
+def s1_waiting(runner: S1Runner, runtime: ExecutionRuntime, now: float) -> bool:
+    """S1 has a request in flight or about to start (the runner's refill rule), or an answer not yet submitted."""
+    stats = runner.stats
+    if stats.requests != len(stats.obs_age_s) + stats.errors + stats.timeouts:
+        return True
+    goal = runtime.target()
+    if goal is None:
+        return False
+    until = runtime.queued_until(goal.cmd_id)
+    return until is None or until - now <= runner.lead_s()
+
+
+def onejev_calls(decider) -> list[dict]:
+    """Per-request stages of the interaction lane's OneJev client (`KeptClient.log`), if it has one."""
+    while decider is not None and not hasattr(decider, "chooser"):
+        decider = getattr(decider, "inner", None)
+    client = getattr(getattr(decider, "chooser", None), "client", None)
+    return client.log if isinstance(client, onejev.KeptClient) else []
+
+
 def planner_of(worker: DecisionWorker):
     """The planning decider inside its recording wrapper."""
     return worker.decider.inner
@@ -504,16 +532,17 @@ def main(argv=None) -> int:
 
     loop = ControlLoop(backend, guard, PANDA_OMRON, realtime=not a.lockstep, on_tick=on_tick)
     history.add(loop.latest().observation)
-    policy = RecordingPolicy(make_policy(a, backend, history), loop.now)
+    delay = ModelDelay(loop.now) if a.model_delay else None
+    policy = RecordingPolicy(make_policy(a, backend, history), loop.now, delay)
     commit = RecordingCommit(a.commit, loop.now)
     runner = S1Runner(runtime, policy, loop.latest, loop.now, refill_s=a.refill, commit=commit,
                       on_step=lambda e: watcher.claim(e) if watcher is not None else owner.post(e),
-                      on_plan=lambda e: owner.post(e), deadline=not a.lockstep)
+                      on_plan=lambda e: owner.post(e), deadline=not a.lockstep or a.model_delay)
     planner, steps = make_planner(a, backend)
-    planning = RecordingDecider(planner, loop.now, "planning")
+    planning = RecordingDecider(planner, loop.now, "planning", delay)
     worker = DecisionWorker(planning, lambda prop: owner.post(prop), loop.now, name="planning")
     responder_decider = make_interaction(a, instruction)
-    interaction = RecordingDecider(responder_decider, loop.now, "interaction") if responder_decider else None
+    interaction = RecordingDecider(responder_decider, loop.now, "interaction", delay) if responder_decider else None
     responder = (DecisionWorker(interaction, lambda prop: owner.post(prop), loop.now, name="interaction")
                  if interaction is not None else None)
     speaker = Speaker()
@@ -547,12 +576,21 @@ def main(argv=None) -> int:
     config["record_frames_s"] = a.record_frames
     frame_check = FrameCheck(loop.latest, list(CAMS), every_s=a.frame_check_every)
     config["lockstep"] = a.lockstep
+    config["model_delay"] = a.model_delay
     config["interactive"] = a.interactive or a.input_file is not None
     config.update({"input_file": str(a.input_file) if a.input_file else None, "live_view_s": a.live_view,
                    "max_wall_s": a.max_wall, "end_after_success_s": a.end_after_success})
     config["frame_check_every_s"] = a.frame_check_every
     (out / "config.json").write_text(json.dumps(config, indent=2))
-    driven = () if a.lockstep else (loop, runner, owner)
+    driven = (runner,) if a.model_delay else () if a.lockstep else (loop, runner, owner)
+    lanes = tuple(lane for lane in (worker, responder) if lane is not None)
+
+    def may_tick() -> bool:
+        if delay is None:
+            return not any(lane.busy for lane in lanes)
+        return (all(delay.allows(lane.name, lane.busy) for lane in lanes)
+                and delay.allows("s1", s1_waiting(runner, runtime, loop.now())))
+
     threads = driven + (worker, frame_check) + tuple(t for t in (responder, watcher, frames) if t is not None)
     pending = sorted(a.say)
     console = Console(a.input_file) if a.interactive or a.input_file else None
@@ -586,15 +624,19 @@ def main(argv=None) -> int:
                 live.write(loop.now(), [capture.observation.images[c] for c in CAMS], watch(owner, backend, speaker))
             if a.lockstep:
                 owner.step()
-                deciding = any(lane is not None and lane.busy for lane in (worker, responder))
-                if deciding or owner.has_events:
+                if not may_tick() or owner.has_events:
                     time.sleep(0.002)
                     continue
-                runner.step()
+                if delay is None:
+                    runner.step()
                 loop.run_ticks(1)
+                if delay is not None:
+                    delay.ticked()
             else:
                 time.sleep(0.01)
     finally:
+        if delay is not None:
+            delay.release()
         for th in reversed(threads):
             th.stop()
         log.close()
@@ -610,6 +652,11 @@ def main(argv=None) -> int:
     write_jsonl(out / "commits.jsonl", commit.log)
     write_jsonl(out / "decisions.jsonl", decisions)
     write_jsonl(out / "utterances.jsonl", speaker.log)
+    if delay is not None:
+        write_jsonl(out / "model_delay.jsonl", delay.log)
+    jev_calls = onejev_calls(responder_decider)
+    if jev_calls:
+        write_jsonl(out / "onejev_calls.jsonl", jev_calls)
     if console is not None:
         write_jsonl(out / "typed.jsonl", console.log)
     if watcher is not None:

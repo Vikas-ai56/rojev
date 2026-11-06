@@ -5,8 +5,11 @@
 trip (measured 2026-10-24, three 256 x 256 cameras: median 1269 ms per decision with a new connection, 604 ms kept;
 server compute 75-140 ms). It overrides the client's two transport methods (`_post`, `_get`, qev pinned in uv.lock);
 requests are serialised on one connection, and a broken connection is reopened and the request sent once more
-(inference is read-only, so a repeat is safe).
+(inference is read-only, so a repeat is safe). Each request's stages go to `log`: request size, round trip, whether a
+new connection was opened, and the server's own timing (`meta.timing`, sent with `debug`); `system_one` adds the time
+spent encoding the images, so model time, network and client work can be told apart.
 """
+import time
 import http.client
 import json
 import threading
@@ -35,6 +38,7 @@ class KeptClient(Client):
         self._https, self._host, self._port, self._prefix = url.scheme == "https", url.hostname, url.port, url.path
         self._conn: http.client.HTTPConnection | None = None
         self._lock = threading.Lock()
+        self.log: list[dict[str, Any]] = []
 
     def _connection(self) -> http.client.HTTPConnection:
         if self._conn is None:
@@ -53,6 +57,7 @@ class KeptClient(Client):
             headers["Content-Type"] = "application/json"
         with self._lock:
             for attempt in range(2):
+                fresh, w0 = self._conn is None, time.perf_counter()
                 try:
                     conn = self._connection()
                     conn.request(method, self._prefix + path, body=body, headers=headers)
@@ -66,12 +71,19 @@ class KeptClient(Client):
                 if resp.status >= 400:
                     raise urllib.error.HTTPError(self.base_url + path, resp.status, payload.decode(errors="replace"),
                                                  resp.msg, None)
+                self.log.append({"path": path, "request_kb": round(len(body or b"") / 1024, 1),
+                                 "round_trip_ms": round((time.perf_counter() - w0) * 1000, 1),
+                                 "new_connection": fresh or attempt > 0})
                 return payload, resp_headers
         raise RuntimeError("unreachable")
 
     def _post(self, path: str, body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
         payload, headers = self._request("POST", path, json.dumps(body).encode())
-        return json.loads(payload), headers
+        answer = json.loads(payload)
+        timing = (answer.get("meta") or {}).get("timing") if isinstance(answer, dict) else None
+        if timing:
+            self.log[-1]["server_ms"] = {k: round(v * 1000, 1) for k, v in timing.items()}
+        return answer, headers
 
     def _get(self, path: str) -> dict[str, Any]:
         return json.loads(self._request("GET", path, None)[0])
@@ -98,7 +110,9 @@ def system_one(client: Client, image: Img | list[Img], state: dict[str, Any], qu
     `params` are qev request options, e.g. `debias=3` (average over cyclic shifts of the option order).
     """
     images = image if isinstance(image, list) else [image]
+    w0 = time.perf_counter()
     uris = [data_uri(i if isinstance(i, Image.Image) else Image.fromarray(i)) for i in images]
+    encode_ms = round((time.perf_counter() - w0) * 1000, 1)
     wire_questions = {k: (v.to_dict() if hasattr(v, "to_dict") else v) for k, v in questions.items()}
     with _tracer.start_as_current_span(span_name) as span:
         span.set_attribute("openinference.span.kind", "LLM")
@@ -117,6 +131,9 @@ def system_one(client: Client, image: Img | list[Img], state: dict[str, Any], qu
 
         r = client.system_one(state=state, questions=questions, media=[{"type": "image", "data": u} for u in uris],
                               **{"debug": 1, **params})
+        if isinstance(client, KeptClient) and client.log:
+            client.log[-1]["encode_ms"] = encode_ms
+        span.set_attribute("onejev.encode_ms", encode_ms)
 
         span.set_attribute("llm.model_name", r.model)
         span.set_attribute("output.value", json.dumps({k: v.raw for k, v in r.answers.items()}))

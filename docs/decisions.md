@@ -858,3 +858,9 @@
 **Why:** Owner's scope call (2026-11-03); the 2026-11-03 research showed several recommendations only hold in simulation (thresholds from simulator labels, composite-unseen gains, seam probes on a sim-fine-tuned checkpoint).
 **Rejected alternatives:** RoboCasa composite-unseen success as the v2 ship criterion (v2 plan §4 week 4) on its own; deferring real-robot data until the simulator results are done.
 **Risks / edge cases found:** The 2026-11-01 frozen-critic threshold is set on simulator-labelled frames and needs a real-episode calibration set; real labels cost human time; S1 on a real arm needs teleop demos and a GPU next to it; the v2 plan's gates are all simulator gates today.
+
+## [2026-11-06] Controller fixes deferred; honest testing built as harness utilities without a spec
+**Decision:** The four controller root causes (owner decides "finished", frame-age expiry, S1-failure event, model-free stop) are deferred; step 1 (lockstep with measured delay added back, per-stage timing, hold-at-limit scored as a fail, request codec / seed logged, critic frames on simulated time) is built directly as executor utilities.
+**Why:** Owner's scope call (2026-11-06): the controller fixes add no value right now; honest measurement is needed before any GPU session.
+**Rejected alternatives:** spec-design suite for steps 1–2 (overhead for harness utilities); fixing the controller first.
+**Risks / edge cases found:** Cases that fail only through those bugs (F16, "go on" after success, "are you done?", stop via the model) stay unscored until the fixes land; the GPU subset skips them.

@@ -66,7 +66,7 @@ def test_remote_k_samples_reach_the_policy_as_one_call_through_the_endpoint():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     remote = RemotePolicy(f"http://127.0.0.1:{server.server_port}", TOKEN)
     chunks = remote.act_samples(obs(), "", 5)
-    assert len(chunks) == 5 and policy.calls == [("", 5)] and all(c.info == {"subtask": ""} for c in chunks)
+    assert len(chunks) == 5 and policy.calls == [("", 5)] and all(c.info["subtask"] == "" and "codec" in c.info for c in chunks)
     assert remote.act(obs(), "pick").actions.shape == (50, 12) and policy.calls[-1] == ("pick", 1)
     server.shutdown()
 

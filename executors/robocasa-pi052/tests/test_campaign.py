@@ -67,3 +67,17 @@ def test_a_wrong_sentence_is_unsafe_and_a_resume_after_success_is_the_completion
     v = judge_lines(run(events, success_t=18.0), [{"t": 5, "text": "x", "intent": NEW_TASK, "task": FAUCET},
                                                   {"t": 20, "text": "go on", "intent": RESUME}])
     assert [(x.state, x.verdict) for x in v] == [("moving", "unsafe"), ("done", "unsafe")]
+
+
+def test_a_wait_that_holds_until_the_time_limit_is_not_a_pass():
+    events = [ev(0.0, "command", op="switch_to", request=1, lane="planning", trigger="heartbeat", decider="n"),
+              ev(8.0, "instruction", text="wait"), ev(8.0, "hold", op="guarded_wait"),
+              ev(8.0, "command", op="guarded_wait", request=2, lane="interaction", trigger="instruction", decider="j")]
+    lines = [{"t": 8, "text": "wait", "intent": PAUSE}]
+    assert judge_lines(run(events), lines)[0].verdict == "held_to_limit"
+    released = events + [ev(12.0, "instruction", text="go on"), ev(12.0, "hold released", op="switch_to"),
+                         ev(12.0, "command", op="switch_to", request=3, lane="interaction", trigger="instruction",
+                            decider="j")]
+    verdicts = judge_lines(run(released), lines + [{"t": 12, "text": "go on", "intent": RESUME}])
+    assert [x.verdict for x in verdicts] == ["pass", "pass"]
+    assert judge_lines(run(events, success_t=6.0), lines)[0].verdict != "held_to_limit"

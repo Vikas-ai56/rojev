@@ -152,7 +152,8 @@ def test_h3_round_trip_keeps_one_connection_and_info(h3):
     for subtask in ("pick", "place it"):
         chunk = policy.act(obs(), subtask)
         assert chunk.actions.shape == (50, 12) and chunk.actions[0, 0] == len(subtask)
-        assert chunk.info == {"subtask": subtask, "sample": 0} and "network" in chunk.timings_ms
+        assert chunk.info == {"subtask": subtask, "sample": 0, "codec": policy.codec}
+        assert {"network", "encode", "decode"} <= chunk.timings_ms.keys()
     first = policy.transport._protocol
     policy.act(obs(), "again")
     assert policy.transport._protocol is first
@@ -229,7 +230,7 @@ def test_http_keep_alive_reuses_one_connection(http):
     proxy, service, _ = http
     policy = RemotePolicy(f"http://127.0.0.1:{proxy.port}", TOKEN)
     for subtask in ("a", "bb", "ccc"):
-        assert policy.act(obs(), subtask).info == {"subtask": subtask, "sample": 0}
+        assert policy.act(obs(), subtask).info == {"subtask": subtask, "sample": 0, "codec": policy.codec}
     assert isinstance(policy.transport, HttpTransport) and len(proxy.clients) == 1
     assert len(set(service.executed("/act"))) == 3
 
