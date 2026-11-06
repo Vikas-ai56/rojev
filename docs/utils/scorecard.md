@@ -3,7 +3,7 @@
 Code: `rojev/eval/scorecard.py` (`Injection`, `Case`, `RunRecords`, `score_run`, `aggregate`, `render_markdown`,
 `render_json`). Tests: `tests/test_eval_scorecard.py` (28 passed 2026-10-24, synthetic records). Spec:
 `docs/plan/v3-v1-spec.md` §11 T8. Fed by the scenario matrix ([`live-harness.md`](live-harness.md)); user campaigns
-use their own per-line judge ([`campaign.md`](campaign.md)).
+use their own per-line judge (`executors/robocasa-pi052/campaign.py`).
 
 ## Inputs
 - One run = `Case(name, arm, injections)` + `RunRecords(summary, events, ticks, decisions)`: the dicts of

@@ -8,6 +8,7 @@ Where each kind of document lives. Code map: [`CODEBASE.md`](CODEBASE.md).
 | [`plan/v3-roadmap.md`](plan/v3-roadmap.md) | **Single source of truth now**: architecture, plan amendments, phases P0–P5, tests T1–T10, gates, scorecard, failure → fix table |
 | [`plan/v3-v1-spec.md`](plan/v3-v1-spec.md) | v1 build spec: full S1/S2 loop from open-source frozen parts (π0.5², OneJev, MJev; SAM 2 deferred, decisions 2026-10-21) + our runtime; Route A role split; build steps 1–8 |
 | [`review/rojev-v1-review.html`](review/rojev-v1-review.html) | One-page v1 review (open in a browser): what, why, S1 / S2 flow, component choices, results, open blockers |
+| [`review/rojev-v1-discussion.html`](review/rojev-v1-discussion.html) | v1 follow-up (2026-11-04): goals vs status, missing background reasoning, RynnUnify ideas, real-time plan, other designs, work order |
 | [`decisions.md`](decisions.md) | Every durable decision, newest last (decision · why · rejected · risks) |
 | [`CODEBASE.md`](CODEBASE.md) | How to read the code |
 
@@ -44,20 +45,22 @@ Where each kind of document lives. Code map: [`CODEBASE.md`](CODEBASE.md).
 | Doc | Covers |
 |---|---|
 | [`v3-runtime.md`](features/v3-runtime.md) | v3 runtime core: messages, execution runtime (leases, review, blending, holds), guard, control loop, robot plug-ins, state owner (two lanes, keyframes), S2 worker, baseline deciders, v1 role split; runtime live results incl. π0.5² |
-| [`s1-supply-and-commitment.md`](features/s1-supply-and-commitment.md) | S1 runner: chunk supply, measured latency, floor and lead time, commitment policies (fixed / phase / consensus) |
 | [`execution-monitor.md`](features/execution-monitor.md) | Kinematic execution monitor: effect models, conformal calibration, `Deviation` → owner + refill, results and limits |
 | [`remote-models.md`](features/remote-models.md) | Remote models: transport (HTTP/1.1 keep-alive, HTTP/3), wire v3 and codecs, π0.5² / XR-1 / OneJev / MJev / SAM 2 services, `KeptClient`, WAN measurements |
 | [`plan/specs/any-robot/00-index.md`](plan/specs/any-robot/00-index.md) | SPEC (not built): one assembly layer `rojev/app`, robots as executor plug-ins; slices: app layer, RoboCasa on it, MuJoCo SO-101 proof |
 | [`system1-map.md`](features/system1-map.md) | System 1 map (start here for S1): call map, control loop → guard → runtime ← runner ← π0.5², commitment, transport, monitor, messages, timeline, evidence |
 | [`system2-map.md`](features/system2-map.md) | System 2 map (start here for S2): owner lanes / holds / dialogue, workers, planning lane, Jev v1, step watcher, messages to S1, timeline, evidence |
-| [`scorecard.md`](features/scorecard.md) | T8 revision-benchmark scorecard: inputs, window and answer rule, metric definitions, aggregation, what is not validated |
 | [`jev-interaction.md`](features/jev-interaction.md) | Jev v1 interaction lane (legal acts, calibration, abstention, budgets, REVISE), owner holds / dialogue / utterances / step events, MJev end-state checks + step watcher; flags, spoofs, tests, what is not validated |
-| [`campaign.md`](features/campaign.md) | Test campaign: scripted / fuzz / live users talking to the v1 loop, the line judge (pass / unsafe / safe miss), caps, use |
-| [`live-harness.md`](features/live-harness.md) | Live RoboCasa harness: `realtime.py` flags and outputs, 19-case scenario matrix, invariants, declared spoofs, viewer, video, matrix results |
 | [`robot-interface.md`](features/robot-interface.md) | Robot interface (`rojev.robot`: MuJoCo SO-101, mock; hardware adapter later): limits, cameras, clocks and time modes |
-| [`gpu-setup.md`](features/gpu-setup.md) | One-command GPU box setup (`scripts/gpu_setup.sh`) for S1 (π0.5², XR-1) + S2 (OneJev, MJev, SAM 2): parallel steps, component hook interface, pitfalls, security |
-| [`levers.md`](features/levers.md) | Current knobs that change behaviour: default, where set (flag / constant), trade-off, owning page |
-| [`observability.md`](features/observability.md) | Phoenix tracing: setup, what spans contain, measurements, gotchas |
+| [`README.md`](features/README.md) | Levers: current knobs that change behaviour: default, where set (flag / constant), trade-off, owning page |
+
+## Utilities: `utils/` (harness, S1 supply, scoring, tracing)
+| Doc | Covers |
+|---|---|
+| [`s1-supply-and-commitment.md`](utils/s1-supply-and-commitment.md) | S1 runner: chunk supply, measured latency, floor and lead time, commitment policies (fixed / phase / consensus) |
+| [`live-harness.md`](utils/live-harness.md) | Live RoboCasa harness: `realtime.py` flags and outputs, 19-case scenario matrix, invariants, declared spoofs, viewer, video, matrix results |
+| [`scorecard.md`](utils/scorecard.md) | T8 revision-benchmark scorecard: inputs, window and answer rule, metric definitions, aggregation, what is not validated |
+| [`observability.md`](utils/observability.md) | Phoenix tracing: setup, what spans contain, measurements, gotchas |
 
 ## Feature history: `features/history/` (superseded designs; what replaced them, lessons that still apply)
 | Doc | What it was |

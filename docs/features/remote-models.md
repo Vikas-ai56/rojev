@@ -1,6 +1,6 @@
 # Remote models: services, transport, wire format (2026-10-21, updated 2026-10-24)
 
-Code: `rojev/transport/` (`open_transport`, `HttpTransport`, `H3Transport`, `Endpoint`, `HttpServer`, `H3Server`, `make_certificate`), `rojev/system1/wire.py` (wire v3, codecs), `rojev/system1/remote.py` (`RemotePolicy`), `rojev/system1/service.py` (`PolicyService`, `serve_policy`), `executors/robocasa-pi052/serve.py` (π0.5²), `executors/robocasa-xr1/serve.py` (XR-1), `rojev/system2/models/onejev.py` (`KeptClient`), `rojev/system2/models/mjev.py` (`RemoteMJev`), `rojev/system2/models/sam2.py` (`RemoteSam2`), `services/mjev/serve_mjev.py`, `services/sam2/serve_sam2.py`. Tests: `tests/test_transport.py` (19: loopback, stand-in service, TCP proxy that loses replies / drops connections), `tests/test_onejev_client.py` (1: one shared connection, a dropped one reopened), `executors/robocasa-pi052/tests/test_serve.py` (5: stand-in policy, no GPU). Box setup and ports: [`gpu-setup.md`](gpu-setup.md).
+Code: `rojev/transport/` (`open_transport`, `HttpTransport`, `H3Transport`, `Endpoint`, `HttpServer`, `H3Server`, `make_certificate`), `rojev/system1/wire.py` (wire v3, codecs), `rojev/system1/remote.py` (`RemotePolicy`), `rojev/system1/service.py` (`PolicyService`, `serve_policy`), `executors/robocasa-pi052/serve.py` (π0.5²), `executors/robocasa-xr1/serve.py` (XR-1), `rojev/system2/models/onejev.py` (`KeptClient`), `rojev/system2/models/mjev.py` (`RemoteMJev`), `rojev/system2/models/sam2.py` (`RemoteSam2`), `services/mjev/serve_mjev.py`, `services/sam2/serve_sam2.py`. Tests: `tests/test_transport.py` (19: loopback, stand-in service, TCP proxy that loses replies / drops connections), `tests/test_onejev_client.py` (1: one shared connection, a dropped one reopened), `executors/robocasa-pi052/tests/test_serve.py` (5: stand-in policy, no GPU). Box setup and ports: `scripts/gpu_setup.sh`, `scripts/gpu_box.sh`.
 
 ## Services
 | Service | Role | Endpoints | Auth | Server | Client |
@@ -57,7 +57,7 @@ Setup (2026-10-21): A100 40 GB box in Ashburn VA (`lambda`, since terminated), M
 | HTTP/3 + raw | 324 / 902 | — | 15 / 60 above 800 ms |
 | Box loopback | transport overhead 21 (HTTP/3) vs 45 (HTTP/1.1) | — | real π0.5² |
 - Codec check (8 frames): actions from WebP-90 frames differ from lossless by 0.078 mean (actions 0–5) vs 0.070 between two lossless calls (π0.5²'s own sampling noise).
-- One request ≥ one ping; distance dominates. At L ≈ 0.57 s the commitment floor is ~24 of 50 actions ([`s1-supply-and-commitment.md`](s1-supply-and-commitment.md)).
+- One request ≥ one ping; distance dominates. At L ≈ 0.57 s the commitment floor is ~24 of 50 actions ([`s1-supply-and-commitment.md`](../utils/s1-supply-and-commitment.md)).
 
 ## Default and why
 - Decided: HTTP/1.1 keep-alive + WebP-90. Best p50 and tail in the WAN run; WebP within sampling noise; 

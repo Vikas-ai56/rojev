@@ -1,7 +1,7 @@
 # Robot interface: `rojev.robot`
 
 Code: `rojev/robot/` (`base.py`, `types.py`, `limits.py`, `mock.py`, `so101.py`, `action_spec.py`, `effect.py`,
-`sim/`). Contract tests: `tests/test_robot_contract.py` (24; the six shared contracts run on both backends),
+`sim/`). Contract tests: `tests/test_robot_contract.py` (24, 1 of them `timing`, run with `-m timing`: the real-time physics thread catches up in bursts, so its 10 ms check depends on OS scheduling; the six shared contracts run on both backends),
 `tests/test_robot_sim_world.py` (4). Runtime side: [`v3-runtime.md`](v3-runtime.md).
 
 ## Two plug-in points

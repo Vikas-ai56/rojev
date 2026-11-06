@@ -1,6 +1,6 @@
 # v2 executor: π0.5² set-up and Kaggle runner (historical)
 
-Historical (v2 design, superseded 2026-10-21 by the v3 runtime with π0.5² as a remote service, then 2026-10-22 by XR-1 as the RoboCasa S1; see [`../remote-models.md`](../remote-models.md), [`../gpu-setup.md`](../gpu-setup.md)).
+Historical (v2 design, superseded 2026-10-21 by the v3 runtime with π0.5² as a remote service, then 2026-10-22 by XR-1 as the RoboCasa S1; see [`../remote-models.md`](../remote-models.md), `scripts/gpu_setup.sh`).
 
 ## What it was (2026-10-17)
 - π0.5² = `lerobot/pi052_robocasa` (LeRobot branch `feat/smolvla-on-steerable`, `config/lerobot-steerable.commit`), RoboCasa PandaOmron, sim only, Apache-2.0; 4.14B params (2.82B bf16 + 1.32B fp32); model card reports no success rates.

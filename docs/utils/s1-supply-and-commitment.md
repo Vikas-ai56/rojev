@@ -4,8 +4,8 @@ Code: `rojev/system1/runner.py` (`S1Runner`, `S1Stats`), `rojev/system1/commit.p
 `ConsensusCommit`, `make_commit_policy`), `rojev/system1/policy.py` (`Policy`, `ActionChunk`, `Continuation`),
 `rojev/control/execution.py` (`target`, `queued_until`, `queued_from`, `submit`, `starved_ticks`).
 Tests: `tests/test_system1_runner.py` (18 + 2 `timing`), `tests/test_system1_commit.py` (43). Spec:
-`docs/plan/v3-v1-spec.md` §14. Line-by-line walkthrough: [`system1-map.md`](system1-map.md) §5–6. Remote policy and
-services: [`remote-models.md`](remote-models.md).
+`docs/plan/v3-v1-spec.md` §14. Line-by-line walkthrough: [`system1-map.md`](../features/system1-map.md) §5–6. Remote policy and
+services: [`remote-models.md`](../features/remote-models.md).
 
 Terms: a **chunk** is the H actions one policy call returns; the **commitment** is the prefix the robot is committed
 to; L is the request **latency** (observation age when its chunk is submitted, robot clock).
@@ -30,7 +30,7 @@ to; L is the request **latency** (observation age when its chunk is submitted, r
 | Runner | when to ask, on which observation, how many samples, the floor, the deadline | `step`, `lead_s`, `floor`, `deadline_s` |
 | Commit policy | which candidate, how many actions (never below the floor) | `CommitPolicy.plan` |
 | Guard | hold "starved" after 0.5 s without a valid action; resumes when chunks return | `Guard` |
-| Execution monitor | "ask now" on a deviation (`refill_now(cmd_id)`) | [`execution-monitor.md`](execution-monitor.md) |
+| Execution monitor | "ask now" on a deviation (`refill_now(cmd_id)`) | [`execution-monitor.md`](../features/execution-monitor.md) |
 
 ## Latency → lead time and floor
 - L estimate = max of the last `latency_window` (20) samples: a commitment must cover the slow tail.

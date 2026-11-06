@@ -82,7 +82,7 @@ model's own evaluation client so a query matches its published evaluation.
 ## C. Evaluation integrity (`executors/robocasa-pi052`)
 - **Model time vs network time.** `--lockstep`: the loop does not tick while S1 or either S2 lane is busy, so every
   model's computation takes zero simulated time. Used for model comparisons in sim (published benchmarks are scored
-  this way; our S1 is remote, 0.35–0.55 s vs a 0.8 s chunk); real time is reported alongside, and hardware needs
+  this way; our S1 is remote, p50 0.51 s / p90 0.73 s vs a 0.375 s gap-free bound); real time is reported alongside, and hardware needs
   real-time passes with 0 starved ticks. *Evidence:* pausing for S2 too turned late answers (OneJev 1.1–1.5 s →
   1.75–1.85 s simulated) into wait 3.05 s, resume 6.05 s, success 10.5 s. Decisions 2026-10-22 / -23; `docs/hardware-port.md`.
 - **Silently corrupted frames.** robosuite freed a replaced simulator's render context in the *current* GL context,

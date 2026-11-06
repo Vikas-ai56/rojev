@@ -83,7 +83,7 @@ user speaks → owner: rev+1, user turn, ACK said, moving command under review u
 
 ## Executor
 - Flags: `--interaction jev --chooser onejev|keywords --reviser canonical|rewrite --skills FILE --max-asks N
-  --jev-calibration FILE --hold-recheck S --record-interaction DIR` ([`live-harness.md`](live-harness.md)).
+  --jev-calibration FILE --hold-recheck S --record-interaction DIR` ([`live-harness.md`](../utils/live-harness.md)).
 - Service JSON: `onejev: {url}` (qev over the tunnel). Spoofs (`harness/deciders.py`): `KeywordChooser` (scores; a
   deviation reads as wait), `RewriteReviser` (the scripted S1 needs step text).
 

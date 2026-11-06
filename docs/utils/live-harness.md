@@ -4,8 +4,8 @@ Code: `executors/robocasa-pi052/` — `realtime.py` (one run), `scenarios.py` (m
 deciders, recording, frame_check, tracking, viewer, video, live_view), `embodiment.py` (PandaOmron `ActionSpec` +
 effect model), `tasks.py` (authored steps + truth checks). Tests: `executors/robocasa-pi052/tests/` (36 passed
 2026-10-24; `test_harness.py` 9, `test_scenarios_scorecard.py` 5).
-Related: [`v3-runtime.md`](v3-runtime.md) · [`s1-supply-and-commitment.md`](s1-supply-and-commitment.md) ·
-[`execution-monitor.md`](execution-monitor.md) · [`remote-models.md`](remote-models.md) · [`system2-map.md`](system2-map.md) · [`campaign.md`](campaign.md).
+Related: [`v3-runtime.md`](../features/v3-runtime.md) · [`s1-supply-and-commitment.md`](s1-supply-and-commitment.md) ·
+[`execution-monitor.md`](../features/execution-monitor.md) · [`remote-models.md`](../features/remote-models.md) · [`system2-map.md`](../features/system2-map.md) · campaign: `executors/robocasa-pi052/campaign.py`.
 
 ## Rule: the core never bends to the simulator (decisions 2026-10-21)
 - Stand-ins, faults, recording, viewer, video and the matrix live in the executor and use only core interfaces
@@ -16,7 +16,7 @@ Related: [`v3-runtime.md`](v3-runtime.md) · [`s1-supply-and-commitment.md`](s1-
 - Wiring: `RoboCasaBackend` (LeRobot `RoboCasaEnv`) → `ExecutionRuntime(PANDA_OMRON)` seeded still, gripper open →
   `Guard` → `ControlLoop`; `S1Runner` over `RecordingPolicy` + `RecordingCommit`; planning `DecisionWorker` (+ optional
   interaction worker) over `RecordingDecider`; `StateOwner`; optional `ExecutionMonitor` (deviation → owner + refill) and
-  `StepWatcher`. Per-part detail: [`system2-map.md`](system2-map.md) §1.
+  `StepWatcher`. Per-part detail: [`system2-map.md`](../features/system2-map.md) §1.
 - `RoboCasaBackend.read(fn)` evaluates the kitchen under a lock between two steps; latches RoboCasa's own success
   (`success_t`); `--block-at` zeroes the arm dims inside `step` (fault).
 - Time modes (decision 2026-10-23):
@@ -130,5 +130,5 @@ Related: [`v3-runtime.md`](v3-runtime.md) · [`s1-supply-and-commitment.md`](s1-
   blend projected); in-run video encoding stalled the loop (harness: encode after); `RemotePolicy` dropped chunk `info`.
 
 ## Not validated
-- The matrix with a model S1 (`--policy remote`); model runs with users are in [`campaign.md`](campaign.md).
+- The matrix with a model S1 (`--policy remote`); model runs with users are in `executors/robocasa-pi052/campaign.py`.
 - `blocked` with a contact-aware monitor; `step-events` with an S1 that completes steps.

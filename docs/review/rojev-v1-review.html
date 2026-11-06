@@ -146,7 +146,7 @@ td.term { font-weight: 600; white-space: nowrap; }
     <span class="label">rojev · v1 review · updated 2026-11-03</span>
     <h1>A robot you can talk to while it works</h1>
     <p class="lede">rojev is a System 1 / System 2 robot runtime. A vision-language-action model (S1) moves the arm. A vision-language model (S2) decides what each thing the person says means for the running task. Between them, a state owner is the only component allowed to change what the robot does. v1 uses only frozen open-source models, with no training, in the RoboCasa365 kitchen simulator (a Franka arm on a mobile base).</p>
-    <p class="muted small">Code: <a href="https://github.com/Vikas-ai56/rojev">github.com/Vikas-ai56/rojev</a></p>
+    <p class="muted small">Code: <a href="https://github.com/Vikas-ai56/rojev">github.com/Vikas-ai56/rojev</a> · Follow-up review (4 Nov): <a href="rojev-v1-discussion.html">rojev-v1-discussion.html</a></p>
   </div>
   <nav class="toc" aria-label="Sections">
     <a href="#problem">Problem</a><a href="#terms">Terms</a><a href="#approach">Approach</a><a href="#pipeline">Architecture</a><a href="#event">One event</a><a href="#history">Approaches</a><a href="#choices">Choices</a><a href="#compose">Composite tasks</a><a href="#results">Results</a><a href="#issues">Issues</a><a href="#v2">v2</a><a href="#code">Code map</a>
@@ -477,7 +477,7 @@ td.term { font-weight: 600; white-space: nowrap; }
         <tr><td>Three composite tasks, no speech, one run each</td><td>Boil the kettle 24.3 s · wash the lettuce 41.8 s · store leftovers in a bowl 87.6 s, all succeeded</td></tr>
         <tr><td>Rinse the sink basin, on XR-1's own test episodes</td><td>4 of 5</td></tr>
         <tr><td>Switching task by voice mid-run</td><td>Switched to turning on the faucet and XR-1 did it; switched back to the kettle task by name (99 % probability)</td></tr>
-        <tr><td>Words that are not a task</td><td>8 of 8 gibberish, negated or vague lines left the task unchanged</td></tr>
+        <tr><td>Words that are not a task</td><td>8 of 8 gibberish, negated or vague lines left the task unchanged, but in those runs the robot then held until the time limit instead of finishing</td></tr>
       </tbody>
     </table>
   </div>
@@ -492,7 +492,7 @@ td.term { font-weight: 600; white-space: nowrap; }
       <thead><tr><th>Question</th><th>How we tested</th><th>Result</th></tr></thead>
       <tbody>
         <tr><td>Does the robot model behave the same inside our system?</td><td>XR-1's own published test episodes: 4 tasks × 5 seeds</td><td><strong>18 of 20</strong> succeeded; the authors report 20 of 20. So failures in our loop point at the decision side.</td></tr>
-        <tr><td>Does Jev understand what people say?</td><td>82 lines from scripted users, random typo-filled text and 2 live sessions, each judged against what the robot was doing at that moment</td><td><strong>55 right</strong>, 24 safe misses (it asked or paused when it could have acted), 2 unsafe, 1 unanswered on purpose</td></tr>
+        <tr><td>Does Jev understand what people say?</td><td>82 lines from scripted users, random typo-filled text and 2 sessions typed live by an agent (not people), each judged against what the robot was doing at that moment</td><td><strong>55 right</strong>, 24 safe misses (it asked or paused when it could have acted), 2 unsafe, 1 unanswered on purpose. The judge also counts “asked, then held until the time limit” as right; per run, only 9 of 35 finished the task (5 of 31 with speech).</td></tr>
         <tr><td>Did grouping reactions by effect help?</td><td>All 82 lines replayed, and the 4 affected cases re-run live</td><td>“stop” / “go on” twice: 2 of 4 → <strong>4 of 4</strong>. “ruko” (Hindi for stop) now asks instead of starting a task. One small regression.</td></tr>
         <tr><td>Are late answers handled?</td><td>Real time, with the answer deadline forced down to 0.3 s</td><td>The robot paused at the deadline, then applied both late answers correctly</td></tr>
         <tr><td>Does the safety logic hold under faults?</td><td>19 fault scenarios in real time (slow or crashing decision model, slow robot model, stop, wait / resume, switch, questions), with a scripted arm and rule-based deciders standing in for the models</td><td><strong>17 of 19</strong> pass; the arm never ran out of actions and no limit was crossed. The 2 failures are blocked-arm cases the motion monitor misses.</td></tr>

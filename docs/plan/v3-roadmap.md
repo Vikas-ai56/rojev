@@ -1,6 +1,7 @@
 # v3 roadmap: Jev × Helix (single source of truth)
 
-Status: **testing without training** (decision 2026-10-20). Source plan: `docs/plan/jev_helix_implementation_plan.pdf`
+Status: **testing without training** (decision 2026-10-20). S1 = XR-1 RoboCasa365 since 2026-10-22 (π0.5² items below are
+history); the target is a real robot, RoboCasa is the test environment (decision 2026-11-03). Source plan: `docs/plan/jev_helix_implementation_plan.pdf`
 (pp.1–18 = proposal; pp.19+ = reference only). v1 build spec (no training): `docs/plan/v3-v1-spec.md`. Update the checkboxes here as work lands; results go to
 `docs/paper/experiments.md` (E14+), decisions to `docs/decisions.md`.
 
@@ -28,10 +29,12 @@ Status: **testing without training** (decision 2026-10-20). Source plan: `docs/p
 - Change of mind: the owner puts the moving command in **review** at once (keeps reversible motion, freezes
   irreversible switches, short lease); Jev's interaction act decides continue / revise / wait / ask / abort; no answer →
   decelerating hold (spec §4, revision 2026-10-20).
-- Jev v1 = interaction-act layer + verifier checks; π0.5²'s own planner proposes subtask text (research brief §2, §8).
+- Jev v1 = interaction-act layer + verifier checks; π0.5²'s own planner proposed subtask text (research brief §2, §8);
+  XR-1 has no planner, so the v1 planning lane renews the whole task.
 - Execution side (borrowed, training-free): commitment policy (PACE, CA³C-lite) + kinematic execution monitor with
   conformal threshold (CheckVLA-lite) + progress keyframes.
-- Simulator never pauses for inference (wall-clock mode for timing; virtual-time mode for data).
+- Simulator never pauses for inference in real-time runs; model comparisons run in lockstep (decisions 2026-10-22 / -23), which
+  hides S1 / S2 delay until each model's measured delay is added back.
 
 ## 3. Test setups
 | Setup | What it is | Tests |
@@ -39,7 +42,7 @@ Status: **testing without training** (decision 2026-10-20). Source plan: `docs/p
 | **RoboCasa (v1)** | full S1/S2 loop from open-source frozen parts: XR-1 (S1; π0.5² earlier) + OneJev 4B + our runtime; lockstep evaluation, real time measured | everything in v1 (T1–T8) |
 | **Offline** | saved frames/decisions | Jev accuracy, candidate recall (T3, T4, T9) |
 | **SO-101 sim (later)** | needs a trained S1 (S1-A); backend + realtime clock ready | after training |
-Caveat: π0.5² is Panda/RoboCasa → model results may not transfer to SO-101.
+Caveat: XR-1 RoboCasa365 (like π0.5² before it) is Panda/RoboCasa → model results may not transfer to SO-101.
 
 ## 4. Phases, tests and gates
 ### P0 — Foundations (v1 pipeline, RoboCasa; spec `docs/plan/v3-v1-spec.md`)
@@ -76,7 +79,7 @@ Caveat: π0.5² is Panda/RoboCasa → model results may not transfer to SO-101.
   - [ ] Measure the grasp delay review mode causes (gripper frozen up to `review_s`) (T8)
   - [ ] Monitor: orientation and base motion; recalibrate on clean π0.5² runs covering all arm axes
   - [ ] All step-4 evidence is mechanism-level (stand-ins); performance claims need T8a / T8 on GPU
-- **Gate:** π0.5² runs a full episode in real time under the runtime with Jev supervising; full trace.
+- **Gate:** XR-1 runs a full episode in real time under the runtime with Jev supervising, 0 starved ticks; full trace.
 
 ### P1 — Fault injection (RoboCasa loop, stand-in models + live)
 - [ ] T2 Harness injecting every case in section 6; one test per row
@@ -86,15 +89,15 @@ Caveat: π0.5² is Panda/RoboCasa → model results may not transfer to SO-101.
 - [ ] T3 Fixed E13: same option order, scene-swap pairs, destination-aware metric, ≥200 frames; OneJev 4B vs 9B vs
       plain Qwen letter-score vs blank image vs perfect-state text → **does Jev use the image?**
 - [ ] T4 Candidate recall: new generator vs old filter
-- [ ] T5 S1 sensitivity: swap / erase / contradict π0.5²'s instruction → **does S1 listen?**
-- [ ] T6 MJev evidence vs sim truth (held, where, done)
+- [ ] T5 S1 sensitivity: swap / erase / contradict XR-1's instruction; step sentences vs the whole task → **does S1 listen?**
+- [ ] T6 Done evidence vs sim truth: MJev dropped (E17, 2026-10-22); now the frozen critic (decision 2026-11-01)
 - **Gate:** T5 shows S1 follows instructions (else Jev cannot help yet); T3 image-gain measured with CI.
 
 ### P3 — Closed loop (RoboCasa)
 - [ ] T7 Delay test: inject Jev delay, plot success vs delay
 - [ ] T8 Revision benchmark (spec §11): injections at pre-grasp / contact / transport / pre-commit; goal swap,
       object swap, stop, ambiguous, harmless speech; arms native · scripted · oracle · Jev; external baselines
-      (re-prompted π0.5², Hi Robot-style re-plan, SwitchVLA-style head, halt-and-restart, stop-and-go); metrics:
+      (re-prompted S1, Hi Robot-style re-plan, SwitchVLA-style head, halt-and-restart, stop-and-go); metrics:
       success, wrong-goal commitments, reaction latency, wasted motion, act ECE, ask precision
 - **Gate (kill/narrow Jev):** Jev must beat native and scripted on revision/recovery metrics.
 

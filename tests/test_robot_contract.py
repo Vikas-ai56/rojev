@@ -181,6 +181,7 @@ def test_realtime_physics_runs_while_the_caller_blocks():
         assert robot.clock.max_lag_s < 0.05
 
 
+@pytest.mark.timing
 def test_realtime_rate_drops_missed_ticks_instead_of_bursting():
     with _sim("realtime") as robot:
         rate = Rate(robot.clock, robot.control_rate_hz)

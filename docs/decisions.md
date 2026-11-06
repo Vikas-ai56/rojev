@@ -741,7 +741,7 @@
 
 ## [2026-10-23] Lockstep stays the simulator evaluation mode for now
 **Decision:** Sim evaluations run in lockstep (`--lockstep`), with real time reported alongside; hardware requires real-time passes first (`hardware-port.md`).
-**Why:** S1 runs on a remote GPU (0.35–0.55 s vs an 0.8 s XR-1 chunk) and published benchmarks are scored in lockstep, so lockstep is the only fair model comparison until S1 runs next to the simulator / robot.
+**Why:** S1 runs on a remote GPU (round trip p50 0.51 s / p90 0.73 s, E23, vs a 0.375 s gap-free bound for a 16-action chunk) and published benchmarks are scored in lockstep, so lockstep is the only fair model comparison until S1 runs next to the simulator / robot.
 **Rejected alternatives:** Real time only (measures our network, not the model); lockstep only (hides the delay problem the robot will have).
 **Risks / edge cases found:** Lockstep results overstate real-world performance; S2 threads run on the simulated clock and see more ticks per decision than in real time.
 
@@ -852,3 +852,9 @@
 **Why:** Owner's scope call (2026-11-01); the frozen-parts rule of v1 holds; E31 shows a frozen progress model already ranks done above chance (0.82 on identical images).
 **Rejected alternatives:** LoRA on Robometer-4B / RynnValue-4B (1–2 H100-days plus week-1 rollouts); plain Qwen3-VL-4B (untrained completion detection near zero in HiSTEVE).
 **Risks / edge cases found:** At a 5 % false-done cut RynnValue caught ~37 % of dones on E17 frames (cut fitted on the test set), so most completions are missed and run 5's no-stop failure stays partly open; no frozen Q head, so no feasibility check; GPU latency unmeasured.
+
+## [2026-11-03] The target is a real robot; RoboCasa is the test environment
+**Decision:** Work from v2 on is judged by what transfers to a real robot (SO-101 first); RoboCasa results are method checks, and every simulator-only signal (success predicates as labels, scenes built to match the sentence, lockstep, the RoboCasa-only XR-1 checkpoint) gets a named real-robot replacement before a gate or threshold relies on it.
+**Why:** Owner's scope call (2026-11-03); the 2026-11-03 research showed several recommendations only hold in simulation (thresholds from simulator labels, composite-unseen gains, seam probes on a sim-fine-tuned checkpoint).
+**Rejected alternatives:** RoboCasa composite-unseen success as the v2 ship criterion (v2 plan §4 week 4) on its own; deferring real-robot data until the simulator results are done.
+**Risks / edge cases found:** The 2026-11-01 frozen-critic threshold is set on simulator-labelled frames and needs a real-episode calibration set; real labels cost human time; S1 on a real arm needs teleop demos and a GPU next to it; the v2 plan's gates are all simulator gates today.

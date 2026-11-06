@@ -5,7 +5,8 @@ Robot interface: `features/robot-interface.md`; SO-101 executor spec: `plan/spec
 
 ## Lockstep is a simulator mode (kept for now)
 - In simulation we evaluate in **lockstep**: simulated time stops while S1 thinks (`realtime.py --lockstep`). It is
-  needed now because S1 runs on a remote GPU (0.35–0.55 s round trip vs an 0.8 s XR-1 chunk) and because published
+  needed now because S1 runs on a remote GPU (round trip p50 0.51 s, p90 0.73 s, E23; gap-free supply of a 16-action
+  chunk needs ≤ 0.375 s) and because published
   benchmarks are scored that way. Real time (`realtime.py` default) is kept and reported alongside.
 - **A robot has no lockstep.** Before hardware, the same tasks must pass in real time with 0 starved ticks.
 

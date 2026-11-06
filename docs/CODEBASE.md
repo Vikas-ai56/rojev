@@ -8,13 +8,13 @@ A guide for reading and reviewing the code; documents are listed in [`README.md`
 
 ## 1. Big picture
 
-System 2 (Jev = OneJev + MJev, or a baseline) chooses what to do; System 1 (π0.5²) does it; the control layer owns what is physically active; the state owner is the only writer of intent between them. Every part runs on its own thread; nothing waits for a model. Simulation runs on the Mac; the models run as services on a GPU.
+System 2 (Jev on OneJev; MJev out of the loop since 2026-10-22; or a baseline) chooses what to do; System 1 (XR-1 RoboCasa365; π0.5² still supported) does it; the control layer owns what is physically active; the state owner is the only writer of intent between them. Every part runs on its own thread; nothing waits for a model. Simulation runs on the Mac; the models run as services on a GPU.
 
 ```
  user ── UserInstruction ─────────────────────────────▶ owner.StateOwner ── AcceptedGoal / Revoke / renew ──┐
                                                           ▲ DecisionProposal      ▲ ExecutionAck              │
  system2.DecisionWorker ── Decider (Jev | eval baseline) ─┘                       │                           ▼
-        ▲ ObservationSnapshot (newest)                       control.ExecutionRuntime ◀── TimedChunk ── system1.S1Runner ── Policy (π0.5² service)
+        ▲ ObservationSnapshot (newest)                       control.ExecutionRuntime ◀── TimedChunk ── system1.S1Runner ── Policy (XR-1 service)
         │                                                          │ tick(t) → action                                   ▲ newest Capture
  control.ControlLoop ◀── control.Guard ◀───────────────────────────┘                                                    │
         │ backend.step(action) → observation → latest Capture ──────────────────────────────────────────────────────────┘
@@ -42,7 +42,8 @@ rojev/
   eval/            deciders.py: baselines scripted / oracle / native / always-continue (evaluation only)                      deps: protocol, system2
   observability/   tracing.py (Phoenix), run_trace.py (post-run span tree)                                 deps: —
   legacy_v2/       QUARANTINED v2 chunk-synchronous supervisor (arm D, B/E, candidate filter); delete after T8  deps: protocol, system2, eval
-executors/robocasa-pi052/  π0.5² service, RoboCasa backend + PandaOmron ActionSpec, live runner, scenario harness, GPU hook
+executors/robocasa-pi052/  RoboCasa backend + PandaOmron ActionSpec, live runner and scenario harness (any S1), π0.5² service, GPU hook
+executors/robocasa-xr1/    XR-1 RoboCasa365 service (the S1 now) + its input builder, GPU hook (own env)
 services/onejev, services/mjev, services/sam2  S2 model services (own envs, GPU hooks)
 scripts/         gpu_setup.sh: one command from the Mac to a serving GPU box
 executors/robocasa/        earlier SmolVLA executor env (v2 G0)
@@ -69,9 +70,9 @@ Read in this order; each step adds one layer of the loop.
 | 7 | [`owner/state_owner.py`](../rojev/owner/state_owner.py) | How proposals and instructions become commands; why stale ones are refused |
 | 8 | [`eval/deciders.py`](../rojev/eval/deciders.py) | The baselines Jev must beat |
 | 9 | [`executors/robocasa-pi052/realtime.py`](../executors/robocasa-pi052/realtime.py) `main` | The whole v1 loop wired together in RoboCasa |
-| 10 | [`system1/wire.py`](../rojev/system1/wire.py) → [`system1/remote.py`](../rojev/system1/remote.py) → [`executors/robocasa-pi052/serve.py`](../executors/robocasa-pi052/serve.py) | How a chunk is fetched from π0.5² on a GPU |
+| 10 | [`system1/wire.py`](../rojev/system1/wire.py) → [`system1/remote.py`](../rojev/system1/remote.py) → [`executors/robocasa-pi052/serve.py`](../executors/robocasa-pi052/serve.py) | How a chunk is fetched from the S1 on a GPU (XR-1: [`executors/robocasa-xr1/serve.py`](../executors/robocasa-xr1/serve.py); π0.5² shown) |
 | 11 | [`robot/base.py`](../rojev/robot/base.py) → [`robot/sim/mujoco_robot.py`](../rojev/robot/sim/mujoco_robot.py) → [`control/robot_backend.py`](../rojev/control/robot_backend.py) | The hardware-shaped robot interface, the SO-101 simulator, and how it joins the loop |
-| 12 | [`system2/models/`](../rojev/system2/models/__init__.py) → [`system2/jev/`](../rojev/system2/jev/__init__.py) → [`system2/verify/`](../rojev/system2/verify/__init__.py) | The OneJev and MJev clients; Jev v1 answering a change; end-state checks posting step events |
+| 12 | [`system2/models/`](../rojev/system2/models/__init__.py) → [`system2/jev/`](../rojev/system2/jev/__init__.py) → [`system2/verify/`](../rojev/system2/verify/__init__.py) | The OneJev client (MJev client kept, out of the loop); Jev v1 answering a change; end-state checks posting step events |
 
 ---
 
@@ -281,7 +282,7 @@ loop = ControlLoop(backend, Guard(runtime), spec)
 | [`tests/test_system2_jev.py`](../tests/test_system2_jev.py) (17) | Jev v1 with a stub chooser: candidates per situation, budgets, act → operation, abstention, dwell, wait budget, temperature and margin fit, unanswered hold decided on recheck, model inputs; owner + Jev stop → heartbeats → go on |
 | [`tests/test_eval_scorecard.py`](../tests/test_eval_scorecard.py) (27) | Scorecard: validation, goal-swap metrics, answer rule (heartbeats never count), act mapping, pause, ask precision, unanswered hold, edge cases, ECE, aggregation and renderers |
 | [`tests/test_system2_verify.py`](../tests/test_system2_verify.py) (5) | Step watcher confirmation streaks, one event per command, no check without a step, failures counted; MJev request shape |
-| [`tests/test_robot_contract.py`](../tests/test_robot_contract.py) (18, mujoco + mock) | Robot contract, cameras, calibration, time modes |
+| [`tests/test_robot_contract.py`](../tests/test_robot_contract.py) (24 incl. 1 `timing`, mujoco + mock) | Robot contract, cameras, calibration, time modes |
 | [`tests/test_robot_sim_world.py`](../tests/test_robot_sim_world.py) (4) | World composition |
 | `tests/test_legacy_v2_*.py` (11) | Quarantined v2 arms, candidate filter |
 | [`tests/test_install.py`](../tests/test_install.py) (10) | Install gate ([`features/history/phase0-install.md`](features/history/phase0-install.md)) |

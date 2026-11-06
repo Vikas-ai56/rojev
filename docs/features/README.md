@@ -35,13 +35,13 @@ Current values only, read from the code. Library default = the constructor defau
 | Execution monitor | off; on with `--execution-monitor M.json` | `ExecutionMonitor` | blocked arm unnoticed (off); contact-blind |
 | Monitor calibration | window 0.5 s, segment 5 s, α 0.1, runs below real-time factor 0.98 refused | `calibrate_monitor.py --window-s --segment-s --alpha --min-realtime-factor` | alarm rate vs sensitivity |
 
-## Harness and evaluation ([`live-harness.md`](live-harness.md))
+## Harness and evaluation ([`live-harness.md`](../utils/live-harness.md))
 | Lever | Default | Set at | Trade-off |
 |---|---|---|---|
 | Time mode | real time; sim evaluations run `--lockstep` (decision 2026-10-23) | `--lockstep` | lockstep hides S1 / S2 latency |
 | Frame check | every 1.0 s; noise > 25 (neighbour difference) or blank < 3 (std) → run not scored | `harness/frame_check.py` `NOISE`, `BLANK` · `--frame-check-every` | thresholds far outside 963 real frames |
 
-## S1 supply and commitment ([`s1-supply-and-commitment.md`](s1-supply-and-commitment.md))
+## S1 supply and commitment ([`s1-supply-and-commitment.md`](../utils/s1-supply-and-commitment.md))
 | Lever | Default | Set at | Trade-off |
 |---|---|---|---|
 | Refill lead (lower bound) | 1.0 s | `S1Runner(refill_s)` (no library default) · `--refill` | low: gap before the first measured latency · high: acts on older frames |

@@ -219,7 +219,7 @@ the answer is applied when it arrives (since 2026-10-24; confirmed live in E30 w
 | run 2 | goals outside XR-1's repertoire → erratic motion |
 | runs 3–4 | hesitation between equivalent acts; "close the cabinet door" (a trained task) not taken as a task; typos sent raw; "make it fast pls" still revised |
 | run 5 (2026-10-23 calibration, now withdrawn) | success at 36.75 s; then abort / resume of the finished task → the base circles (no completion signal) |
-| E27 campaign (`results/campaign/20261024-134629/analysis.md`) | 82 lines: 55 pass, 2 unsafe, 24 safe misses, 1 unanswered by design ([`campaign.md`](campaign.md)) |
+| E27 campaign (`results/campaign/20261024-134629/analysis.md`) | 82 lines: 55 pass, 2 unsafe, 24 safe misses, 1 unanswered by design (`executors/robocasa-pi052/campaign.py`) |
 | E28 replay / E30 live rerun (`results/campaign/20261024-rerun/`) | effect hesitation: stop / go on ×2 4/4, "ruko" asks, one stop → wait; late answers applied, not re-decided |
 
 ## 10. Proper vs declared, open
