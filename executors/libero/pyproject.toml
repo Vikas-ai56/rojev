@@ -1,0 +1,83 @@
+# Executor environment for LIBERO as a robot plug-in: LeRobot's LIBERO env and observation processing (lerobot 0.6.1)
+# under the rojev runtime; any S1 service is evaluated through it. The simulator (hf-libero, robosuite 1.4.0) installs
+# only on Linux, as in LeRobot; the Mac env has LeRobot's base package (its processors, torch) for the tests.
+#
+# Pins follow LeRobot's LIBERO image (docker/Dockerfile.sim, libero_deps stage): hf-libero 0.1.4 without its own
+# dependencies (the dependency-metadata below lists only what `libero.libero` imports, so robomimic, wandb, thop,
+# hydra-core and hf-egl-probe stay out: only libero.lifelong imports the first four and nothing imports egl_probe),
+# robosuite 1.4.0, bddl 1.0.1, easydict 1.13, mujoco 3.3.1 (robosuite 1.4.0 crashes on mujoco >= 3.10), numpy 2.2.6,
+# gymnasium 1.4.0. robosuite's opencv-python is taken as LeRobot's opencv-python-headless (one cv2 in the env, not two
+# distributions of different majors overwriting each other; only robosuite's on-screen and nvisii renderers import
+# cv2). torch comes from PyTorch's CPU index on Linux: the plug-in runs no model (torch only loads init states and runs
+# LeRobot's processor), so the box does not install CUDA wheels for it.
+[project]
+name = "rojev-executor-libero"
+version = "0.0.1"
+requires-python = "==3.12.*"
+dependencies = [
+    "imageio",
+    "lerobot==0.6.1",
+    "lerobot[libero]==0.6.1 ; sys_platform == 'linux'",
+    "numpy",
+    "pyyaml",
+    "rojev",
+    "torch",
+    "torchvision",
+]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.uv]
+package = false
+environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+constraint-dependencies = [
+    "bddl==1.0.1",
+    "easydict==1.13",
+    "gymnasium==1.4.0",
+    "hf-libero==0.1.4",
+    "mujoco==3.3.1",
+    "numpy==2.2.6",
+    "robosuite==1.4.0",
+]
+
+[[tool.uv.dependency-metadata]]
+name = "hf-libero"
+version = "0.1.4"
+requires-dist = [
+    "bddl==1.0.1",
+    "cloudpickle>=2.0.0",
+    "easydict==1.13",
+    "future>=0.18.2",
+    "gymnasium>=0.29.0",
+    "huggingface-hub",
+    "matplotlib>=3.5.3",
+    "mujoco>=3.0.0,<3.9.0",
+    "numpy",
+    "pyyaml",
+    "robosuite==1.4.0",
+    "termcolor",
+    "torch",
+]
+
+[[tool.uv.dependency-metadata]]
+name = "robosuite"
+version = "1.4.0"
+requires-dist = ["mujoco>=2.3.0", "numba>=0.49.1", "numpy>=1.13.3", "opencv-python-headless", "pillow", "scipy>=1.2.3"]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+rojev = { path = "../../", editable = true }
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]

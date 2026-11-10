@@ -1,0 +1,6 @@
+# GPU session: stage 1 (S1 alone through the whole runtime) on LIBERO, GR00T N1.7's LIBERO checkpoint served by
+# services/lerobot-policy. One step per line, `<component dir> <step> <timeout seconds>`; run with
+# scripts/gpu_session.sh HOST --plan config/gpu_session_libero.txt after
+# scripts/gpu_setup.sh HOST --executor libero --services lerobot-policy (the service serves config/s1/groot-libero-goal.yaml).
+# Each step: 10 tasks x 2 episodes, lockstep, config/runs/libero-stage1.yaml, video per episode.
+executors/libero stage1_goal 5400

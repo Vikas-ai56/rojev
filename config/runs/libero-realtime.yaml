@@ -1,0 +1,8 @@
+# LIBERO in real time: lockstep off, so the simulator steps at 20 Hz of wall time on its own thread while S1 (and any
+# S2) think on theirs, and the model's delay costs robot time as it would on hardware. Everything else as stage 1
+# (no blending; actions per chunk from the model's execute_steps), so the score difference to libero-stage1.yaml is
+# the cost of real time. Read by executors/libero/evaluate.py --config.
+runtime:
+  lockstep: false
+  blend_s: 0.0
+  watchdog_s: 10.0
