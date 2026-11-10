@@ -1,0 +1,15 @@
+# Embodied-R1.5 behind vLLM's OpenAI-compatible server (services/planner-vlm `serve`): how it is asked and how its
+# answers are read. Wording from R1.5's official sources (github.com/pickxiguapi/Embodied-R1.5 @ b38627f2,
+# inference/hf_example.py and its SFT data); the allowed-steps suffix is ours (S1 follows only its trained steps).
+# Read by rojev.system2.models.chat_vlm (live) and services/planner-vlm/prompts.py (bench): one source for both.
+model: Embodied-R1.5
+wrapper: "{question}\nPlease answer this question based on the visual content.You FIRST think about the reasoning process as an internal monologue and then provide the final answer.At the end, you must output the final answer in the format:\n<answer><your_answer_here></answer>\n"
+next_step: "current goal is: {goal}.{history} what is the immediate next step? Answer with exactly one of: {options}."
+history: " last steps: {steps}."
+history_step: "{index}- {step}"
+options_separator: "; "
+status: "{step}. is it satisfied?"
+answer: "<answer>(.*?)</answer>"
+yes_words: ["yes"]
+no_words: ["no"]
+sampling: {temperature: 1.0, top_p: 1.0, repetition_penalty: 1.05, max_tokens: 1024, seed: 3407}

@@ -7,7 +7,8 @@ us-east through an SSH tunnel: 680 ms of network per request against a 216 ms pi
                                   is replaced and the request resent once with the same request id, so a service that
                                   already ran it answers from its replay cache instead of running it again; any other
                                   failure propagates. `request(..., timeout_s)` bounds the whole call, retry included:
-                                  past it the connection (state unknown) is closed and `TimeoutError` raised
+                                  past it the connection (state unknown) is closed and `TimeoutError` raised;
+                                  `content_type` is the body's media type (bytes by default, JSON for chat endpoints)
   HttpServer(endpoint, host, port) threaded keep-alive server for an `Endpoint`: admission before reading the body
 """
 import http.client
@@ -20,6 +21,7 @@ from .endpoint import BAD_LENGTH, REQUEST_ID, Endpoint, Response, new_request_id
 STALE = (http.client.RemoteDisconnected, BrokenPipeError, ConnectionResetError, http.client.CannotSendRequest)
 LENGTH_REQUIRED: Response = (411, b"content-length required (no transfer-encoding)", "text/plain")
 DISCARD_CHUNK = 64 * 1024
+OCTET_STREAM = "application/octet-stream"
 
 
 class HttpTransport:
@@ -29,13 +31,14 @@ class HttpTransport:
         self.token, self.timeout_s = token, timeout_s
         self._conn: http.client.HTTPConnection | None = None
 
-    def request(self, method: str, path: str, body: bytes = b"", timeout_s: float | None = None) -> bytes:
+    def request(self, method: str, path: str, body: bytes = b"", timeout_s: float | None = None,
+                content_type: str = OCTET_STREAM) -> bytes:
         request_id = new_request_id()
         deadline = time.monotonic() + (self.timeout_s if timeout_s is None else timeout_s)
         try:
-            return self._exchange(method, path, body, request_id, deadline)
+            return self._exchange(method, path, body, request_id, deadline, content_type)
         except STALE:
-            return self._exchange(method, path, body, request_id, deadline)
+            return self._exchange(method, path, body, request_id, deadline, content_type)
 
     def health(self) -> str:
         conn = self._connection(30.0)
@@ -54,7 +57,8 @@ class HttpTransport:
         cls = http.client.HTTPSConnection if self.scheme == "https" else http.client.HTTPConnection
         return cls(self.host, self.port, timeout=timeout_s)
 
-    def _exchange(self, method: str, path: str, body: bytes, request_id: str, deadline: float) -> bytes:
+    def _exchange(self, method: str, path: str, body: bytes, request_id: str, deadline: float,
+                  content_type: str) -> bytes:
         budget = deadline - time.monotonic()
         if budget <= 0:
             raise TimeoutError(f"{method} {path}: deadline passed before sending")
@@ -66,7 +70,7 @@ class HttpTransport:
         try:
             self._conn.request(method, self.base + path, body=body,
                                headers={"Authorization": f"Bearer {self.token}", REQUEST_ID: request_id,
-                                        "Content-Type": "application/octet-stream", "Content-Length": str(len(body))})
+                                        "Content-Type": content_type, "Content-Length": str(len(body))})
             response = self._conn.getresponse()
             data = response.read()
         except STALE:

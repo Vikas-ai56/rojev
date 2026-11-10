@@ -1,0 +1,3 @@
+repo IffYuan/Embodied-R1.5 @ c6765aae9ff10325b1764d45b8682e6cccaacad8
+Embodied-R1.5 (Apache-2.0): a Qwen3-VL-8B fine-tune for embodied planning, pointing and process detection; the S2
+planner candidate. bf16 weights 17.5 GB (its config says float32; load with dtype bfloat16).

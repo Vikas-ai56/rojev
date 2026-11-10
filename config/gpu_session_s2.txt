@@ -1,0 +1,5 @@
+# GPU session 2 (A100 40 GB): the S2 bake-off, Embodied-R1.5 only (owner, 2026-11-09). One step per line,
+# `<component dir> <step> <timeout seconds>`; run with scripts/gpu_session.sh HOST --plan config/gpu_session_s2.txt
+# after scripts/gpu_setup.sh HOST --services planner-vlm --skip-serve. Scored on the Mac with
+# executors/so101-data/score.py against config/s2_pass_bars.yaml.
+services/planner-vlm r15 3600

@@ -1,0 +1,91 @@
+{
+ "dataset": "hungho77/so101_left_arm_open_drawer_pick_red_cube_stack_on_blue_cube @ 16943465b231465b0261dd515bed68382ee84c1f",
+ "checked": "2026-11-07: top + wrist frames at start, lid, open, approach, carry and after viewed for all 12 episodes; every step end matches the scene (lid lifting / lid up with the red cube inside / reaching / red cube held / red on blue). After: red on blue in the wrist view, the blue cube hidden under the red one in 6 of 12. Episode 28 has no hold plateau and is not used.",
+ "skipped": {},
+ "episodes": {
+  "0": {
+   "lid_closed": 111,
+   "drawer_open": 359,
+   "grasped": 456,
+   "released": 726,
+   "length": 852
+  },
+  "4": {
+   "lid_closed": 95,
+   "drawer_open": 338,
+   "grasped": 446,
+   "released": 725,
+   "length": 833
+  },
+  "8": {
+   "lid_closed": 105,
+   "drawer_open": 318,
+   "grasped": 412,
+   "released": 716,
+   "length": 870
+  },
+  "12": {
+   "lid_closed": 83,
+   "drawer_open": 309,
+   "grasped": 424,
+   "released": 775,
+   "length": 925
+  },
+  "16": {
+   "lid_closed": 0,
+   "drawer_open": 191,
+   "grasped": 284,
+   "released": 547,
+   "length": 687
+  },
+  "20": {
+   "lid_closed": 76,
+   "drawer_open": 258,
+   "grasped": 341,
+   "released": 568,
+   "length": 665
+  },
+  "24": {
+   "lid_closed": 76,
+   "drawer_open": 244,
+   "grasped": 336,
+   "released": 574,
+   "length": 665
+  },
+  "29": {
+   "lid_closed": 77,
+   "drawer_open": 274,
+   "grasped": 364,
+   "released": 602,
+   "length": 690
+  },
+  "32": {
+   "lid_closed": 69,
+   "drawer_open": 262,
+   "grasped": 350,
+   "released": 579,
+   "length": 653
+  },
+  "36": {
+   "lid_closed": 82,
+   "drawer_open": 303,
+   "grasped": 417,
+   "released": 680,
+   "length": 816
+  },
+  "40": {
+   "lid_closed": 73,
+   "drawer_open": 279,
+   "grasped": 373,
+   "released": 626,
+   "length": 714
+  },
+  "44": {
+   "lid_closed": 99,
+   "drawer_open": 321,
+   "grasped": 413,
+   "released": 700,
+   "length": 775
+  }
+ }
+}
