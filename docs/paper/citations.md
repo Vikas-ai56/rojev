@@ -15,6 +15,7 @@
 | `brohan2023rt2` | arXiv:2307.15818 | RT-2: Vision-Language-Action Models Transfer Web Knowledge to Robotic Control | no new motions zero-shot |
 | `cai2026xr0` | arXiv:2602.12684 | Xiaomi-Robotics-0: An Open-Sourced Vision-Language-Action Model with Real-Time Execution | async recipe for XR-1 |
 | `chen2025sarm` | arXiv:2509.25358 | SARM: Stage-Aware Reward Modeling for Long Horizon Robot Manipulation | stage-aware progress labels |
+| `chen2026resteer` | arXiv:2603.17300 | ReSteer: Quantifying and Refining the Steerability of Multitask Robot Policies | steerability measured; mid-task switch data |
 | `chen2026steerablevla` | arXiv:2602.13193 | Steerable Vision-Language-Action Policies for Embodied Reasoning and Hierarchical Control | external VLM steering a VLA |
 | `fang2026molmoact2` | arXiv:2605.02881 | MolmoAct2: Action Reasoning Models for Real-world Deployment | open S2/S1 VLA; real-arm S1 candidate |
 | `fei2025liberoplus` | arXiv:2510.13626 | LIBERO-Plus: In-depth Robustness Analysis of Vision-Language-Action Models | low level ignores language |
@@ -22,10 +23,12 @@
 | `gao2025vlaos` | arXiv:2506.17561 | VLA-OS: Structuring and Dissecting Planning Representations and Paradigms in Vision-Language-Action Models | language vs grounded plans |
 | `gu2025safe` | arXiv:2506.09937 | SAFE: Multitask Failure Detection for Vision-Language-Action Models | failure head on VLA features |
 | `he2026vlarolling` | arXiv:2610.25043 | VLA-Rolling: Fewer Denoising Steps, Better Control via Adaptive Action Reuse | discarded tail as next start |
+| `hou2026langgap` | arXiv:2603.00592 | LangGap: Diagnosing and Closing the Language Gap in Vision-Language-Action Models | low level ignores language; same-scene multi-task data |
 | `hu2026hivla` | arXiv:2606.10267 | What Matters in Orchestrating Robot Policies: A Systematic Study of Hierarchical VLA Agents | false "done" dominates |
 | `intelligence2025pi05` | arXiv:2504.16054 | $π_{0.5}$: a Vision-Language-Action Model with Open-World Generalization | text subtask then actions |
 | `intelligence2025pistar06` | arXiv:2511.14759 | $π^{*}_{0.6}$: a VLA That Learns From Experience | RECAP value / advantage |
 | `intelligence2026pi07` | arXiv:2604.15483 | $π_{0.7}$: a Steerable Generalist Robotic Foundation Model with Emergent Capabilities | new tasks = recombination; coaching |
+| `khazatsky2024droid` | arXiv:2403.12945 | DROID: A Large-Scale In-The-Wild Robot Manipulation Dataset | GR00T zero-shot reference data (E32) |
 | `lee2026roboreward` | arXiv:2601.00675 | RoboReward: General-Purpose Vision-Language Reward Models for Robotics | VLM reward / done baseline |
 | `li2025switchvla` | arXiv:2506.03574 | SwitchVLA: Execution-Aware Task Switching for Vision-Language-Action Models | mid-execution task switching |
 | `liang2026robometer` | arXiv:2603.02115 | Robometer: Scaling General-Purpose Robotic Reward Models via Trajectory Comparisons | v2 critic base |
@@ -33,7 +36,7 @@
 | `mees2021calvin` | arXiv:2112.03227 | CALVIN: A Benchmark for Language-Conditioned Policy Learning for Long-Horizon Robot Manipulation Tasks | chaining collapse |
 | `nasiriany2024robocasa` | arXiv:2406.02523 | RoboCasa: Large-Scale Simulation of Everyday Tasks for Generalist Robots | simulator |
 | `nasiriany2026robocasa365` | arXiv:2603.04356 | RoboCasa365: A Large-Scale Simulation Framework for Training and Benchmarking Generalist Robots | Composite-Unseen baselines |
-| `nvidia2025gr00tn1` | arXiv:2503.14734 | GR00T N1: An Open Foundation Model for Generalist Humanoid Robots | jointly trained S2/S1 |
+| `nvidia2025gr00tn1` | arXiv:2503.14734 | GR00T N1: An Open Foundation Model for Generalist Humanoid Robots | jointly trained S2/S1; SO-101 S1 candidate (E32) |
 | `onejev` | github.com/OmniJev/OneJev | OneJev (qev) | our S2 typed-choice model |
 | `pi052_robocasa` | huggingface.co/lerobot/pi052_robocasa | lerobot/pi052_robocasa | earlier S1 (π0.5²) |
 | `pi07_blog` | pi.website/blog/pi07 | π0.7 blog post | laundry = cross-embodiment; air-fryer caveat |

@@ -1,4 +1,4 @@
-# Method: the system as built (2026-10-24)
+# Method: the system as built (2026-10-24, updated 2026-11-10)
 
 Mechanisms verified against `rojev/` and `docs/features/`; numbers live in `experiments.md`, cited here by source.
 
@@ -29,7 +29,7 @@ Mechanisms verified against `rojev/` and `docs/features/`; numbers live in `expe
 | The user's words never become S1's prompt | a new task is one of S1's trained sentences, chosen verbatim (§5) |
 | Nothing stale moves the robot | late actions skipped, revoked commands' actions dropped, epoch on every message (§3) |
 | The gripper changes only on a running, unreviewed command's chunk | irreversible-switch gating (§3) |
-| A dead model, network or owner leaves the robot holding still | guard watchdog, owner heartbeat, command leases (§3) |
+| A dead model, network or owner leaves the robot holding still | guard watchdog, owner heartbeat, command leases the owner stops renewing when the planner falls silent (§3, §4) |
 | Questions are bounded | at most 2 per dialogue, never two in a row (§5) |
 
 Not yet (v1 limits): knowing a task is done; starting a task not on the trained list; checking a task can run in
@@ -74,13 +74,19 @@ immediate S1 refill. Contact-blind: a deliberate press and a blocked arm look al
 - One thread, one event queue, a 50 ms tick; never waits for a model. Commands become active only on the runtime's ACK.
 - User line: revision + 1, dialogue turn, `ACK` said, moving command under review, interaction lane asked. The task
   text is unchanged until an accepted decision carries new text (decision 2026-10-22: "wait" had become S1's task).
-- Two lanes: changes (user line, deviation, hold recheck) → interaction; heartbeat and step events → planning.
+- Two lanes: changes (user line, deviation, hold recheck) → interaction; everything else → planning.
   While a change is pending, planning is deferred and its proposals refused. Why: a routine decision never overrides
   the answer to what the user just said.
+- Planning is asked on events only: the start, a step confirmed done, a command that ended on its own, a step over
+  its time budget, or 10 s without a question. No fixed beat (decision 2026-11-09): a planner that thinks for seconds
+  is asked only when its answer can change.
+- Keeping the robot alive is the owner's job, not a decision: it renews the running command's lease itself, and
+  stops when a planning question has gone unanswered for 30 s, so the command expires and the robot holds
+  (decision 2026-11-09).
 - Proposal refusal chain: epoch, revision, newer than the last applied, a request this owner made, lane priority,
   superseded, wrong base command, standing hold, expired (2 s), unchecked preconditions. Every refusal is logged.
 - Holds: abort / wait / ask answering a change become a standing hold that remembers the interrupted command; no
-  heartbeat meanwhile; released only by a moving answer to a later change (decision 2026-10-22: a planner restarted a
+  planning meanwhile; released only by a moving answer to a later change (decision 2026-10-22: a planner restarted a
   task the user had stopped).
 - Unanswered change (failure, refusal, 1.0 s deadline): hold `UNANSWERED`, said; planning never answers a change
   (decision 2026-10-22: an unread "stop" could move the robot).
@@ -151,14 +157,22 @@ Stateless: everything comes from the owner's snapshot. Per change:
 
 - Built: RoboCasa PandaOmron (Franka on a mobile base, 12-D, 20 Hz) in simulation; MuJoCo SO-101 with joint
   targets, exercised in tests with a stand-in S1 (no learned SO-101 policy).
-- Not built: a shared assembly layer (`rojev/app`, spec only); any hardware run.
+- Built 2026-11-10: a shared assembly that wires the runtime for any robot from a config file; its first robot is
+  LIBERO (simulated Franka) with GR00T N1.7 as S1, tested on a fake simulator, not yet run on a GPU.
+- Not built: any hardware run.
 
 ## 9. Composite tasks with known subtasks
 - Protocol: a command may carry a step sentence (`Operation.subtask`); none = S1 sequences its own steps.
 - XR-1 (default) receives the whole task sentence and sequences internally; it reports no steps.
 - Planning-lane sequencers exist for step sentences: scripted (time budgets), oracle (simulator truth, evaluation
-  only), commit-and-verify (pins a self-planning S1's chosen step until a check confirms it). Step events trigger the
-  planning lane; keyframes keep steps done (with the observation judged) across revisions.
+  only), commit-and-verify (pins a self-planning S1's chosen step until a check confirms it), and a step planner that
+  asks a model (Embodied-R1.5) for the next step from S1's trained list (built, not run live). Step events trigger
+  the planning lane.
+- Task memory (decision 2026-11-09): each step is recorded done or undone, with its evidence and the frame judged.
+  A confirmed done check is recorded at once; a planner choosing a done step again marks it undone (the scene
+  contradicts the memory). Finished tasks go to an episode log.
+- Done checks run when a step has probably just ended (the gripper opened or closed), else every second, and are
+  confirmed by a second check.
 - Gap: no reliable step-done signal (MJev 0.50 / 0.45, OneJev 0.52 balanced accuracy on 222 labelled frames;
   decision 2026-10-22). Composite sequencing with XR-1: not validated.
 

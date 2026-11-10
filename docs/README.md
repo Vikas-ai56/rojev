@@ -9,6 +9,7 @@ Where each kind of document lives. Code map: [`CODEBASE.md`](CODEBASE.md).
 | [`plan/v3-v1-spec.md`](plan/v3-v1-spec.md) | v1 build spec: full S1/S2 loop from open-source frozen parts (π0.5², OneJev, MJev; SAM 2 deferred, decisions 2026-10-21) + our runtime; Route A role split; build steps 1–8 |
 | [`review/rojev-v1-review.html`](review/rojev-v1-review.html) | One-page v1 review (open in a browser): what, why, S1 / S2 flow, component choices, results, open blockers |
 | [`review/rojev-v1-discussion.html`](review/rojev-v1-discussion.html) | v1 follow-up (2026-11-04): goals vs status, missing background reasoning, RynnUnify ideas, real-time plan, other designs, work order |
+| [`target-system.md`](target-system.md) | Target design for the real robot: S1 / S2 split, memory, safety kernel, configuration, first-version targets, open decisions, status |
 | [`decisions.md`](decisions.md) | Every durable decision, newest last (decision · why · rejected · risks) |
 | [`CODEBASE.md`](CODEBASE.md) | How to read the code |
 
@@ -18,10 +19,13 @@ Where each kind of document lives. Code map: [`CODEBASE.md`](CODEBASE.md).
 | [`README.md`](model-bringup/README.md) | Why it exists, rules of thumb |
 | [`checklist.md`](model-bringup/checklist.md) | Ordered gates: claims and licence, serving, input / output contracts, env parity, observation integrity, runtime, reproduce-then-measure, own trained models |
 | [`search-directions.md`](model-bringup/search-directions.md) | Where to look and how to bisect when a model underperforms |
+| [`groot.md`](model-bringup/groot.md) | GR00T N1.7 on the SO-101: contract from source, our adapter, open checks |
+| [`s2-bakeoff.md`](model-bringup/s2-bakeoff.md) | Embodied-R1.5 as planner and done checker on real SO-101 step cases + ArmNetBench attempts: case sets, run, scoring, pass bars, limits |
 
 ## Research briefs: `research/` (findings, not decisions; adopted parts move to the roadmap / decisions)
 | Doc | What it is |
 |---|---|
+| [`2026-11-07-vla-steerability.md`](research/2026-11-07-vla-steerability.md) | Do VLAs follow step text the scene does not imply? Our GR00T probe, LangGap, ReSteer, MolmoAct2 / π0.7; the fix is same-scene multi-task data; probe as the S1 gate |
 | [`2026-10-23-v2-plan.md`](research/2026-10-23-v2-plan.md) | v2 for new compositions: XR-1 whole-task + trained critic (done / progress, capability, next-step feasibility) + recovery; week-1 gates, 4-week recipe, π0.7 / Eka VFA / JEPA verified, flip triggers |
 | [`2026-10-23-discarded-actions-as-prefix.md`](research/2026-10-23-discarded-actions-as-prefix.md) | VLA-Rolling (arXiv 2610.25043): reuse the discarded chunk tail as the next chunk's denoising start; fit for XR-1 and what to test |
 | [`2026-10-22-s1-candidates.md`](research/2026-10-22-s1-candidates.md) | S1 candidates with verified results (π0.5, Xiaomi-Robotics-0/1, MolmoAct2, GR00T): which S1 for RoboCasa, LIBERO, real SO-101 / Franka; licences; flip triggers |
@@ -44,15 +48,17 @@ Where each kind of document lives. Code map: [`CODEBASE.md`](CODEBASE.md).
 ## Features: `features/` (how each built part works and what was verified)
 | Doc | Covers |
 |---|---|
-| [`v3-runtime.md`](features/v3-runtime.md) | v3 runtime core: messages, execution runtime (leases, review, blending, holds), guard, control loop, robot plug-ins, state owner (two lanes, keyframes), S2 worker, baseline deciders, v1 role split; runtime live results incl. π0.5² |
+| [`pipeline.md`](features/pipeline.md) | **Start here for reports**: the whole system on one page: components, data flow, triggers, memory, done-check cascade, liveness, S1 / S2 today, plug-ins, time modes, run records, what is tested and not validated |
+| [`app-session.md`](features/app-session.md) | Shared assembly `rojev/app`: embodiment, config, plug-ins, `Session` (lockstep / real time), records, video |
+| [`v3-runtime.md`](features/v3-runtime.md) | v3 runtime core: messages, execution runtime (leases, review, blending, holds), guard, control loop, robot plug-ins, state owner (two lanes, event-driven planning, owner-owned lease, task memory), S2 worker, baseline deciders, step planner; runtime live results |
 | [`execution-monitor.md`](features/execution-monitor.md) | Kinematic execution monitor: effect models, conformal calibration, `Deviation` → owner + refill, results and limits |
-| [`remote-models.md`](features/remote-models.md) | Remote models: transport (HTTP/1.1 keep-alive, HTTP/3), wire v3 and codecs, π0.5² / XR-1 / OneJev / MJev / SAM 2 services, `KeptClient`, WAN measurements |
-| [`plan/specs/any-robot/00-index.md`](plan/specs/any-robot/00-index.md) | SPEC (not built): one assembly layer `rojev/app`, robots as executor plug-ins; slices: app layer, RoboCasa on it, MuJoCo SO-101 proof |
-| [`system1-map.md`](features/system1-map.md) | System 1 map (start here for S1): call map, control loop → guard → runtime ← runner ← π0.5², commitment, transport, monitor, messages, timeline, evidence |
-| [`system2-map.md`](features/system2-map.md) | System 2 map (start here for S2): owner lanes / holds / dialogue, workers, planning lane, Jev v1, step watcher, messages to S1, timeline, evidence |
+| [`remote-models.md`](features/remote-models.md) | Remote models: transport (HTTP/1.1 keep-alive, HTTP/3), wire v3 and codecs, π0.5² / XR-1 / GR00T / LeRobot-policy / OneJev / MJev / SAM 2 / R1.5 services, `KeptClient`, chat VLM client, WAN measurements |
+| [`plan/specs/any-robot/00-index.md`](plan/specs/any-robot/00-index.md) | SPEC suite: one assembly layer `rojev/app`, robots as executor plug-ins; slice 1 built (with differences), slice 2 not built, slice 3 replaced by LIBERO |
+| [`system1-map.md`](features/system1-map.md) | System 1 map (start here for S1): call map (`Session` / LIBERO and the RoboCasa app), control loop → guard → runtime ← runner ← policy services, commitment, transport, monitor, messages, timeline, evidence |
+| [`system2-map.md`](features/system2-map.md) | System 2 map (start here for S2): owner triggers / lanes / holds / lease / memory, workers, planning lane (step planner + R1.5 client), Jev v1, done-check cascade, messages to S1, timeline, evidence |
 | [`jev-interaction.md`](features/jev-interaction.md) | Jev v1 interaction lane (legal acts, calibration, abstention, budgets, REVISE), owner holds / dialogue / utterances / step events, MJev end-state checks + step watcher; flags, spoofs, tests, what is not validated |
-| [`robot-interface.md`](features/robot-interface.md) | Robot interface (`rojev.robot`: MuJoCo SO-101, mock; hardware adapter later): limits, cameras, clocks and time modes |
-| [`README.md`](features/README.md) | Levers: current knobs that change behaviour: default, where set (flag / constant), trade-off, owning page |
+| [`robot-interface.md`](features/robot-interface.md) | Robot interface (`rojev.robot`: MuJoCo SO-101, mock; hardware adapter later) and robot plug-ins (`Embodiment`, `Backend`, `ActionSpec`; LIBERO, RoboCasa): limits, cameras, clocks and time modes |
+| [`README.md`](features/README.md) | Levers: current knobs that change behaviour: default, where set (`SessionConfig` key / flag / constant), trade-off, owning page |
 
 ## Utilities: `utils/` (harness, S1 supply, scoring, tracing)
 | Doc | Covers |
