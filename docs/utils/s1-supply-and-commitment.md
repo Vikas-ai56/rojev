@@ -2,7 +2,7 @@
 
 Code: `rojev/system1/runner.py` (`S1Runner`, `S1Stats`), `rojev/system1/commit.py` (`FixedCommit`, `PhaseCommit`,
 `ConsensusCommit`, `make_commit_policy`), `rojev/system1/policy.py` (`Policy`, `ActionChunk`, `Continuation`),
-`rojev/control/execution.py` (`target`, `queued_until`, `queued_from`, `submit`, `starved_ticks`).
+`rojev/control/execution.py` (`target`, `queued_end`, `queued_from`, `submit`, `starved_ticks`).
 Tests: `tests/test_system1_runner.py` (18 + 2 `timing`), `tests/test_system1_commit.py` (43). Spec:
 `docs/plan/v3-v1-spec.md` §14. Line-by-line walkthrough: [`system1-map.md`](../features/system1-map.md) §5–6. Remote policy and
 services: [`remote-models.md`](../features/remote-models.md).
@@ -12,7 +12,9 @@ to; L is the request **latency** (observation age when its chunk is submitted, r
 
 ## Cycle (one `S1Runner.step`; own thread, or once per tick in lockstep)
 1. `runtime.target()`: the pending command, else the active one while it moves (or is held "starved"); none → no request.
-2. Request if `refill_now` was taken for this command, nothing is queued for it, or `queued_until − now ≤ lead_s()`.
+2. Request if `refill_now` was taken for this command, or `chunk_due`: nothing is queued for it, or the current chunk's
+   replacement point − now ≤ `lead_s()` + dt/2. The replacement point is after the model's `execute_steps`
+   (`ActionChunk.execute_steps`, sent with the chunk), else `queued_end` (the last action's due time + dt).
 3. Newest `Capture`; its task replaced by the command's `instruction`; subtask = `operation.subtask` ("" = S1 plans).
 4. Continuation (see below) for a policy that `accepts_continuation`.
 5. `policy.act(…, deadline_s())`, or `act_samples(…, K)` when the commit policy has `samples` K > 1.
@@ -35,7 +37,8 @@ to; L is the request **latency** (observation age when its chunk is submitted, r
 ## Latency → lead time and floor
 - L estimate = max of the last `latency_window` (20) samples: a commitment must cover the slow tail.
 - Gap-free with one request in flight iff lead ≥ L and committed span n·dt ≥ 2L (plus one tick of quantization).
-- `lead_s() = max(refill_s, L + dt)`; `floor(H) = ⌈2L/dt⌉ + 1`; before the first sample lead = `refill_s`, floor = H.
+- `lead_s() = L + dt` (clock runs while S1 thinks) or 0 (lockstep); `floor(H) = ⌈2L/dt⌉ + 1`; before the first
+  sample lead = dt, floor = H. The actions after the replacement point stay queued as a buffer for a late answer.
 - Floor > H (even the whole chunk cannot cover 2L): counted per request in `floor_over_chunk`; starvation follows.
 - Lockstep: simulated time stands still while S1 thinks, so L = 0 and the floor is 1 (XR-1 parity runs:
   `s1_floor_last` 1).
@@ -70,11 +73,13 @@ Every policy commits at least `min(floor, H)` and at most the chunk, always a pr
   - Majority, not plurality: 2 of 5 closing first do not decide. With K = 2 any disagreement after the floor ends it.
 
 ## Configuration
-- `S1Runner(runtime, policy, latest, now, refill_s, poll_s=0.005, error_backoff_s=0.5, commit=FixedCommit(),
-  latency_window=20, on_step, on_plan, deadline=True)`; `refill_now(cmd_id) → bool`.
+- `S1Runner(runtime, policy, latest, now, poll_s=0.005, error_backoff_s=0.5, commit=FixedCommit(),
+  latency_window=20, on_step, on_plan, clock_runs_while_thinking=True)`; `refill_now(cmd_id) → bool`;
+  `chunk_due(cmd_id, now) → bool`.
+- Actions run per chunk: the model's `execute_steps` (in its service config, sent with every chunk); none → whole chunk.
 - `make_commit_policy(commit_policy="fixed"|"phase", speculative_predict=False, **params)`: a parameter that does not
   apply raises.
-- `realtime.py`: `--s1 pi052|xr1`, `--refill` (1.0 s), `--lockstep`, `--commit-policy`, `--speculative-predict`,
+- `realtime.py`: `--s1 pi052|xr1`, `--lockstep`, `--commit-policy`, `--speculative-predict`,
   `--samples`, `--tolerance`; no flags for `smooth`, `slow_fraction`, `max_commit`.
 - Per run: `S1Stats` → `summary.json` (`s1_latency_est_s`, `s1_floor_last`, `s1_timeouts`, `starved_ticks`, …);
   per call `s1_requests.jsonl`, `commits.jsonl`.
@@ -86,7 +91,7 @@ Every policy commits at least `min(floor, H)` and at most the chunk, always a pr
 
 | Live run (RoboCasa, `realtime.py`) | Result | Status |
 |---|---|---|
-| XR-1 parity, lockstep, `--refill 0.05`, fixed (`results/xr1-parity/20261022-fixed`, 20 runs) | 0 starved ticks, 0 timeouts; one request per ~14.5 ticks (31 per 450-tick episode) | valid (E23) |
+| XR-1 parity, lockstep, `--refill 0.05` (removed since), fixed (`results/xr1-parity/20261022-fixed`, 20 runs) | 0 starved ticks, 0 timeouts; one request per ~14.5 ticks (31 per 450-tick episode) | valid (E23) |
 | XR-1 real time, F13 (`results/campaign/20261024-134629/F13`) | L estimate 0.9 s, floor 38 > 16-action chunk; 64 requests, 36 accepted, 13 timeouts; 651 of 985 ticks starved | valid (E24) |
 | π0.5² over the WAN, keep-alive (2026-10-21) | — | withdrawn: corrupted frames |
 | RTC / delay A/B with π0.5² (2026-10-22) | — | withdrawn: corrupted frames; not re-run |

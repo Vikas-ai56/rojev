@@ -49,7 +49,7 @@ class RemotePolicy(Policy):
         return [ActionChunk(c.actions, {**c.timings_ms, "network": round(rtt - sum(c.timings_ms.values()), 1),
                                         "round_trip": round(rtt, 1), "request_kb": round(len(body) / 1024, 1),
                                         **client_ms},
-                            {**c.info, "codec": self.codec}) for c in chunks]
+                            {**c.info, "codec": self.codec}, c.execute_steps) for c in chunks]
 
     def reset(self) -> None:
         self.transport.request("POST", "/reset")

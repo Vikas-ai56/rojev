@@ -39,15 +39,18 @@ class Robot:
 class StandInPolicy(Policy):
     """`think(seconds)` stands for inference: wall sleep in timing tests, simulated control ticks in logic tests."""
 
-    def __init__(self, latency_s: float, horizon: int = 20, fail: bool = False, think=time.sleep):
+    def __init__(self, latency_s: float, horizon: int = 20, fail: bool = False, think=time.sleep,
+                 execute_steps: int | None = None):
         self.latency_s, self.horizon, self.fail, self.think, self.calls = latency_s, horizon, fail, think, 0
+        self.execute_steps = execute_steps
 
     def act(self, obs: Observation, subtask: str, timeout_s: float | None = None) -> ActionChunk:
         self.calls += 1
         self.think(self.latency_s)
         if self.fail:
             raise ConnectionError("service unreachable")
-        return ActionChunk(np.array([[k + 1, -1.0] for k in range(self.horizon)], dtype=np.float32))
+        return ActionChunk(np.array([[k + 1, -1.0] for k in range(self.horizon)], dtype=np.float32),
+                           execute_steps=self.execute_steps)
 
     def reset(self) -> None:
         pass
@@ -56,14 +59,13 @@ class StandInPolicy(Policy):
 class Sim:
     """Deterministic: simulated clock; the policy's latency runs the ticks that fall inside it."""
 
-    def __init__(self, latency_s, horizon=20, refill_s=0.15, fail=False, watchdog_s=0.3, policy=None):
+    def __init__(self, latency_s, horizon=20, fail=False, watchdog_s=0.3, policy=None):
         self.clock = ManualClock()
         self.robot = Robot(self.clock)
         self.runtime = ExecutionRuntime(SPEC, epoch=1, last=np.array([0.0, -1.0]), blend_s=0.0)
         self.loop = ControlLoop(self.robot, Guard(self.runtime, watchdog_s=watchdog_s), SPEC, realtime=False)
         self.policy = policy or StandInPolicy(latency_s, horizon, fail, think=self.think)
-        self.runner = S1Runner(self.runtime, self.policy, self.loop.latest, self.loop.now, refill_s=refill_s,
-                               error_backoff_s=0.0)
+        self.runner = S1Runner(self.runtime, self.policy, self.loop.latest, self.loop.now, error_backoff_s=0.0)
         self.next_tick = 0.0
 
     def think(self, seconds: float) -> None:
@@ -89,8 +91,64 @@ def values(sim):
     return [float(a[0]) for a in sim.robot.applied]
 
 
+def chunk_runs(applied: list[float]) -> list[list[int]]:
+    """The applied actions split per chunk: a chunk's actions carry 1, 2, …, so each drop starts the next chunk."""
+    runs: list[list[int]] = []
+    for v in (int(v) for v in applied if v != 0.0):
+        if not runs or v <= runs[-1][-1]:
+            runs.append([])
+        runs[-1].append(v)
+    return runs
+
+
+class Lockstep:
+    """Session's lockstep alternation: one S1 supply step, then one control tick; the clock stops while S1 thinks."""
+
+    def __init__(self, policy: Policy):
+        self.robot = Robot()
+        self.runtime = ExecutionRuntime(SPEC, epoch=1, last=np.array([0.0, -1.0]), blend_s=0.0)
+        self.loop = ControlLoop(self.robot, Guard(self.runtime, watchdog_s=0.3), SPEC, realtime=False)
+        self.runner = S1Runner(self.runtime, policy, self.loop.latest, self.loop.now, clock_runs_while_thinking=False)
+        self.runtime.accept(AcceptedGoal(1, 1, 0, GO, Transition.PAUSE_HOLD, expires_t=100.0), 0.0)
+
+    def run(self, ticks: int) -> list[list[int]]:
+        for _ in range(ticks):
+            self.runner.step()
+            self.loop.run_ticks(1)
+        return chunk_runs([float(a[0]) for a in self.robot.applied])
+
+
+def test_in_lockstep_the_robot_runs_exactly_the_actions_the_model_means_to_run():
+    """A whole chunk runs to its last action (the queue's end is the last action's due time plus a tick), and a
+    chunk with `execute_steps` is replaced on the tick after that many actions; no tick starves."""
+    whole = Lockstep(StandInPolicy(0.0, horizon=16, think=lambda s: None))
+    assert whole.run(16 * 4)[:-1] == [list(range(1, 17))] * 3 and whole.runtime.starved_ticks == 0
+    recipe = Lockstep(StandInPolicy(0.0, horizon=16, think=lambda s: None, execute_steps=8))
+    runs = recipe.run(8 * 6)
+    assert runs[:-1] == [list(range(1, 9))] * 5 and recipe.runtime.starved_ticks == 0
+
+
+def test_in_real_time_a_chunk_is_replaced_by_its_execute_steps_and_its_tail_stays_queued():
+    """The request leads the replacement point by the latency, so no chunk runs past its `execute_steps`; the actions
+    after that point stay queued, so a slower answer finds the robot still moving."""
+    sim = Sim(latency_s=0.05, horizon=20)
+    sim.policy = sim.runner.policy = StandInPolicy(0.05, 20, think=sim.think, execute_steps=10)
+    sim.go()
+    sim.run(2.0)
+    runs = chunk_runs(values(sim))
+    assert len(runs) >= 2.0 / (10 * DT) - 1 and all(9 <= max(run) <= 10 for run in runs[1:-1])
+    assert sim.runtime.starved_ticks == 0 and sim.runtime.queued_end(1) - sim.clock.t > (20 - 10) * DT
+
+
+def test_execute_steps_outside_the_chunk_fails_at_construction():
+    with pytest.raises(ValueError, match="execute_steps 17 outside 1..16"):
+        ActionChunk(np.zeros((16, 2)), execute_steps=17)
+    with pytest.raises(ValueError, match="execute_steps 0"):
+        ActionChunk(np.zeros((16, 2)), execute_steps=0)
+
+
 def test_runner_keeps_a_command_supplied_without_gaps():
-    sim = Sim(latency_s=0.05, horizon=20, refill_s=0.15)
+    sim = Sim(latency_s=0.05, horizon=20)
     sim.go()
     sim.run(1.5)
     applied = values(sim)
@@ -101,7 +159,7 @@ def test_runner_keeps_a_command_supplied_without_gaps():
 
 
 def test_actions_due_during_inference_are_skipped_and_latency_is_measured():
-    sim = Sim(latency_s=0.1, horizon=20, refill_s=0.0)
+    sim = Sim(latency_s=0.1, horizon=20)
     sim.go()
     sim.run(0.4)
     first_value = next(v for v in values(sim) if v != 0.0)
@@ -111,7 +169,7 @@ def test_actions_due_during_inference_are_skipped_and_latency_is_measured():
 
 
 def test_after_the_first_request_the_lead_time_covers_the_latency():
-    sim = Sim(latency_s=0.1, horizon=30, refill_s=0.0)
+    sim = Sim(latency_s=0.1, horizon=30)
     sim.go()
     sim.run(0.25)
     starved_after_first = sim.runtime.starved_ticks
@@ -120,7 +178,7 @@ def test_after_the_first_request_the_lead_time_covers_the_latency():
 
 
 def test_policy_slower_than_its_chunk_never_moves_the_robot():
-    sim = Sim(latency_s=0.6, horizon=10, refill_s=0.0)
+    sim = Sim(latency_s=0.6, horizon=10)
     sim.go()
     sim.run(1.3)
     assert sim.runner.stats.requests >= 2 and sim.runner.stats.accepted == 0
@@ -129,7 +187,7 @@ def test_policy_slower_than_its_chunk_never_moves_the_robot():
 
 
 def test_revoke_stops_supply_and_late_chunks_are_rejected():
-    sim = Sim(latency_s=0.05, refill_s=0.3)
+    sim = Sim(latency_s=0.05)
     sim.go()
     sim.run(0.4)
     sim.runtime.revoke(Revoke(1, 1, "user changed mind"), sim.clock.t)
@@ -140,7 +198,7 @@ def test_revoke_stops_supply_and_late_chunks_are_rejected():
 
 
 def test_a_chunk_in_flight_when_revoked_is_rejected():
-    sim = Sim(latency_s=0.05, refill_s=0.3)
+    sim = Sim(latency_s=0.05)
 
     class RevokesWhileThinking(StandInPolicy):
         def act(self, obs, subtask, timeout_s=None):
@@ -180,7 +238,7 @@ def test_policy_is_conditioned_on_the_commands_instruction_not_the_stale_task():
 
 
 def test_refill_now_requests_a_chunk_even_with_a_full_queue():
-    sim = Sim(latency_s=0.0, horizon=50, refill_s=0.1)
+    sim = Sim(latency_s=0.0, horizon=50)
     sim.go()
     assert sim.runner.step() and not sim.runner.step()
     assert sim.runner.refill_now(1)
@@ -188,7 +246,7 @@ def test_refill_now_requests_a_chunk_even_with_a_full_queue():
 
 
 def test_a_refill_for_another_command_is_ignored_and_counted():
-    sim = Sim(latency_s=0.0, horizon=50, refill_s=0.1)
+    sim = Sim(latency_s=0.0, horizon=50)
     sim.go()
     assert sim.runner.step()
     assert not sim.runner.refill_now(7) and not sim.runner.refill_now(None)
@@ -200,12 +258,12 @@ def test_a_refill_for_another_command_is_ignored_and_counted():
 
 
 def test_a_floor_longer_than_the_chunk_is_counted():
-    slow = Sim(latency_s=0.3, horizon=20, refill_s=0.0)
+    slow = Sim(latency_s=0.3, horizon=20)
     slow.go()
     slow.run(1.5)
     assert slow.runner.stats.floors[0] == 20 and max(slow.runner.stats.floors) == math.ceil(0.6 / DT) + 1
     assert slow.runner.stats.floor_over_chunk == slow.runner.stats.requests - 1
-    fast = Sim(latency_s=0.05, horizon=20, refill_s=0.15)
+    fast = Sim(latency_s=0.05, horizon=20)
     fast.go()
     fast.run(1.5)
     assert fast.runner.stats.requests > 2 and fast.runner.stats.floor_over_chunk == 0
@@ -249,7 +307,7 @@ def test_any_rojev_robot_plugs_in_so101_lockstep():
         q0 = backend.current_command()
         runtime = ExecutionRuntime(spec, epoch=1, last=q0.copy(), blend_s=0.0)
         loop = ControlLoop(backend, Guard(runtime), spec)
-        runner = S1Runner(runtime, Ramp(q0), loop.latest, loop.now, refill_s=0.5)
+        runner = S1Runner(runtime, Ramp(q0), loop.latest, loop.now)
         runtime.accept(AcceptedGoal(1, 1, 0, GO, Transition.PAUSE_HOLD, expires_t=100.0), robot.clock.now())
         rate = Rate(robot.clock, spec.control_hz)
 
@@ -295,7 +353,7 @@ def test_so101_realtime_keeps_its_clock_and_lag_budget():
         q0 = backend.current_command()
         runtime = ExecutionRuntime(spec, epoch=1, last=q0.copy(), blend_s=0.0)
         loop = ControlLoop(backend, Guard(runtime), spec)
-        runner = S1Runner(runtime, Ramp(q0), loop.latest, loop.now, refill_s=0.5)
+        runner = S1Runner(runtime, Ramp(q0), loop.latest, loop.now)
         runtime.accept(AcceptedGoal(1, 1, 0, GO, Transition.PAUSE_HOLD, expires_t=100.0), robot.clock.now())
         w0, t0 = time.perf_counter(), robot.clock.now()
         loop.start()
@@ -390,7 +448,7 @@ class ContinuingPolicy(StandInPolicy):
 def test_a_continuing_policy_gets_the_queued_actions_from_its_observation_and_the_latency_in_steps():
     """No continuation before a latency is measured; afterwards the actions still queued from the capture on, of
     which ⌈L/dt⌉ run before the chunk lands."""
-    sim = Sim(latency_s=0.1, horizon=20, refill_s=0.3)
+    sim = Sim(latency_s=0.1, horizon=20)
     sim.policy = ContinuingPolicy(0.1, 20, think=sim.think)
     sim.runner.policy = sim.policy
     sim.go()
@@ -403,7 +461,7 @@ def test_a_continuing_policy_gets_the_queued_actions_from_its_observation_and_th
 
 
 def test_a_policy_that_cannot_continue_is_never_given_a_continuation():
-    sim = Sim(latency_s=0.1, horizon=20, refill_s=0.3)
+    sim = Sim(latency_s=0.1, horizon=20)
     sim.go()
     sim.run(1.0)
     assert sim.policy.calls >= 3 and sim.runner.stats.continuations == 0
@@ -418,9 +476,9 @@ def test_without_a_deadline_a_request_carries_no_timeout():
             timeouts.append(timeout_s)
             return super().act(obs, subtask, timeout_s)
 
-    sim = Sim(latency_s=0.1, horizon=20, refill_s=0.3)
+    sim = Sim(latency_s=0.1, horizon=20)
     sim.policy = sim.runner.policy = Timed(0.1, 20, think=sim.think)
-    sim.runner.deadline = False
+    sim.runner.clock_runs_while_thinking = False
     sim.go()
     sim.run(1.0)
     assert len(timeouts) >= 2 and all(t is None for t in timeouts)

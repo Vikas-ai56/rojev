@@ -344,6 +344,9 @@ def test_wire_is_versioned_and_carries_k_samples():
     chunks = [ActionChunk(np.full((5, 3), i, np.float32), {"infer": float(i)}, {"i": i}) for i in range(4)]
     back = wire.decode_response(wire.encode_response(chunks))
     assert [c.info for c in back] == [{"i": i} for i in range(4)] and back[3].timings_ms == {"infer": 3.0}
+    assert all(c.execute_steps is None for c in back)
+    recipe = wire.decode_response(wire.encode_response([ActionChunk(np.zeros((5, 3), np.float32), execute_steps=2)]))
+    assert recipe[0].execute_steps == 2
     assert all(np.array_equal(a.actions, b.actions) for a, b in zip(chunks, back))
     with pytest.raises(ValueError):
         wire.encode_request(obs(), "s", 0)
