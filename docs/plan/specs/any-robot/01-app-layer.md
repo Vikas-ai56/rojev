@@ -1,6 +1,7 @@
 # Slice 1: `rojev/app`, the assembly layer
 
-**Status:** SPEC, not built. Grounded on `v3-runtime` @ `0b5caa9`. One PR.
+**Status:** BUILT 2026-11-10 with differences (see [`00-index.md`](00-index.md), "Built vs this spec"). Grounded on
+`v3-runtime` @ `0b5caa9`. Kept as the design record.
 
 ## Public interface (`rojev/app/__init__.py`)
 ```python

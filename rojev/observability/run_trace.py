@@ -5,7 +5,7 @@ commitments and S2 decisions (per-call logs), deviations, and the run's config a
 in seconds from the run start; `t0_ns` maps them to wall time.
 
   run                          config + headline metrics
-  ├── command <id> <op> …      from issue to the next command (or run end); events: ACKs, review, keyframe, deviation
+  ├── command <id> <op> …      from issue to the next command (or run end); events: ACKs, review, step done / undone, deviation
   ├── s1.request               capture → submit; subtask, samples, commitment (floor, steps, reason, votes)
   ├── s2.<lane>.decide         request → proposal; trigger, operation, reason, outcome (applied / refused + why)
   └── user                     each instruction the user gave (zero-length)
@@ -52,7 +52,7 @@ def _commands(tracer, ctx, t0_ns: int, duration_s: float, events: list[dict]) ->
         span = tracer.start_span(f"command {e['cmd']} {e['op']} {e.get('subtask') or ''}".strip(), context=ctx,
                                  start_time=_ns(t0_ns, e["t"]), attributes=_attrs(e))
         for x in events:
-            if x.get("cmd") == e["cmd"] and x["kind"] in ("ack", "review", "keyframe", "deviation", "stale deviation"):
+            if x.get("cmd") == e["cmd"] and x["kind"] in ("ack", "review", "step done", "step undone", "deviation", "stale deviation"):
                 span.add_event(x["kind"] if x["kind"] != "ack" else f"ack {x['status']}", attributes=_attrs(x),
                                timestamp=_ns(t0_ns, x["t"]))
         span.end(end_time=_ns(t0_ns, max(end, e["t"])))

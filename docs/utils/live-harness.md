@@ -49,7 +49,7 @@ Related: [`v3-runtime.md`](../features/v3-runtime.md) · [`s1-supply-and-commitm
 | `--lockstep` | off | see time modes |
 | `--model-delay` | off | with `--lockstep`: measured model delay added back (see time modes) |
 | `--frame-check-every S`, `--record-frames S` | 1.0, off | frame integrity sampling; cameras + sim state for `sam_check.py track` |
-| `--on-change`, `--review-s`, `--stop-s`, `--refill`, `--blend`, `--lease`, `--decide-every` | `review`, 1.0, 0.3, 1.0, 0.2, 3.0, 1.0 (0.8 × lease with step events) | owner / runtime parameters |
+| `--on-change`, `--review-s`, `--stop-s`, `--blend`, `--lease`, `--watchdog`, `--step-budget`, `--liveness`, `--recheck` | `review`, 1.0, 0.3, 0.2, 3.0, 10 (1 for polling arms), off (`--max-commit` for commit), 30, 0.5 | owner / runtime / watcher parameters |
 | `--commit-policy`, `--speculative-predict --samples K`, `--tolerance` | `fixed`, off | commitment (an inapplicable parameter is an error) |
 | `--execution-monitor M`, `--monitor-record OUT`, `--block-at T --block-s D` | off, off, off / 2 s | monitor model / nominal recording / blocked-arm fault |
 | `--viewer`, `--video`, `--trace PROJECT`, `--out` | off | mirror window · `view.mp4` · Phoenix export after the run · run directory |
@@ -59,7 +59,8 @@ Related: [`v3-runtime.md`](../features/v3-runtime.md) · [`s1-supply-and-commitm
 - Outputs (`results/runs/realtime/<id>/` unless `--out`): `config.json`, `ticks.jsonl`, `owner.jsonl`,
   `s1_requests.jsonl`, `commits.jsonl`, `decisions.jsonl` (both lanes: op, reason, `scores`, `task`, `decide_ms`),
   `utterances.jsonl`, `typed.jsonl` (interactive), `verify_checks.jsonl` (`--verify`), `frames/`, `live/`, `view.mp4`,
-  `summary.json` (timing, commands, refused, keyframes, lanes, ACKs, holds, said, step events, S1 stats, monitor,
+  `episodes.jsonl` (the finished task: memory, outcome, dialogue), `summary.json` (timing, commands, refused, task
+  memory, lanes, ACKs, holds, said, step events, S1 stats, monitor,
   `frame_check`, `ended`: seconds · wall · success · quit · error).
 - `--trace` builds spans from the records after the run (`run_trace.export_run`); nothing is traced on the control path.
 
@@ -90,7 +91,7 @@ Related: [`v3-runtime.md`](../features/v3-runtime.md) · [`s1-supply-and-commitm
 
 | Case | Setup | Expectations | Declared changes (t: kind → act) |
 |---|---|---|---|
-| nominal | 16 s | first two steps in order, a keyframe, 0 starved | — |
+| nominal | 16 s | first two steps in order, the first recorded done, 0 starved | — |
 | speculative / -phase | K = 3, noise 0.01 (+ phase policy) | a consensus rule fired / a commitment shorter than the chunk; 0 starved | — |
 | harmless | rules, "nice work" 5 s | interaction-lane `continue`, no new command from it; moving 2 s after | 5: harmless → continue |
 | revise | rules, "…on the plate" 4 s, "no, …microwave" 14 s | place step → plate; in-step revision → microwave by the interaction lane | 4: goal_swap → continue · 14: goal_swap → revise |
@@ -103,7 +104,7 @@ Related: [`v3-runtime.md`](../features/v3-runtime.md) · [`s1-supply-and-commitm
 | s2-slow | rules, delay 1.6 s > timeout 1.0 s | timeout, `unanswered` said, planning never answers, holding | 5: pause → wait |
 | s2-fail | rules, decider raises | `decision failed`, unanswered hold within 1 s, planning never answers, holding | 5: pause → wait |
 | s1-slow | S1 latency 0.9 s | floor ≥ 37, 0 starved | — |
-| step-events | `revisable-truth` + `--verify truth`; needs `--policy remote` | a step event; a keyframe with the checker's evidence | — |
+| step-events | `revisable-truth` + `--verify truth`; needs `--policy remote` | a step event; a done record with the checker's evidence | — |
 | blocked | rules stand-in, monitor on, arm blocked 6–8 s; needs `--monitor` | a deviation, RETRY from the interaction lane (the stand-in's own act) | 6: deviation → revise |
 | jev-blocked | jev + keyword chooser, same block | a deviation, GUARDED_WAIT from the interaction lane, never a retry (Jev offers continue / wait on a deviation) | 6: deviation → wait |
 

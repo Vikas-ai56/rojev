@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 
 from realtime import RoboCasaBackend
-from rojev.protocol import Capture, Deviation, ObservationSnapshot, Operation, OpKind
+from rojev.protocol import Capture, Deviation, ObservationSnapshot, Operation, OpKind, TaskMemory
 from rojev.system1 import RemotePolicy
 from rojev.system2.jev import CanonicalTask, JevInteraction, OneJevChooser
 from rojev.system2.models import onejev
@@ -66,7 +66,7 @@ def realtime(out: Path, service: Path, args: list[str], seconds: float) -> dict:
             "s1_wall_ms_p50": pct(walls, 50), "s1_wall_ms_p90": pct(walls, 90),
             "first_request_ms": requests[0].get("wall_ms") if requests else None,
             "s1_floor_last": s["s1_floor_last"], "planner_steps": s.get("s1_planner_steps"),
-            "keyframes": [k["subtask"] for k in s["keyframes"]], "commands": len(s["commands"]),
+            "steps_done": [m["step"] for m in s["memory"] if m["status"] == "done"], "commands": len(s["commands"]),
             "commit_reasons": s["s1_commit_reasons"], "said": [u["template"] for u in s.get("said", [])],
             "holds": s.get("holds"), "interaction_lane": s.get("interaction_lane"), "verify": s.get("verify")}
 
@@ -134,9 +134,10 @@ def jev(out: Path, service: Path, quick: bool) -> dict:
     chooser = OneJevChooser(onejev.KeptClient(url), list(CAMS))
     decider = JevInteraction(chooser, CanonicalTask(chooser, [capture.observation.task]))
     step = Operation(OpKind.SWITCH_TO, subtask="pick up the steak")
+    memory = TaskMemory(capture.observation.task)
     snaps = {"instruction": ObservationSnapshot(1, 1, 5.0, capture, 1, "actually, put the steak on the plate", 1,
-                                                step, 0.0, (), "instruction"),
-             "deviation": ObservationSnapshot(1, 2, 5.0, capture, 0, capture.observation.task, 1, step, 0.0, (),
+                                                step, 0.0, memory, "instruction"),
+             "deviation": ObservationSnapshot(1, 2, 5.0, capture, 0, capture.observation.task, 1, step, 0.0, memory,
                                               "deviation", deviation=Deviation(1, 1, 5.0, 3.0, 2.0))}
     latency = {}
     for name, snap in snaps.items():

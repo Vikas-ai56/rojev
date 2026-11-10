@@ -1,6 +1,7 @@
 # Slice 2: the RoboCasa executor on `Session` (behaviour-preserving)
 
-**Status:** SPEC, not built. Grounded on `v3-runtime` @ `0b5caa9`. One PR, after slice 1.
+**Status:** NOT BUILT. Owner, 2026-11-10: keep the RoboCasa app as is (it already uses the new owner, done checks and
+memory). Grounded on `v3-runtime` @ `0b5caa9`; line references below have drifted.
 
 ## What stays in the executor (RoboCasa specifics only)
 | Kept | Where today |

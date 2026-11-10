@@ -8,7 +8,7 @@ from harness.deciders import (KeywordChooser, RevisableSequence, RewriteReviser,
                               rewrite)
 from embodiment import PANDA_OMRON
 from harness.invariants import Run, active_monotonic, changes_answered, no_stale_action, switches_held
-from rojev.protocol import USER, Capture, Hold, Observation, ObservationSnapshot, Operation, OpKind, Turn
+from rojev.protocol import USER, Capture, Hold, Observation, ObservationSnapshot, Operation, OpKind, TaskMemory, Turn
 from rojev.system2.jev import CLARIFY, JevInteraction
 
 PICK = Operation(OpKind.SWITCH_TO, subtask="pick up the steak")
@@ -21,7 +21,7 @@ def snap(text="task", op=None, trigger="instruction", rev=1, since=None, now=0.0
     hold = Hold(op, now, interrupted) if op is not None and not op.moves_robot() else None
     task = text if task is None else task
     return ObservationSnapshot(1, 1, now, Capture(0, now, Observation({}, np.zeros(16), task)), rev, task,
-                               1 if op else None, op, since, (), trigger, hold=hold,
+                               1 if op else None, op, since, TaskMemory(task), trigger, hold=hold,
                                dialogue=(Turn(now, USER, rev, text=text),))
 
 
@@ -66,9 +66,9 @@ def test_jev_with_keyword_scores_and_the_rewrite_reviser_answers_like_the_rules(
 def test_revisable_sequence_follows_the_instruction_and_its_budget():
     p = RevisableSequence(SEQ, budget_s=5.0)
     assert p.decide(snap(op=None, rev=0)).operation.subtask == SEQ[0]
-    assert p.decide(snap("put it on the plate", PICK, "heartbeat", since=0.0, now=6.0)).operation.subtask == \
+    assert p.decide(snap("put it on the plate", PICK, "watchdog", since=0.0, now=6.0)).operation.subtask == \
         "place the steak on the plate"
-    assert p.decide(snap(op=Operation(OpKind.GUARDED_WAIT), trigger="heartbeat")).operation.kind == OpKind.CONTINUE
+    assert p.decide(snap(op=Operation(OpKind.GUARDED_WAIT), trigger="watchdog")).operation.kind == OpKind.CONTINUE
 
 
 def run_of(ticks, events, sim_s=10.0):
@@ -100,7 +100,7 @@ def test_jev_decisions_become_calibration_cases_a_person_can_label(tmp_path):
 
     cams = {"left": np.zeros((4, 4, 3), np.uint8), "right": np.full((4, 4, 3), 9, np.uint8)}
     s = ObservationSnapshot(1, 7, 3.0, Capture(5, 3.0, Observation(cams, np.zeros(16), "task")), 1, "task", 1,
-                            PICK, 0.0, (), "instruction", dialogue=(Turn(3.0, USER, 1, text="stop now"),))
+                            PICK, 0.0, TaskMemory("task"), "instruction", dialogue=(Turn(3.0, USER, 1, text="stop now"),))
     recorder = InteractionCases(JevInteraction(KeywordChooser(), reviser=RewriteReviser()), ["left", "right"],
                                 tmp_path, "run1")
     assert recorder.decide(s).operation.kind == OpKind.ABORT and recorder.saved == 1
@@ -130,7 +130,7 @@ def test_a_revision_records_both_questions_as_cases(tmp_path):
 
     cams = {"left": np.zeros((4, 4, 3), np.uint8)}
     s = ObservationSnapshot(1, 8, 3.0, Capture(5, 3.0, Observation(cams, np.zeros(16), "task")), 1, "task", 1,
-                            PICK, 0.0, (), "instruction", dialogue=(Turn(3.0, USER, 1, text="plate pls"),))
+                            PICK, 0.0, TaskMemory("task"), "instruction", dialogue=(Turn(3.0, USER, 1, text="plate pls"),))
     stub = TaskStub()
     decider = JevInteraction(stub, CanonicalTask(stub, ["put the steak in the microwave", "put the steak on the plate"]))
     v = InteractionCases(decider, ["left"], tmp_path, "run1").decide(s)

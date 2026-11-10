@@ -141,7 +141,7 @@ def realtime_args(case: Case, out: Path, a, cases_dir: Path, skills_file: Path, 
                   ) -> list[str]:
     cmd = [sys.executable, str(HERE / "realtime.py"), "--task", case.task, "--seed", str(case.run_seed),
            "--arm", "native", "--interaction", "jev", "--skills", str(skills_file), "--seconds", str(SIM_CAP_S),
-           "--max-wall", str(a.max_wall), "--out", str(out), "--hold-recheck", "3", "--refill", "0.05"]
+           "--max-wall", str(a.max_wall), "--out", str(out), "--hold-recheck", "3"]
     if a.stand_in:
         cmd += ["--policy", "wiggle", "--chooser", "keywords"]
     else:

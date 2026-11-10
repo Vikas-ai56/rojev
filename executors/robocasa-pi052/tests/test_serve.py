@@ -56,7 +56,7 @@ def test_service_routes_k_samples_reset_health_and_refuses_another_wire_version(
     assert status == 200 and json.loads(body) == {"policy": "stand-in", "requests": 2}
     legacy = io.BytesIO()
     np.savez_compressed(legacy, state=np.zeros(16), task=np.array("t"), subtask=np.array("pick"))
-    assert service.handle("POST", "/act", {}, legacy.getvalue())[:2] == (400, b"wire version 1, expected 3")
+    assert service.handle("POST", "/act", {}, legacy.getvalue())[:2] == (400, b"wire version 1, expected 4")
     assert service.handle("POST", "/nope", {}, b"")[0] == 404
 
 

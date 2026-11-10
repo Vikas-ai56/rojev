@@ -41,7 +41,7 @@ def run(events, success_t=None):
 
 
 def test_state_is_read_before_the_answer_and_answers_are_classified():
-    events = [ev(0.0, "command", op="switch_to", request=1, lane="planning", trigger="heartbeat", decider="native"),
+    events = [ev(0.0, "command", op="switch_to", request=1, lane="planning", trigger="watchdog", decider="native"),
               ev(8.0, "instruction", text="wait"), ev(8.0, "hold", op="guarded_wait"),
               ev(8.0, "command", op="guarded_wait", request=2, lane="interaction", trigger="instruction", decider="j"),
               ev(12.0, "instruction", text="turn on the tap"), ev(12.0, "task", text=FAUCET, request=3),
@@ -59,7 +59,7 @@ def test_state_is_read_before_the_answer_and_answers_are_classified():
 
 
 def test_a_wrong_sentence_is_unsafe_and_a_resume_after_success_is_the_completion_gap():
-    events = [ev(0.0, "command", op="switch_to", request=1, lane="planning", trigger="heartbeat", decider="n"),
+    events = [ev(0.0, "command", op="switch_to", request=1, lane="planning", trigger="watchdog", decider="n"),
               ev(5.0, "instruction", text="x"), ev(5.0, "task", text="Open the microwave door.", request=2),
               ev(5.0, "reaffirm", op="switch_to", request=2, lane="interaction", trigger="instruction", decider="j"),
               ev(20.0, "instruction", text="go on"),
@@ -70,7 +70,7 @@ def test_a_wrong_sentence_is_unsafe_and_a_resume_after_success_is_the_completion
 
 
 def test_a_wait_that_holds_until_the_time_limit_is_not_a_pass():
-    events = [ev(0.0, "command", op="switch_to", request=1, lane="planning", trigger="heartbeat", decider="n"),
+    events = [ev(0.0, "command", op="switch_to", request=1, lane="planning", trigger="watchdog", decider="n"),
               ev(8.0, "instruction", text="wait"), ev(8.0, "hold", op="guarded_wait"),
               ev(8.0, "command", op="guarded_wait", request=2, lane="interaction", trigger="instruction", decider="j")]
     lines = [{"t": 8, "text": "wait", "intent": PAUSE}]

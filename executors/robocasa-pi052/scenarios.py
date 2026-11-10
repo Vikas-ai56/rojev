@@ -127,10 +127,10 @@ class Scenario:
 
 
 SCENARIOS = [
-    Scenario("nominal", "authored steps on a time budget; keyframes as steps are moved past", [],
+    Scenario("nominal", "authored steps on a time budget; each step moved past is recorded done in memory", [],
              [("steps advance in order", lambda r: [c["subtask"] for c in commands(r)][:2] ==
                r.summary["sequence"][:2]),
-              ("a keyframe for the first step", lambda r: bool(r.summary["keyframes"])),
+              ("the first step recorded done", lambda r: any(m["status"] == "done" for m in r.summary["memory"])),
               ("no starvation", lambda r: r.summary["starved_ticks"] == 0)], seconds=16),
     Scenario("speculative", "K = 3 noisy samples, consensus commitment", [
         "--speculative-predict", "--samples", "3", "--sample-noise", "0.01"],
@@ -209,7 +209,7 @@ SCENARIOS = [
         "--latency", "0.9"],
              [("floor ≥ 2·latency/dt + 1", lambda r: (r.summary["s1_floor_last"] or 0) >= 37),
               ("no starvation after the first chunk", lambda r: r.summary["starved_ticks"] == 0)], seconds=14),
-    Scenario("stop-stays", "stop, then heartbeats: the planner never restarts the task (D4)", [
+    Scenario("stop-stays", "stop, then watchdog ticks: the planner never restarts the task (D4)", [
         "--interaction", "rules", "--say", "5:stop"],
              [("abort issued", lambda r: bool(commands(r, "interaction", "abort"))),
               ("no moving command after the abort", lambda r: not any(
@@ -239,10 +239,10 @@ SCENARIOS = [
              changes=(Change("ambiguous", ASK),)),
     Scenario("step-events", "step-completion events from end-state checks (truth spoof) drive the planner; needs an S1 "
              "that completes steps (the scripted S1 has completed none in any recorded run)", [
-        "--arm", "revisable-truth", "--verify", "truth", "--verify-every", "0.5", "--decide-every", "2.5"],
+        "--arm", "revisable-truth", "--verify", "truth", "--verify-every", "0.5", "--watchdog", "2.5"],
              [("step event posted", lambda r: bool(r.summary["step_events"])),
-              ("a keyframe with the checker's evidence", lambda r: any(k["evidence"].startswith("truth")
-                                                                     for k in r.summary["keyframes"]))],
+              ("a done record with the checker's evidence", lambda r: any(m["evidence"].startswith("truth")
+                                                                         for m in r.summary["memory"]))],
              seconds=20, needs="remote"),
     Scenario("blocked", "blocked arm: monitor deviation → RETRY from the keyword stand-in (`rules`; Jev has no retry "
              "act, see jev-blocked)", [

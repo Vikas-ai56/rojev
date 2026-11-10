@@ -20,7 +20,7 @@ OpenTelemetry (decisions 2026-10-16).
   robot clock from the run start; `t0_ns` (wall time at start) maps them.
 ```
 run <out dir name>               config.* + summary.* attributes
-├── command <id> <op> <subtask>  issue → next command (or run end); events: ack <status>, review, keyframe,
+├── command <id> <op> <subtask>  issue → next command (or run end); events: ack <status>, review, step done / undone,
 │                                deviation, stale deviation
 ├── s1.request                   policy call: subtask, samples, instruction, continuation, info; commit.* (floor,
 │                                steps, horizon, reason, chosen, detail); ERROR status on an error or timeout

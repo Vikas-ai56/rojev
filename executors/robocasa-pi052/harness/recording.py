@@ -99,7 +99,7 @@ class RecordingDecider:
         self.log.append({"t_start": t0, "t_end": self.now(), "lane": self.lane, "request": snapshot.request_id,
                          "trigger": snapshot.trigger, "op": v.operation.kind.value, "subtask": v.operation.subtask,
                          "reason": v.reason, "instruction_rev": snapshot.instruction_rev,
-                         "keyframes": len(snapshot.keyframes), "review": snapshot.review,
+                         "steps_done": len(snapshot.memory.done()), "review": snapshot.review,
                          "deviation": snapshot.deviation is not None, "scores": v.scores,
                          "decide_ms": round((time.perf_counter() - w0) * 1000, 1), "task": v.task})
         return v

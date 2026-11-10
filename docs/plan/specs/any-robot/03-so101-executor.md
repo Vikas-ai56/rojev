@@ -1,6 +1,7 @@
 # Slice 3: a second robot, MuJoCo SO-101, through the same `Session`
 
-**Status:** SPEC, not built. Grounded on `v3-runtime` @ `0b5caa9`. One PR, after slice 1 (independent of slice 2).
+**Status:** REPLACED by LIBERO (decision 2026-11-09): the second robot through the shared assembly is LIBERO's
+Franka with GR00T as S1 (`executors/libero`), because official GR00T checkpoints exist for it. Not built.
 
 ## Purpose
 Prove "a new robot = embodiment + backend + policy adapter + tasks" with a robot of a different kind: a 6-joint
