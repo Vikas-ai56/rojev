@@ -6,6 +6,7 @@ carries the session `epoch`; times are on the robot's clock.
 from dataclasses import dataclass, field
 
 from .commands import SCHEMA, Operation
+from .memory import TaskMemory
 from .observation import Capture
 
 
@@ -25,27 +26,13 @@ class Deviation:
 
 
 @dataclass(frozen=True)
-class Keyframe:
-    """Progress: step `subtask` (command `cmd_id`, under instruction revision `instruction_rev`) was judged done on
-    `capture` (the observation the judgement used). `evidence` names who judged it; `checked` is True when that was a
-    confirmed end-state check (a checked `StepEvent`), False when a decider moved on by its own judgement. Kept across
-    repairs and revisions, so a decider never redoes a done step."""
-    cmd_id: int
-    subtask: str
-    instruction_rev: int
-    capture: Capture
-    evidence: str
-    checked: bool = False
-
-
-@dataclass(frozen=True)
 class StepEvent:
     """Evidence that a step of the running command is done, posted to the owner by whoever observes it 
     an end-state check (MJev, a sensor) or S1's own planner moving on to another subtask. `cmd_id` is the 
     command the evidence is about; `step` the step judged done; `source` names the observer; `detail`
     is what it saw; `checked` is True when an end-state check found the step done (a claim, such as S1's planner moving
     on, is not). The owner asks the planning lane at once and, when the step is then left (or, for S1's own steps, when
-    the event is checked), records `source` and `detail` as the keyframe's evidence."""
+    the event is checked), records `source` and `detail` as the evidence of the step's record in the task memory."""
 
     epoch: int
     cmd_id: int | None
@@ -132,7 +119,7 @@ class ObservationSnapshot:
     active_cmd: int | None
     active_operation: Operation | None
     active_since: float | None
-    keyframes: tuple[Keyframe, ...]
+    memory: TaskMemory
     trigger: str
     review: bool = False
     deviation: Deviation | None = None

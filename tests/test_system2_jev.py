@@ -7,8 +7,8 @@ import pytest
 from rojev.control import ExecutionRuntime, Guard
 from rojev.eval import NativePlanner
 from rojev.owner import StateOwner
-from rojev.protocol import (ROBOT, UNANSWERED, USER, Capture, Deviation, Hold, Keyframe, Observation,
-                            ObservationSnapshot, Operation, OpKind, Turn, UserInstruction)
+from rojev.protocol import (ROBOT, UNANSWERED, USER, Capture, Deviation, Hold, Observation, ObservationSnapshot,
+                            Operation, OpKind, StepRecord, StepStatus, TaskMemory, Turn, UserInstruction)
 from rojev.robot import KEEP, ActionDim, ActionSpec
 from rojev.system2 import DecisionWorker
 from rojev.system2.jev import (ABORT, ACT_QUESTION, ASK, CLARIFY, CONTINUE, NONE, RESUME, REVISE, TASK_QUESTION, WAIT,
@@ -153,7 +153,8 @@ def test_the_margin_is_the_smallest_that_reaches_the_target_accuracy():
 
 def test_the_model_sees_instruction_step_progress_dialogue_and_hold():
     s = ObservationSnapshot(1, 1, 5.0, Capture(1, 5.0, OBS), 1, "wait", 2, Operation(OpKind.GUARDED_WAIT), 4.0,
-                            (Keyframe(1, "pick the cube", 0, Capture(1, 1.0, OBS), "test"),), "instruction",
+                            TaskMemory("wait", (StepRecord("pick the cube", StepStatus.DONE, 1, 0, Capture(1, 1.0, OBS),
+                                                           "test", False, 1.0),)), "instruction",
                             hold=Hold(Operation(OpKind.GUARDED_WAIT), 4.0, STEP),
                             dialogue=(Turn(4.0, USER, 1, "wait"), Turn(4.1, ROBOT, 1, template=WAITING)))
     state = situation(s, ["left", "right"])
@@ -182,14 +183,14 @@ class WordChooser:
         return {o.label: (0.9 if o.label == best else 0.1 / (len(options) - 1)) for o in options}
 
 
-def test_with_the_owner_a_stop_holds_through_heartbeats_and_go_on_resumes_the_step():
+def test_with_the_owner_a_stop_holds_through_watchdog_ticks_and_go_on_resumes_the_step():
     spec = ActionSpec("stand-in", (ActionDim("v", -1, 1, 0.0),
                                    ActionDim("gripper", -1, 1, KEEP, threshold=0.5, irreversible=True)), control_hz=50)
     runtime = ExecutionRuntime(spec, epoch=1, last=np.array([0.0, -1.0]), blend_s=0.0)
     clock = {"t": 0.0}
     planning, interaction = Recorder(), Recorder()
     owner = StateOwner(runtime, Guard(runtime), planning, lambda: Capture(1, clock["t"], OBS), lambda: clock["t"],
-                       "put the cube in A", interaction=interaction, decide_every_s=0.5)
+                       "put the cube in A", interaction=interaction, watchdog_s=0.5)
     plan = DecisionWorker(NativePlanner(), lambda _: None, lambda: clock["t"])
     interaction_worker = DecisionWorker(jev(WordChooser()), lambda _: None, lambda: clock["t"])
     owner.tick()

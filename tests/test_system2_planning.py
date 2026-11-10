@@ -1,28 +1,31 @@
-"""Commit and verify: S1's planned subtask is committed, released only by a checked step event (or the declared
-bound), and a verified step is never committed again; then live through the owner."""
+"""Planning-lane deciders. Step planner: the model's answer becomes a switch, a continue or COMPLETE, and an answer
+outside the allowed steps never moves the robot; the model reads the memory's done steps. Commit and verify: S1's
+planned subtask is committed, released only by a checked step event (or the declared bound), and a verified step is
+never committed again; then live through the owner."""
 import numpy as np
 import pytest
 
 from rojev.control import ExecutionRuntime, Guard
 from rojev.owner import StateOwner
-from rojev.protocol import (Capture, Keyframe, Observation, ObservationSnapshot, Operation, OpKind, PlannedSubtask,
-                            StepEvent, TimedChunk)
+from rojev.protocol import (Capture, Observation, ObservationSnapshot, Operation, OpKind, PlannedSubtask, StepEvent,
+                            StepRecord, StepStatus, TaskMemory, TimedChunk)
 from rojev.robot import KEEP, ActionDim, ActionSpec
-from rojev.system2 import CommitVerifyPlanner, DecisionWorker
+from rojev.system2 import COMPLETE_STEP, CommitVerifyPlanner, DecisionWorker, NextStep, StepPlanner
 
 OBS = Observation({}, np.zeros(1, np.float32), "move the steak to the freezer")
 NATIVE = Operation(OpKind.SWITCH_TO)
 PLACE = Operation(OpKind.SWITCH_TO, subtask="put steak in freezer")
 
 
-def snap(op, planned=None, step_event=None, keyframes=(), now=5.0, since=4.0, cmd=3):
-    return ObservationSnapshot(1, 1, now, Capture(1, now, OBS), 0, OBS.task, cmd, op, since, tuple(keyframes),
+def snap(op, planned=None, step_event=None, records=(), now=5.0, since=4.0, cmd=3):
+    return ObservationSnapshot(1, 1, now, Capture(1, now, OBS), 0, OBS.task, cmd, op, since,
+                               TaskMemory(OBS.task, tuple(records)),
                                "planned", step_event=step_event,
                                planned=None if planned is None else PlannedSubtask(1, cmd, now, planned))
 
 
 def verified(subtask):
-    return Keyframe(2, subtask, 0, Capture(1, 1.0, OBS), "mjev: {}", checked=True)
+    return StepRecord(subtask, StepStatus.DONE, 2, 0, Capture(1, 1.0, OBS), "mjev: {}", True, 1.0)
 
 
 def test_no_command_lets_s1_plan_and_a_plan_is_committed():
@@ -44,10 +47,11 @@ def test_a_committed_step_is_released_only_by_a_checked_event_about_it():
 
 def test_a_verified_step_is_not_committed_again_and_the_bound_releases_an_unverifiable_one():
     p = CommitVerifyPlanner(max_commit_s=10.0)
-    again = p.decide(snap(NATIVE, planned="put steak in freezer", keyframes=[verified("put steak in freezer")]))
+    again = p.decide(snap(NATIVE, planned="put steak in freezer", records=[verified("put steak in freezer")]))
     assert again.operation.kind == OpKind.CONTINUE and p.reentries == 1
-    unverified = Keyframe(2, "put steak in freezer", 0, Capture(1, 1.0, OBS), "decider: bound", checked=False)
-    assert p.decide(snap(NATIVE, planned="put steak in freezer", keyframes=[unverified])).operation == PLACE
+    unverified = StepRecord("put steak in freezer", StepStatus.DONE, 2, 0, Capture(1, 1.0, OBS), "decider: bound",
+                            False, 1.0)
+    assert p.decide(snap(NATIVE, planned="put steak in freezer", records=[unverified])).operation == PLACE
     expired = p.decide(snap(PLACE, now=15.0, since=4.0))
     assert expired.operation == NATIVE and p.expired == 1
 
@@ -66,12 +70,12 @@ class Recorder:
         self.requests.append(snapshot)
 
 
-def test_with_the_owner_s1s_flip_cannot_reach_the_robot_and_a_verified_step_becomes_a_checked_keyframe():
+def test_with_the_owner_s1s_flip_cannot_reach_the_robot_and_a_verified_step_is_recorded_checked():
     runtime = ExecutionRuntime(SPEC, epoch=1, last=np.array([0.0, -1.0]), blend_s=0.0)
     clock = {"t": 0.0}
     planning = Recorder()
     owner = StateOwner(runtime, Guard(runtime), planning, lambda: Capture(1, clock["t"], OBS), lambda: clock["t"],
-                       OBS.task, decide_every_s=100.0)
+                       OBS.task, watchdog_s=100.0)
     worker = DecisionWorker(CommitVerifyPlanner(max_commit_s=30.0), lambda _: None, lambda: clock["t"])
 
     def answer():
@@ -94,4 +98,29 @@ def test_with_the_owner_s1s_flip_cannot_reach_the_robot_and_a_verified_step_beco
     owner.handle(StepEvent(1, 2, 0.3, "mjev", "put steak in freezer", {"p_done": 0.9}, checked=True))
     answer()
     assert owner.desired.operation == NATIVE
-    assert [(k.subtask, k.checked) for k in owner.keyframes] == [("put steak in freezer", True)]
+    assert [(r.step, r.checked) for r in owner.memory.records] == [("put steak in freezer", True)]
+
+
+class ScriptedModel:
+    name = "scripted"
+
+    def __init__(self, answers):
+        self.answers, self.asked = list(answers), []
+
+    def next_step(self, goal, record, options, images):
+        self.asked.append((goal, list(record), list(options), sorted(images)))
+        return NextStep(self.answers.pop(0), "scripted")
+
+
+def test_the_step_planner_turns_answers_into_operations_and_ignores_answers_outside_the_skills():
+    skills = ["pick up the red cube", "put steak in freezer"]
+    model = ScriptedModel(["put steak in freezer", "put steak in freezer", "open the oven", None, COMPLETE_STEP])
+    planner = StepPlanner(skills, model, cameras=[])
+    done = StepRecord("pick up the red cube", StepStatus.DONE, 2, 0, Capture(1, 1.0, OBS), "test", True, 1.0)
+    assert planner.decide(snap(None, records=[done])).operation == PLACE
+    assert planner.decide(snap(PLACE)).operation.kind == OpKind.CONTINUE
+    for _ in range(2):
+        kept = planner.decide(snap(PLACE))
+        assert kept.operation.kind == OpKind.CONTINUE and "no allowed step" in kept.reason
+    assert planner.decide(snap(PLACE)).operation.kind == OpKind.COMPLETE
+    assert model.asked[0] == (OBS.task, ["pick up the red cube"], skills + [COMPLETE_STEP], [])

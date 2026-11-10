@@ -30,7 +30,7 @@ def situation(snapshot: ObservationSnapshot, cameras: list[str]) -> dict:
     state = {"images": onejev.camera_views(cameras, len(cameras)),
              "task": snapshot.instruction, "user_just_said": snapshot.latest_utterance, "trigger": snapshot.trigger,
              "current_step": None if op is None else (op.subtask or op.kind.value),
-             "steps_done": [k.subtask for k in snapshot.keyframes],
+             "steps_done": snapshot.memory.done(),
              "conversation": [{"robot": TEMPLATES.get(t.template, t.template)} if t.speaker == ROBOT else
                               {"user": t.text} for t in snapshot.dialogue]}
     if snapshot.hold is not None:
