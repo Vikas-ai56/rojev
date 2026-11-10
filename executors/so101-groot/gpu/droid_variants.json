@@ -1,0 +1,14 @@
+{
+  "1": {
+    "paraphrase": "Place the blue cube into the green bowl",
+    "other_target": "Put the green bowl on the blue block",
+    "unrelated": "Fold the towel in half",
+    "empty": ""
+  },
+  "2": {
+    "paraphrase": "Pull the duvet's bottom right corner over to the left",
+    "other_target": "Move the bottom left tip of the duvet to the right",
+    "unrelated": "Put the blue block in the green bowl",
+    "empty": ""
+  }
+}

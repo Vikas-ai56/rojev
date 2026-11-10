@@ -1,17 +1,40 @@
-# Robot interface: `rojev.robot`
+# Robot interface and robot plug-ins
 
 Code: `rojev/robot/` (`base.py`, `types.py`, `limits.py`, `mock.py`, `so101.py`, `action_spec.py`, `effect.py`,
 `sim/`). Contract tests: `tests/test_robot_contract.py` (24, 1 of them `timing`, run with `-m timing`: the real-time physics thread catches up in bursts, so its 10 ms check depends on OS scheduling; the six shared contracts run on both backends),
 `tests/test_robot_sim_world.py` (4). Runtime side: [`v3-runtime.md`](v3-runtime.md).
 
-## Two plug-in points
-- **`Robot`**: a joint-target arm with timestamped sensors. Backends: `MujocoRobot` (simulated SO-101) and `MockRobot`.
-  It reaches the runtime through `rojev.control.RobotBackend` plus `joint_target_spec(robot, switches, irreversible)`.
-- **Runtime plug-ins** for robots that are not a `Robot` (the RoboCasa PandaOmron, an environment stepped by the loop):
-  an `ActionSpec` (`action_spec.py`) and, for the execution monitor, an `EffectModel` (`effect.py`); PandaOmron's live in
-  `executors/robocasa-pi052/embodiment.py`.
-- A hardware SO-101 adapter is not built; the single assembly layer for any robot is specified, not built
-  (`docs/plan/specs/any-robot/`, decisions 2026-10-22).
+## Plug-in points
+- **`Robot`**: a joint-target arm with timestamped sensors (simulated SO-101, mock). It joins the runtime through
+  `RobotBackend` + `joint_target_spec`.
+- **Backend**: anything that can return an observation and apply one action (RoboCasa, LIBERO). The loop steps it.
+- **`ActionSpec`**: the robot's action layout: bounds, what "hold still" means, switches (gripper), which switches
+  cannot be undone. Switches also give the done checker its cue.
+- **`Embodiment`**: what the shared assembly needs from a robot: name, `ActionSpec`, camera names, start command. The
+  robot plug-in builds its own backend (it needs the task and seed) ([`app-session.md`](app-session.md)).
+
+| Robot | Assembly |
+|---|---|
+| RoboCasa Franka on a mobile base (12 numbers, 20 Hz) | its own older wiring |
+| LIBERO Franka (7 numbers, 20 Hz) | shared assembly |
+| SO-101 in MuJoCo (joint targets) | tests only |
+
+## LIBERO plug-in
+- **Action:** LeRobot's LIBERO action: hand position and rotation changes (6) + gripper (-1 open, +1 close). Zero
+  change holds the arm; the gripper keeps its last value and is treated as a switch that cannot be undone.
+- **Environment:** LeRobot's own LIBERO environment and image / state processing, so S1 sees exactly what LeRobot's
+  evaluation would give it. Episode *e* uses LeRobot's *e*-th start state and seed. Success = LeRobot's own check.
+- **Evaluation:** one run of the shared assembly per episode, a fresh environment each time, the whole task sent to
+  S1 (no S2 steps yet), stopped on success or at LeRobot's step limit; results saved after every episode.
+- **Where it runs:** LIBERO installs only on Linux, so the simulator runs on the GPU machine next to the S1 service.
+- **Tests:** a fake LIBERO under LeRobot's real code, on the laptop.
+
+## SO-101
+- Units: recorded data and S1 model I/O use LeRobot's (body joints in degrees around the calibration midpoint,
+  gripper 0–100); `so101.lerobot_units()` converts to and from the core's radians from `config/so101.yaml` `lerobot`
+  (simulator values declared; the real arm's come from its calibration). Cameras for S1: fixed `front` (scene) and the
+  arm's `wrist_cam` (decision 2026-11-07).
+- A hardware SO-101 adapter is not built.
 
 ## `Robot` shape
 ```
@@ -55,3 +78,4 @@ Rate(clock, hz)        fixed-rate loop on the robot clock; same code on sim and 
 - `joint_target_spec`: one `KEEP` dim per joint with the robot's position limits; actions are joint targets.
 - PandaOmron (12-D, 20 Hz): arm and torso deltas and base velocity hold 0; gripper and base mode are `KEEP` switches at
   0.5; the gripper is irreversible.
+- LIBERO Panda (7-D, 20 Hz): six hand deltas hold 0; the gripper is a `KEEP` switch at 0.0, irreversible.

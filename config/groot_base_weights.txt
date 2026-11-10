@@ -1,0 +1,2 @@
+repo nvidia/GR00T-N1.7-3B @ 2fc962b973bccdd5d8ce4f67cc63b264d6886495
+GR00T N1.7 base (official NVIDIA release, ~6.9 GB): zero-shot on its pretraining embodiments (DROID used for the GPU check) and the starting point of SO-101 fine-tunes; resolved 2026-11-07.

@@ -7,7 +7,8 @@
 `snapshot` downloads (or, with --offline, only looks up in the local cache) exactly that revision and prints the local
 snapshot directory; a miss with --offline exits 1, which is how a hook's check_remote decides "done". `repo` prints
 the pinned repo id. A pin file holds one line `repo <hf id> @ <revision>`; its other lines are notes for people.
-Only public repos are fetched this way: no token is read or needed.
+Only public repos are fetched this way: no token is sent, even when the machine has a Hugging Face login (an expired
+login would otherwise turn a public download into a 401).
 """
 import argparse
 import re
@@ -48,7 +49,7 @@ def main() -> int:
         print(repo)
         return 0
     try:
-        print(snapshot_download(repo, revision=revision, local_files_only=a.offline))
+        print(snapshot_download(repo, revision=revision, local_files_only=a.offline, token=False))
     except LocalEntryNotFoundError:
         print(f"{repo}@{revision} is not in the local Hugging Face cache", file=sys.stderr)
         return 1

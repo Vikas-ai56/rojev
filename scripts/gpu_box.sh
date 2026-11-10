@@ -33,7 +33,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 readonly ROJEV_DIR="$HOME/rojev"
 readonly STATE_DIR="$HOME/.rojev"
-readonly APT_PACKAGES=(build-essential git rsync curl)
+readonly APT_PACKAGES=(build-essential git git-lfs rsync curl ffmpeg libegl1 libopengl0)
 readonly NVIDIA_VENDOR=0x10de
 readonly SERVICE_READY_TIMEOUT_S=1200
 export ROJEV_ROOT="$ROJEV_DIR"
@@ -106,14 +106,33 @@ whole_gpu_apply() {
   sudo -n nvidia-smi -i 0 -mig 0
 }
 
+nvidia_gl_package() {
+  dpkg-query -W -f '${db:Status-Abbrev} ${Package} ${Version}\n' 'libnvidia-compute-*' 2>/dev/null |
+    awk '$1 == "ii" {sub(/:.*/, "", $2); sub(/^libnvidia-compute-/, "libnvidia-gl-", $2); print $2 "=" $3; exit}'
+}
+
+box_packages() {
+  local gl
+  gl=$(nvidia_gl_package)
+  printf '%s\n' "${APT_PACKAGES[@]}" ${gl:+"$gl"}
+}
+
 packages_ready() {
-  dpkg -s "${APT_PACKAGES[@]}" >/dev/null 2>&1
+  local package
+  while read -r package; do
+    if [[ "$package" == *=* ]]; then
+      [[ "$(dpkg-query -W -f '${Version}' "${package%%=*}" 2>/dev/null)" == "${package#*=}" ]] || return 1
+    else
+      dpkg -s "$package" >/dev/null 2>&1 || return 1
+    fi
+  done < <(box_packages)
 }
 
 packages_install() {
   require_sudo
   apt_get update
-  apt_get install "${APT_PACKAGES[@]}"
+  mapfile -t packages < <(box_packages)
+  apt_get install "${packages[@]}"
 }
 
 uv_ready() {
@@ -143,9 +162,9 @@ vendor_ready() {
 vendor_install() {
   local name=$1 url=$2 pin=$3 dir="$ROJEV_DIR/vendor/$1"
   mkdir -p "$ROJEV_DIR/vendor"
-  [[ -d "$dir/.git" ]] || git clone -q --filter=blob:none "$url" "$dir"
+  [[ -d "$dir/.git" ]] || GIT_LFS_SKIP_SMUDGE=1 git clone -q --filter=blob:none "$url" "$dir"
   git -C "$dir" cat-file -e "${pin}^{commit}" 2>/dev/null || git -C "$dir" fetch -q origin "$pin"
-  git -C "$dir" checkout -q --detach "$pin"
+  GIT_LFS_SKIP_SMUDGE=1 git -C "$dir" checkout -q --detach "$pin"
 }
 
 component_dir() {

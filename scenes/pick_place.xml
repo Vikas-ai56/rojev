@@ -19,6 +19,9 @@
     <frame name="robot_mount" pos="0 0 0"/>
     <!-- Fixed overhead sensor camera looking straight down; image up = +x (away from the robot). -->
     <camera name="overhead" pos="0.2 0 0.85" xyaxes="0 -1 0 1 0 0" fovy="50"/>
+    <!-- Fixed front (third-person) camera facing the arm across the workspace, as in LeRobot / GR00T SO-101 setups;
+         the arm's own wrist_cam is the second view. -->
+    <camera name="front" pos="0.6 0 0.35" xyaxes="0 1 0 -0.6 0 0.8" fovy="55"/>
     <body name="box" pos="0.2 0.12 0.03">  <!-- beside, not under, the arm's home pose -->
       <freejoint/>
       <geom type="box" name="box" size="0.02 0.02 0.03" condim="3" friction="1 .03 .003" rgba="0 1 0 1" contype="2"

@@ -1,0 +1,2 @@
+repo nvidia/Cosmos-Reason2-2B @ 9ce19a195e423419c349abfc86fd07178b230561
+GR00T N1.7's VLM backbone (Qwen3-VL architecture, 2B, ~4.9 GB, NVIDIA Open Model License, gated: accept its terms on Hugging Face once); Isaac-GR00T builds the model and its processor from this repo id at load time; resolved 2026-11-07.

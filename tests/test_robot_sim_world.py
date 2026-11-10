@@ -19,7 +19,7 @@ def test_compose_keeps_robot_solver_options_and_adds_world(scene):
     for key, field in (("timestep", "timestep"), ("iterations", "iterations"), ("ls_iterations", "ls_iterations"),
                        ("impratio", "impratio"), ("integrator", "integrator"), ("cone", "cone")):
         assert getattr(m.opt, field) == getattr(robot.opt, field), key
-    assert m.nu == 6 and {m.camera(i).name for i in range(m.ncam)} == {"overhead", "wrist_cam"}
+    assert m.nu == 6 and {m.camera(i).name for i in range(m.ncam)} == {"overhead", "front", "wrist_cam"}
     assert m.body("box") is not None
 
 
