@@ -11,6 +11,14 @@ Package layout: `docs/CODEBASE.md` §2 (enforced by `tests/test_architecture.py`
 borrowed from CheckVLA, CA³C, PACE); Jev v1 = interaction-act layer + verifier (not a next-subtask selector); later
 steps renumbered to build on step 4.
 
+**Superseded 2026-11-09 / 10** (this page is the v1 build record; how it works now: `docs/features/pipeline.md`):
+| Here | Now |
+|---|---|
+| Planning heartbeat (1 s, or 0.8 × lease) keeps commands alive | planning asked on events only; the owner renews leases itself and stops after 30 s of planner silence |
+| Progress keyframes | task memory: each step done or undone, with evidence; episode log of finished tasks |
+| Periodic end-state checks | done checks on gripper cues, a 1 s fallback and a confirming recheck |
+| Wiring in `realtime.py` only | a shared assembly (`rojev/app`) for new robots; LIBERO is the first |
+
 ## 0. Done when
 - In RoboCasa, real-time loop: π0.5² acts continuously; a mid-episode instruction change ("actually, put it in …")
   never freezes the robot: the owner enters review, Jev chooses the interaction act (continue / revise / guarded-wait /
@@ -61,15 +69,16 @@ Built:
 - `ExecutionAck{epoch, cmd_id, seq, status: activated|revoked|rejected|chunk_rejected|expired|dropped|stopped, t,
   applied_index, detail}` (`dropped`: a safety hold ended the command, 2026-10-22)
 - `UserInstruction{text}` · `ObservationSnapshot{epoch, request_id, now, capture, instruction_rev, instruction,
-  active_cmd, active_operation, active_since, keyframes, trigger, review, deviation}`
+  active_cmd, active_operation, active_since, keyframes, trigger, review, deviation}` (keyframes → `memory`, 2026-11-09)
 - `DecisionProposal{epoch, request_id, obs_id, t_capture, instruction_rev, base_active_cmd, candidates_rev, operation,
   scores, preconditions, expires_t, evidence}` · `Precondition{kind, object_id, tol}` · `Advice{…}`
 Step 4 adds:
 - ✓ `Deviation{epoch, cmd_id, t, score, threshold, source: kinematic}` — execution monitor → owner (4.3).
 - `Postcondition{kind, object_id, tol}` on proposals — what must be true after the step (planner-stated, B-direction).
 - ✓ Snapshot gains `review: bool`, `deviation`, `keyframes` (replacing `history`); `trigger` ∈ {heartbeat,
-  instruction, deviation, cmd … expired / rejected}.
-- ✓ `Keyframe{cmd_id, subtask, instruction_rev, capture, evidence}` · `DecisionFailure{epoch, request_id, error}` (4.4).
+  instruction, deviation, cmd … expired / rejected}. (Superseded 2026-11-09: no heartbeat trigger; `memory`.)
+- ✓ `Keyframe{cmd_id, subtask, instruction_rev, capture, evidence}` (replaced by `TaskMemory` / `StepRecord`,
+  2026-11-09) · `DecisionFailure{epoch, request_id, error}` (4.4).
 Step 6 adds (✓ 2026-10-22):
 - `StepEvent{epoch, cmd_id, t, source, detail}` — step-completion evidence → owner (trigger `step`).
 - `Turn{t, speaker: user|robot, instruction_rev, text, template, objects}` · `Utterance{epoch, t, template, objects,
@@ -91,7 +100,7 @@ Only writer of instruction revision, desired command, active record (from ACKs),
   not a routine planning proposal while a hold stands, preconditions hold (checkable from step 6; refused before);
   else logged.
 - **Holds (✓ 2026-10-22):** ABORT / GUARDED_WAIT / ASK answering a change = standing `Hold` until a later change
-  resolves it (moving op or COMPLETE): no heartbeat, routine planning refused, hold command kept leased,
+  resolves it (moving op or COMPLETE): no planning requests, routine planning refused, hold command kept leased,
   `hold_recheck_s` → interaction lane again (trigger `hold`, Jev's wait budget).
 - **Dialogue + utterances (✓ 2026-10-22):** instruction → `ACK` utterance at once + user turn; templated operation →
   utterance + robot turn; snapshots carry the dialogue.
@@ -104,7 +113,8 @@ Only writer of instruction revision, desired command, active record (from ACKs),
 - **Progress keyframes (✓ 4.4):** when an accepted proposal moves past a running step (SWITCH_TO another subtask, or
   COMPLETE) the step becomes a `Keyframe` with the observation the decision used; snapshots carry all keyframes,
   kept across repairs and revisions. Evidence = the decider's judgement until postconditions (step 6). Always on (the
-  owner's progress record), not a flag.
+  owner's progress record), not a flag. *Superseded 2026-11-09:* the task memory (a confirmed done check is recorded at
+  once; a done step chosen again is recorded undone).
 - ACK: active only on `activated` with newer `seq`; rejected / expired / dropped → fall back to the running command,
   ask again; `chunk_rejected` → logged only. Reaffirm is always `immediate`.
 - Step done: postconditions hold (MJev / sensors; OneJev for ambiguous ones, step 6); sim truth = evaluation only.
@@ -112,7 +122,7 @@ Only writer of instruction revision, desired command, active record (from ACKs),
   timer. Sources: end-state checks (`StepWatcher`, MJev / sensors) and π0.5²'s own planner switching subtask
   (`ActionChunk.info` → `S1Runner.on_step`; in native mode the event is the keyframe). Phase boundaries are not a
   source (a slowdown is not completion). The heartbeat stays for liveness and lease renewal: 0.8 × lease when events
-  cover progress, else 1 s.
+  cover progress, else 1 s. *Superseded 2026-11-09:* no heartbeat; the owner renews leases itself.
 - Heartbeat to the guard every tick; restart → new epoch, new command.
 
 ## 5. Execution runtime (`rojev/control/execution.py`)

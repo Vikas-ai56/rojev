@@ -1,0 +1,8 @@
+# GPU session 1 (A100 40 GB): one step per line, `<component dir> <step> <timeout seconds>`; run with
+# scripts/gpu_session.sh HOST after scripts/gpu_setup.sh HOST --executor so101-groot --skip-serve.
+# GR00T official base, zero-shot on NVIDIA's DROID sample: NVIDIA's documented reference run (action error to compare
+# with its published numbers), latency (eager + compiled), and the input / output variety probe. The SO-101 steps
+# need a fine-tune and wait for our own demos.
+executors/so101-groot droid_reference 1800
+executors/so101-groot droid_latency 1800
+executors/so101-groot droid_probe 2700

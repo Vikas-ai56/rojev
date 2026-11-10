@@ -1,11 +1,17 @@
 """Step watcher: turns end-state checks into step-completion events for the owner (spec §4, §9).
 
-On its own thread, every `every_s`: take the running command (`running()`, the runtime's active command) and the
-newest capture; if the command moves with a subtask, check it (`Verifier`). When P(done) ≥ `done_threshold` on
-`confirmations` consecutive checks of the same command, post one checked `StepEvent` (source = the verifier's name,
-detail = P(done), the observation it was judged on and the checks behind it); then stay quiet for that command. A check
-that fails is counted and skipped, never posted. `done_threshold` and `confirmations` are declared tuned constants until
-the verifier is measured against simulator truth (roadmap T6).
+A cascade on its own thread: a check of the running step costs a model call, so it runs when a step has likely just
+finished, not on every tick. A check is due on a cue (`cue(reason)`, e.g. `rojev.control.SwitchCues` seeing the
+gripper close or open), else after `every_s` without one (the fallback), and `recheck_s` after a check that found the
+step done but has not yet been confirmed. A check takes the running command (`running()`, the runtime's active
+command) and the newest capture; if the command moves with a subtask, it asks the `Verifier`. When P(done) ≥
+`done_threshold` on `confirmations` consecutive checks of the same command, it posts one checked `StepEvent` (source =
+the verifier's name, detail = P(done), the observation it was judged on, the checks behind it and the cue that started
+them); then it stays quiet for that command. A check that fails is counted and skipped, never posted. `busy` is true
+while a check runs or a cue or claim waits for one, so a caller that stops time while models think (lockstep) can wait
+for the done checker as it waits for the decision lanes.
+`done_threshold` and `confirmations` are declared tuned constants until the verifier is measured against labelled
+episodes.
 
 Claims (`claim(event)`): an unchecked step event, such as S1's own planner moving on from a subtask (commands without
 a subtask are otherwise never checked: their step is not known here). The claimed step is checked once on the newest
@@ -31,20 +37,26 @@ class WatchStats:
     events: int = 0
     claims: int = 0
     unconfirmed: int = 0
+    cues: int = 0
     check_ms: list[float] = field(default_factory=list)
 
 
 class StepWatcher:
     def __init__(self, verifier: Verifier, running: Callable[[], AcceptedGoal | None],
                  latest: Callable[[], Capture], post: Callable[[StepEvent], None], now: Callable[[], float],
-                 cameras: list[str], every_s: float = 1.0, done_threshold: float = 0.7, confirmations: int = 2):
+                 cameras: list[str], every_s: float = 1.0, done_threshold: float = 0.7, confirmations: int = 2,
+                 recheck_s: float = 0.5):
         self.verifier, self.running, self.latest, self.post, self.now = verifier, running, latest, post, now
-        self.cameras, self.every_s = cameras, every_s
+        self.cameras, self.every_s, self.recheck_s = cameras, every_s, recheck_s
         self.done_threshold, self.confirmations = done_threshold, confirmations
         self.stats = WatchStats()
         self._streak: tuple[int, int] = (-1, 0)
         self._reported: set[int] = set()
-        self._claims: queue.Queue[StepEvent] = queue.Queue()
+        self._inbox: queue.Queue[StepEvent | str] = queue.Queue()
+        self._cue: str | None = None
+        self._checking = threading.Event()
+        self._pending = 0
+        self._pending_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -61,7 +73,16 @@ class StepWatcher:
 
     def claim(self, event: StepEvent) -> None:
         """Queue an unchecked step event to be confirmed (thread-safe; see module docstring)."""
-        self._claims.put(event)
+        self._enqueue(event)
+
+    def cue(self, reason: str) -> None:
+        """A step has likely just finished: check now (thread-safe; see module docstring)."""
+        self._enqueue(reason)
+
+    def _enqueue(self, item: StepEvent | str) -> None:
+        with self._pending_lock:
+            self._pending += 1
+        self._inbox.put(item)
 
     def confirm(self, claim: StepEvent) -> StepEvent | None:
         """Check a claimed step once; post and return the checked event if it is done."""
@@ -93,8 +114,19 @@ class StepWatcher:
         self.stats.check_ms.append((time.perf_counter() - w0) * 1000)
         return states
 
-    def check_once(self) -> StepEvent | None:
-        """One check of the running step; returns (and posts) the event if this check completes the evidence."""
+    @property
+    def busy(self) -> bool:
+        with self._pending_lock:
+            return self._checking.is_set() or self._pending > 0
+
+    @property
+    def confirming(self) -> bool:
+        """A check found the running step done and more checks are needed to confirm it."""
+        return 0 < self._streak[1] < self.confirmations and self._streak[0] not in self._reported
+
+    def check_once(self, cue: str | None = None) -> StepEvent | None:
+        """One check of the running step; returns (and posts) the event if this check completes the evidence. `cue`
+        names what asked for the check; it stays with the streak it starts."""
         goal = self.running()
         if goal is None or not goal.operation.moves_robot() or goal.operation.subtask is None \
                 or goal.cmd_id in self._reported:
@@ -108,20 +140,36 @@ class StepWatcher:
         cmd, streak = self._streak
         streak = (streak + 1 if cmd == goal.cmd_id else 1) if p_done >= self.done_threshold else 0
         self._streak = (goal.cmd_id, streak)
+        if streak == 1:
+            self._cue = cue
         if streak < self.confirmations:
             return None
         self._reported.add(goal.cmd_id)
         event = StepEvent(goal.epoch, goal.cmd_id, capture.t, self.verifier.name, step,
-                          {"p_done": round(p_done, 3), "obs_id": capture.obs_id, "checks": streak}, checked=True)
+                          {"p_done": round(p_done, 3), "obs_id": capture.obs_id, "checks": streak, "cue": self._cue},
+                          checked=True)
         self.stats.events += 1
         self.post(event)
         return event
 
     def _run(self) -> None:
-        next_check = time.monotonic() + self.every_s
+        due = time.monotonic() + self.every_s
         while not self._stop.is_set():
             try:
-                self.confirm(self._claims.get(timeout=max(0.0, next_check - time.monotonic())))
+                item = self._inbox.get(timeout=max(0.0, due - time.monotonic()))
             except queue.Empty:
-                next_check = time.monotonic() + self.every_s
-                self.check_once()
+                item = None
+            self._checking.set()
+            try:
+                if isinstance(item, StepEvent):
+                    self.confirm(item)
+                    continue
+                if item is not None:
+                    self.stats.cues += 1
+                self.check_once(cue=item)
+            finally:
+                self._checking.clear()
+                if item is not None:
+                    with self._pending_lock:
+                        self._pending -= 1
+            due = time.monotonic() + (self.recheck_s if self.confirming else self.every_s)

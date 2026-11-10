@@ -49,7 +49,7 @@ def write_run(run_dir: Path, say: list) -> None:
     run_dir.mkdir(parents=True)
     summary = {"sim_s": 12.0, "task_success": False, "control_hz": 20, "say": say, "blocked": None}
     events = [{"t": 0.05, "kind": "command", "cmd": 1, "op": "switch_to", "subtask": "pick up the steak",
-               "lane": "planning", "trigger": "heartbeat"},
+               "lane": "planning", "trigger": "watchdog"},
               {"t": 6.0, "kind": "instruction", "rev": 1, "text": "stop"},
               {"t": 6.0, "kind": "command", "cmd": 2, "op": "abort", "subtask": None, "lane": "interaction",
                "trigger": "instruction", "decider": "rules"}]

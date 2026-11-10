@@ -25,14 +25,15 @@ history); the target is a real robot, RoboCasa is the test environment (decision
 - Candidates (replaces the BM25/transition filter): skill registry × tracked scene objects × argument types × generic
   preconditions + {CONTINUE, WAIT, ABORT, ASK}. Measure recall. RoboCasa: E9b-style templates over π0.5² skills.
 - Jev runs on events (instruction change, step done/stalled, lease expiry) + heartbeat; switch needs a margin + minimum
-  dwell.
+  dwell. *Superseded 2026-11-09:* no heartbeat; S2 is asked on events only and the owner renews leases itself.
 - Change of mind: the owner puts the moving command in **review** at once (keeps reversible motion, freezes
   irreversible switches, short lease); Jev's interaction act decides continue / revise / wait / ask / abort; no answer →
   decelerating hold (spec §4, revision 2026-10-20).
 - Jev v1 = interaction-act layer + verifier checks; π0.5²'s own planner proposed subtask text (research brief §2, §8);
   XR-1 has no planner, so the v1 planning lane renews the whole task.
 - Execution side (borrowed, training-free): commitment policy (PACE, CA³C-lite) + kinematic execution monitor with
-  conformal threshold (CheckVLA-lite) + progress keyframes.
+  conformal threshold (CheckVLA-lite) + progress keyframes (*replaced 2026-11-09 by the task memory: steps done /
+  undone*).
 - Simulator never pauses for inference in real-time runs; model comparisons run in lockstep (decisions 2026-10-22 / -23), which
   hides S1 / S2 delay until each model's measured delay is added back.
 
@@ -41,6 +42,7 @@ history); the target is a real robot, RoboCasa is the test environment (decision
 |---|---|---|
 | **RoboCasa (v1)** | full S1/S2 loop from open-source frozen parts: XR-1 (S1; π0.5² earlier) + OneJev 4B + our runtime; lockstep evaluation, real time measured | everything in v1 (T1–T8) |
 | **Offline** | saved frames/decisions | Jev accuracy, candidate recall (T3, T4, T9) |
+| **LIBERO (2026-11-09)** | GR00T N1.7 (NVIDIA's LIBERO checkpoints) as S1 through the shared assembly; first S1 alone vs NVIDIA's numbers, then with S2 (R1.5) | built, tests only; GPU runs next |
 | **SO-101 sim (later)** | needs a trained S1 (S1-A); backend + realtime clock ready | after training |
 Caveat: XR-1 RoboCasa365 (like π0.5² before it) is Panda/RoboCasa → model results may not transfer to SO-101.
 
@@ -62,15 +64,19 @@ Caveat: XR-1 RoboCasa365 (like π0.5² before it) is Panda/RoboCasa → model re
   in any benchmark arm
 - [x] T1.13 Execution monitor (kinematic, conformal) + `Deviation` → owner + refill-now (spec step 4). **FLAG:**
   calibrated on stand-in runs that move one axis; recalibrate on clean π0.5² runs (all arm axes) before T8
-- [ ] T1.15 Step-completion events → planning lane (postcondition watchers, S1 planner subtask switch, phase
+- [x] T1.15 Step-completion events → planning lane (postcondition watchers, S1 planner subtask switch, phase
   boundary); heartbeat demoted to liveness + lease renewal (spec §4, step 6) (2026-10-22: `StepEvent` + owner +
   `StepWatcher` with MJev end-state checks, π0.5² subtask switch as a source, heartbeat 0.8 × lease with events;
-  phase boundaries rejected as a source; MJev thresholds (T6) open)
+  phase boundaries rejected as a source). 2026-11-09: heartbeat removed (event-driven planning, owner-owned lease),
+  done checks on gripper cues + fallback + recheck. **FLAG:** no done checker passes its gate yet (T6)
 - [ ] T1.16 Jev v1 interaction lane (spec §9) (2026-10-22: `rojev/system2/jev` built + standing holds, dialogue,
   utterances in the owner; open: labelled calibration set + temperature fit (GPU), live OneJev latency vs
   `interaction_timeout_s`, ASK templates with object ids after perception)
 - [x] T1.14 Owner two lanes (interaction / planning) + progress keyframes (spec step 4); keyframe evidence = decider
-  judgement until postconditions (step 6)
+  judgement until postconditions (step 6). Keyframes replaced by the task memory + episode log (2026-11-09)
+- [x] T1.17 Shared assembly `rojev/app` + LIBERO robot plug-in + one LeRobot S1 service (2026-11-10; tests only)
+- [ ] T1.18 LIBERO stage 1: GR00T alone through the runtime vs NVIDIA's published success (needs GPU)
+- [ ] T1.19 Embodied-R1.5 bake-off on GPU, then GR00T + R1.5 together on LIBERO
 - Open from the step-4 review (2026-10-21; each must be closed or measured before T8):
   - [ ] Batched K samples in the π0.5² service (step 7); until then speculative mode costs K× latency
   - [ ] Measure `phase` request load (≈ 4× fixed with the stand-in) on π0.5² (T8a)

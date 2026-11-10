@@ -1,0 +1,10 @@
+# Pass bars for the S2 bake-off (scored by executors/so101-data/score.py), fixed before the GPU run.
+# Proposed 2026-11-09, awaiting the owner's confirmation. Verdict per bar: pass / fail on the point estimate,
+# `uncertain` when the 95% interval (episodes resampled) crosses the bar.
+next_step:
+  accuracy_with_record_min: 0.90
+done_check:
+  false_done_rate_max: 0.10
+  balanced_accuracy_min: 0.75
+latency:
+  p50_ms_max: 3000

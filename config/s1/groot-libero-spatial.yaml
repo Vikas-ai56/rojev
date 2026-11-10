@@ -1,0 +1,27 @@
+adapter: lerobot
+checkpoint: nvidia/gr00t17-lerobot-libero_spatial-640 @ 32a6ec786d6509df31b40392b4e4dcdda78c0f11
+overrides:
+  base_model_path: nvidia/GR00T-N1.7-3B @ 2fc962b973bccdd5d8ce4f67cc63b264d6886495
+  n_action_steps: 16
+cameras:
+  top: observation.images.image
+  wrist: observation.images.wrist_image
+state: observation.state
+action_dim: 7
+device: cuda
+loaded_by_repo_id:
+  - config/groot_backbone.txt
+compile:
+  modules: [_groot_model.action_head.model]
+  mode: max-autotune-no-cudagraphs
+warmup: 3
+execute_steps: 8
+notes: >-
+  GR00T N1.7 fine-tuned by NVIDIA on LIBERO-Spatial (IPEC-COMMUNITY/libero_spatial_no_noops_1.0.0_lerobot) with LeRobot
+  0.6.1: embodiment libero_sim, chunk 16, 4 denoising steps, fp32 weights (12.6 GB) under bf16 autocast. The
+  checkpoint names its base model by the training box's cache path; base_model_path points at the same revision
+  here. Frames and the 8-wide state must follow the training dataset's convention (LeRobot's LIBERO env reproduces
+  it with LiberoProcessorStep). Actions are 7 wide in the environment's units, gripper binarised to +-1. NVIDIA's
+  LIBERO evaluation executes 8 of the 16 actions before replanning (n_action_steps 8): execute_steps 8 sends that
+  with every chunk. n_action_steps 16 because LeRobot cuts predict_action_chunk to n_action_steps: the robot side
+  gets all 16 and keeps the last 8 queued behind the replacement point.

@@ -31,8 +31,13 @@ calibration cases; `--interaction-delay` / `--interaction-fail` inject S2
 faults on that lane. Step-completion events (`--verify mjev|truth`): end-state checks of the running step
 (`rojev.system2.verify`; `truth` = simulator truth of authored steps, a declared spoof), posted to the owner; with
 `--arm native --policy remote --s1 pi052` π0.5²'s own subtask switches are step events too (XR-1 reports none): claims the step watcher confirms
-with one check when `--verify` is on (only confirmed ones are progress), else unchecked events. The planning heartbeat defaults to
-1 s, or 0.8 × lease when step events cover progress. What the robot says is printed and logged (utterances.jsonl).
+with one check when `--verify` is on (only confirmed ones are progress), else unchecked events; the watcher also checks
+at once when the gripper or base mode switches (`rojev.control.SwitchCues`), else every `--verify-every` s, and
+rechecks after `--recheck` s to confirm. Planning is event-driven (`rojev.owner`): `--watchdog` s without a request
+(default 1 s for the arms that poll a clock or simulator truth: scripted, oracle, revisable; 10 s otherwise),
+`--step-budget` s on one step (default `--max-commit` for the commit arm), and the owner keeps the lease alive unless
+planning stays unanswered for `--liveness` s. Finished tasks go to <out>/episodes.jsonl (episodic memory). What the
+robot says is printed and logged (utterances.jsonl).
 `--say T:TEXT` (repeatable) sends a user instruction T seconds in; `--on-change review|revoke`.
 Commitment: `--commit-policy fixed|phase`, `--speculative-predict --samples K`, `--sample-noise` (skills: target noise
 per sample). Execution monitor: `--execution-monitor MODEL.json` / `--monitor-record OUT.npz`; `--block-at T --block-s
@@ -67,9 +72,9 @@ from harness import (FailingDecider, FrameCheck, FrameRecorder, InteractionCases
                      TruthVerifier, VideoRecorder)
 from history import FrameHistory, HistoryPolicy
 import render_context
-from rojev.control import ControlLoop, ExecutionRuntime, Guard, TickRecord
+from rojev.control import ControlLoop, ExecutionRuntime, Guard, SwitchCues, TickRecord
 from rojev.eval import AlwaysContinue, NativePlanner, ScriptedSequence, TruthSequence
-from rojev.owner import INSTRUCTION_CHANGE_MODES, INTERACTION_TRIGGERS, StateOwner
+from rojev.owner import INSTRUCTION_CHANGE_MODES, INTERACTION_TRIGGERS, EpisodicLog, StateOwner
 from rojev.protocol import (ACK, Deviation, Observation, ObservationSnapshot, Operation, OpKind, UserInstruction,
                             Utterance)
 from rojev.system1 import (COMMIT_POLICIES, ActionChunk, ExecutionMonitor, MonitorModel, Policy, RemotePolicy, S1Runner,
@@ -260,12 +265,18 @@ def parse(argv=None) -> argparse.Namespace:
     p.add_argument("--on-change", choices=list(INSTRUCTION_CHANGE_MODES), default="review")
     p.add_argument("--review-s", type=float, default=1.0)
     p.add_argument("--stop-s", type=float, default=0.3)
-    p.add_argument("--refill", type=float, default=1.0)
     p.add_argument("--blend", type=float, default=0.2)
     p.add_argument("--lease", type=float, default=3.0)
-    p.add_argument("--decide-every", type=float,
-                   help="planning heartbeat (s); default 1.0, or 0.8 × lease when step events cover progress "
-                        "(--verify, or --arm native with --policy remote: π0.5²'s own subtask switches)")
+    p.add_argument("--watchdog", type=float,
+                   help="ask the planning lane after this long without a request (s); default 1.0 for the arms that "
+                        "poll a clock or truth (scripted, oracle, revisable*), else 10.0")
+    p.add_argument("--step-budget", type=float,
+                   help="ask the planning lane when one step has run this long (s); default --max-commit for --arm "
+                        "commit, else off")
+    p.add_argument("--liveness", type=float, default=30.0,
+                   help="stop renewing the lease once a planning request has gone unanswered this long (s)")
+    p.add_argument("--recheck", type=float, default=0.5,
+                   help="step watcher: recheck this soon after a check found the step done, to confirm it (s)")
     p.add_argument("--commit-policy", choices=list(COMMIT_POLICIES), default="fixed")
     p.add_argument("--speculative-predict", action="store_true")
     p.add_argument("--samples", type=int)
@@ -293,8 +304,9 @@ def parse(argv=None) -> argparse.Namespace:
         p.error("--record-interaction needs --interaction jev")
     if a.model_delay and not a.lockstep:
         p.error("--model-delay needs --lockstep")
-    step_events = a.verify != "none" or (a.arm in ("native", "commit") and a.policy == "remote")
-    a.decide_every = a.decide_every or (0.8 * a.lease if step_events else 1.0)
+    polls = a.arm in ("scripted", "oracle", "revisable", "revisable-truth")
+    a.watchdog = a.watchdog or (1.0 if polls else 10.0)
+    a.step_budget = a.step_budget or (a.max_commit if a.arm == "commit" else None)
     try:
         a.commit = make_commit_policy(a.commit_policy, a.speculative_predict, **{
             k: v for k, v in (("samples", a.samples), ("tolerance", a.tolerance)) if v is not None})
@@ -459,15 +471,14 @@ def watch(owner: StateOwner, backend: RoboCasaBackend, speaker: "Speaker") -> di
 
 
 def s1_waiting(runner: S1Runner, runtime: ExecutionRuntime, now: float) -> bool:
-    """S1 has a request in flight or about to start (the runner's refill rule), or an answer not yet submitted."""
+    """S1 has a request in flight or about to start (the runner's `chunk_due`), or an answer not yet submitted."""
     stats = runner.stats
     if stats.requests != len(stats.obs_age_s) + stats.errors + stats.timeouts:
         return True
     goal = runtime.target()
     if goal is None:
         return False
-    until = runtime.queued_until(goal.cmd_id)
-    return until is None or until - now <= runner.lead_s()
+    return runner.chunk_due(goal.cmd_id, now)
 
 
 def onejev_calls(decider) -> list[dict]:
@@ -520,6 +531,8 @@ def main(argv=None) -> int:
         t = r.tick
         if monitor is not None:
             monitor.observe(r)
+        if cues is not None:
+            cues(r)
         log.write(json.dumps({"t": round(t.t, 3), "source": t.source, "mode": t.mode.value, "cmd": t.cmd_id,
                               "skipped": t.skipped, "held": list(t.held_switches), "violations": list(t.violations),
                               "hold_reason": t.hold_reason, "review": t.review, "starved": t.starved,
@@ -535,9 +548,9 @@ def main(argv=None) -> int:
     delay = ModelDelay(loop.now) if a.model_delay else None
     policy = RecordingPolicy(make_policy(a, backend, history), loop.now, delay)
     commit = RecordingCommit(a.commit, loop.now)
-    runner = S1Runner(runtime, policy, loop.latest, loop.now, refill_s=a.refill, commit=commit,
+    runner = S1Runner(runtime, policy, loop.latest, loop.now, commit=commit,
                       on_step=lambda e: watcher.claim(e) if watcher is not None else owner.post(e),
-                      on_plan=lambda e: owner.post(e), deadline=not a.lockstep or a.model_delay)
+                      on_plan=lambda e: owner.post(e), clock_runs_while_thinking=not a.lockstep or a.model_delay)
     planner, steps = make_planner(a, backend)
     planning = RecordingDecider(planner, loop.now, "planning", delay)
     worker = DecisionWorker(planning, lambda prop: owner.post(prop), loop.now, name="planning")
@@ -547,18 +560,20 @@ def main(argv=None) -> int:
                  if interaction is not None else None)
     speaker = Speaker()
     owner = StateOwner(runtime, guard, worker, loop.latest, loop.now, instruction, lease_s=a.lease,
-                       decide_every_s=a.decide_every, on_instruction_change=a.on_change, review_s=a.review_s,
+                       watchdog_s=a.watchdog, step_budget_s=a.step_budget, liveness_s=a.liveness,
+                       on_instruction_change=a.on_change, review_s=a.review_s,
                        interaction=responder, interaction_timeout_s=a.interaction_timeout, say=speaker.say,
-                       hold_recheck_s=a.hold_recheck)
+                       hold_recheck_s=a.hold_recheck, episodic=EpisodicLog(out / "episodes.jsonl"))
     watcher = (StepWatcher(make_verifier(a, backend, steps, loop.now), runtime.active_goal, loop.latest, owner.post, loop.now,
                            list(CAMS), every_s=a.verify_every, done_threshold=a.done_threshold,
-                           confirmations=a.confirmations)
+                           confirmations=a.confirmations, recheck_s=a.recheck)
                if a.verify != "none" else None)
+    cues = SwitchCues(PANDA_OMRON, watcher.cue) if watcher is not None else None
     config = {"task": a.task, "instruction": instruction, "arm": a.arm, "planner": planner.name, "s1": a.s1,
               "interaction": interaction.name if interaction else None, "policy": a.policy, "seed": a.seed,
               "sequence": [s.subtask for s in steps], "say": a.say, "latency_s": a.latency, "sample_noise": a.sample_noise,
-              "seconds": a.seconds, "refill_s": a.refill, "blend_s": a.blend, "lease_s": a.lease,
-              "decide_every_s": a.decide_every, "on_change": a.on_change, "review_s": a.review_s, "stop_s": a.stop_s,
+              "seconds": a.seconds, "blend_s": a.blend, "lease_s": a.lease,
+              "watchdog_s": a.watchdog, "step_budget_s": a.step_budget, "liveness_s": a.liveness, "on_change": a.on_change, "review_s": a.review_s, "stop_s": a.stop_s,
               "interaction_timeout_s": a.interaction_timeout, "interaction_delay_s": a.interaction_delay,
               "interaction_fail": a.interaction_fail, "commit": repr(a.commit),
               "chooser": a.chooser if a.interaction == "jev" else None,
@@ -567,7 +582,7 @@ def main(argv=None) -> int:
               "skills": skills(a, instruction) if a.interaction == "jev" and a.reviser == "canonical" else None,
               "hold_recheck_s": a.hold_recheck,
               "verify": None if watcher is None else {"every_s": a.verify_every, "done_threshold": a.done_threshold,
-                                                      "confirmations": a.confirmations},
+                                                      "confirmations": a.confirmations, "recheck_s": a.recheck},
               "execution_monitor": str(a.execution_monitor) if a.execution_monitor else None,
               "blocked": {"at": a.block_at, "s": a.block_s} if a.block_at is not None else None,
               "control_hz": PANDA_OMRON.control_hz}
@@ -687,7 +702,7 @@ def main(argv=None) -> int:
         provider.force_flush()
         provider.shutdown()
     print(json.dumps({k: summary[k] for k in ("realtime_factor", "starved_ticks", "violations", "commands",
-                                              "keyframes", "task_success")}, indent=2, default=str))
+                                              "memory", "task_success")}, indent=2, default=str))
     print(f"[realtime] -> {out}")
     backend.env.close()
     return 0
@@ -708,8 +723,9 @@ def summarize(a, config, out, loop, runtime, runner, owner, worker, responder, m
             "commands": [{"t": e["t"], "cmd": e["cmd"], "op": e["op"], "subtask": e["subtask"], "lane": e.get("lane"),
                           "reason": e["reason"]} for e in ev if e["kind"] in ("command", "reaffirm")],
             "refused": [e for e in ev if e["kind"] == "refused"],
-            "keyframes": [{"cmd": k.cmd_id, "subtask": k.subtask, "rev": k.instruction_rev, "t": k.capture.t,
-                           "evidence": k.evidence} for k in owner.keyframes],
+            "memory": [{"cmd": r.cmd_id, "step": r.step, "status": r.status.value, "rev": r.instruction_rev,
+                        "t": r.t, "obs_t": r.capture.t, "evidence": r.evidence, "checked": r.checked}
+                       for r in owner.memory.records],
             "interaction_lane": None if responder is None else {
                 "decisions": responder.stats.decisions, "errors": responder.stats.errors,
                 "timeouts": sum(e["kind"] == "interaction timeout" for e in ev),
@@ -724,7 +740,7 @@ def summarize(a, config, out, loop, runtime, runner, owner, worker, responder, m
             "verify": None if watcher is None else {
                 "checks": watcher.stats.checks, "errors": watcher.stats.errors, "events": watcher.stats.events,
                 "claims": watcher.stats.claims, "unconfirmed": watcher.stats.unconfirmed,
-                "last_error": watcher.stats.last_error},
+                "cues": watcher.stats.cues, "last_error": watcher.stats.last_error},
             "frames_recorded": None if frames is None else len(frames.states),
             "truth_now": {s.subtask: backend.truth(s.done) for s in steps},
             "s1_requests": st.requests, "s1_accepted": st.accepted, "s1_errors": st.errors, "s1_last_error": st.last_error,
@@ -733,7 +749,7 @@ def summarize(a, config, out, loop, runtime, runner, owner, worker, responder, m
             "s1_forced": st.forced, "s1_planner_steps": st.planner_steps, "s1_timeouts": st.timeouts,
             "commit": None if not isinstance(planner_of(worker), CommitVerifyPlanner) else {
                 "reentries": planner_of(worker).reentries, "expired": planner_of(worker).expired,
-                "verified": sum(k.checked for k in owner.keyframes)},
+                "verified": len(owner.memory.checked_done())},
             "monitor": None if monitor is None or model is None else {
                 "threshold": round(model.threshold, 3), "max_score": round(monitor.max_score, 3),
                 "uncovered_ticks": monitor.uncovered,

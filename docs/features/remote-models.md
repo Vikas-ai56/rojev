@@ -1,16 +1,35 @@
-# Remote models: services, transport, wire format (2026-10-21, updated 2026-10-24)
+# Remote models: services, transport, wire format (2026-10-21, updated 2026-11-10)
 
-Code: `rojev/transport/` (`open_transport`, `HttpTransport`, `H3Transport`, `Endpoint`, `HttpServer`, `H3Server`, `make_certificate`), `rojev/system1/wire.py` (wire v3, codecs), `rojev/system1/remote.py` (`RemotePolicy`), `rojev/system1/service.py` (`PolicyService`, `serve_policy`), `executors/robocasa-pi052/serve.py` (π0.5²), `executors/robocasa-xr1/serve.py` (XR-1), `rojev/system2/models/onejev.py` (`KeptClient`), `rojev/system2/models/mjev.py` (`RemoteMJev`), `rojev/system2/models/sam2.py` (`RemoteSam2`), `services/mjev/serve_mjev.py`, `services/sam2/serve_sam2.py`. Tests: `tests/test_transport.py` (19: loopback, stand-in service, TCP proxy that loses replies / drops connections), `tests/test_onejev_client.py` (1: one shared connection, a dropped one reopened), `executors/robocasa-pi052/tests/test_serve.py` (5: stand-in policy, no GPU). Box setup and ports: `scripts/gpu_setup.sh`, `scripts/gpu_box.sh`.
+Code: `rojev/transport/` (`open_transport`, `HttpTransport`, `H3Transport`, `Endpoint`, `HttpServer`, `H3Server`, `make_certificate`), `rojev/system1/wire.py` (wire v3, codecs), `rojev/system1/remote.py` (`RemotePolicy`), `rojev/system1/service.py` (`PolicyService`, `serve_policy`), `executors/robocasa-pi052/serve.py` (π0.5²), `executors/robocasa-xr1/serve.py` (XR-1), `services/lerobot-policy/` (any LeRobot checkpoint), `executors/so101-groot/serve.py` (GR00T, Isaac format), `rojev/system2/models/onejev.py` (`KeptClient`), `rojev/system2/models/chat_vlm.py` (any VLM behind `/v1/chat/completions`), `services/planner-vlm/` (Embodied-R1.5 on vLLM), `rojev/system2/models/mjev.py` (`RemoteMJev`), `rojev/system2/models/sam2.py` (`RemoteSam2`), `services/mjev/serve_mjev.py`, `services/sam2/serve_sam2.py`. Tests: `tests/test_transport.py` (19: loopback, stand-in service, TCP proxy that loses replies / drops connections), `tests/test_onejev_client.py` (1: one shared connection, a dropped one reopened), `executors/robocasa-pi052/tests/test_serve.py` (5: stand-in policy, no GPU), `services/lerobot-policy/tests/` (32, stand-in policy), `tests/test_chat_vlm.py` (2, stand-in chat server). Box setup and ports: `scripts/gpu_setup.sh`, `scripts/gpu_box.sh`.
 
 ## Services
 | Service | Role | Endpoints | Auth | Server | Client |
 |---|---|---|---|---|---|
 | XR-1 (`executors/robocasa-xr1/serve.py`) | S1 (current RoboCasa S1) | same as π0.5² | bearer token (`Endpoint`) | `serve_policy`, HTTP/1.1 only (no `--h3-port` flag) | `RemotePolicy` inside `HistoryPolicy` |
+| GR00T N1.7, Isaac-GR00T format (`executors/so101-groot/serve.py`) | S1 candidate for the SO-101; zero-shot DROID run only (E32), no SO-101 fine-tune | same as π0.5² | bearer token (`Endpoint`) | `serve_policy`, HTTP/1.1, port 8005 | `RemotePolicy`; contract in `docs/model-bringup/groot.md` |
+| LeRobot policy (`services/lerobot-policy/serve.py`) | S1 for any LeRobot-format checkpoint; today GR00T N1.7 LIBERO (one config per process) | same as π0.5² | bearer token (`Endpoint`) | `serve_policy`, HTTP/1.1, port 8007 | `RemotePolicy` (LIBERO `evaluate.py`, codec `raw`) |
+| Embodied-R1.5 (`services/planner-vlm`, `vllm serve`) | S2 planner and done checker candidate | OpenAI-compatible `POST /v1/chat/completions`, served name `Embodied-R1.5` | bearer token (vLLM `VLLM_API_KEY`) | vLLM 0.18 own server, 127.0.0.1, port 8006 | `chat_vlm.ChatVLM` → `ChatNextStep`, `ChatVerifier` |
 | OneJev (`qev serve`) | S2 decision (Jev chooser, `--verify onejev`) | qev API | none | uvicorn, 127.0.0.1 (`--host 127.0.0.1` mandatory) | `onejev.KeptClient` (one kept connection) |
 | SAM 2.1 (`serve_sam2.py`) | masks for measurement; not in the loop | `POST /segment`, `/track/start`, `/track/step`, `/track/end`, `GET /health` | bearer token (own check) | own threaded HTTP/1.1, 127.0.0.1 | `RemoteSam2` (`rojev.transport`) |
-- Every service reaches the Mac through an SSH tunnel made by `scripts/gpu_setup.sh`; only `serve_policy` services can add HTTP/3, and no hook does.
+- Every service reaches the Mac through an SSH tunnel made by `scripts/gpu_setup.sh`; only `serve_policy` services can add HTTP/3, and no hook does. LIBERO's simulator runs on the box beside the S1 service (`executors/libero/gpu/`, no port of its own).
 - `--idle-min` (code default 30; the GPU hooks pass 600) exits after that long without requests; qev has no idle exit. `MAX_BODY` 32 MB on π0.5², XR-1 and MJev.
 - XR-1: the RoboCasa365 checkpoint behind our wire, never its upstream pickle socket; history-encoded observation (`<cam>@k`, k = 0 oldest, 4 frames 2 ticks apart, + stacked `agent_pos`) → its prompt and processor → 16 × 12 raw actions, mapped into the action space on the robot side (`embodiment.to_action_space`); stateless, so a retried request answers the same. Measured on the A100: 10.2 GB, ~40 ms preprocess + 275–290 ms inference per query (E23).
+
+## LeRobot policy service (S1 for any LeRobot-format model; decision 2026-11-10)
+- One small config file per model (`config/s1/<name>.yaml`) says which checkpoint and revision to load, which
+  settings to override, which of our cameras feeds which model input, and how many action numbers come back. A new
+  LeRobot model needs a config, not code. One config per running service.
+- Each request is prepared exactly as LeRobot's own evaluation does, using the checkpoint's own pre- and
+  post-processing. The text is the step if the command has one, else the whole task.
+- It refuses to start on a wrong camera map, a wrong action width or a missing GPU, and refuses an answer containing
+  non-numbers.
+
+## Chat client for vision-language models (S2; new, may still change)
+- One client for any model served with vLLM's chat interface (today Embodied-R1.5). How the model is asked and how
+  its answer is read live in a config file (`config/s2/<model>.yaml`), shared with the offline bench.
+- Two uses: the planner's next step and the done check.
+- Answers are read strictly: a step must be one of the allowed steps, "done" needs a plain yes. Anything else counts
+  as no step / not done, so a garbled answer never moves the robot or confirms a step.
 
 ## Transport (`rojev/transport/`; depends on nothing else in rojev)
 - `open_transport(url, token, cert_pem=None, timeout_s=120)`: `h3://host:port` → `H3Transport` (needs `cert_pem`, else `ValueError`); anything else → `HttpTransport`. Both: `request(method, path, body) → bytes`, `health()`, `close()`.

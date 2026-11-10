@@ -1,12 +1,12 @@
-"""Wire format for a remote executor: numpy-only, no pickle. Version `VERSION` (3); both sides refuse another one.
+"""Wire format for a remote executor: numpy-only, no pickle. Version `VERSION` (4); both sides refuse another one.
 
 Request  = compressed .npz: `version`; per camera either `img/<camera>` (uint8 H×W×3, lossless, codec "raw") or
            `webp/<camera>` (WebP bytes, codec "webp90"); `state` (float32); `task` and `subtask` (unicode scalars);
            `samples` K ≥ 1 (one observation, K independently sampled chunks in one request); optionally the
            continuation (`policy.Continuation`): `prefix` (float32 n×d, the actions already queued from the
            observation's time) and `delay_steps`.
-Response = compressed .npz: `version`; `actions` (float32 K×n×d); `timings_ms` and `info` (JSON lists, one entry per
-           sample).
+Response = compressed .npz: `version`; `actions` (float32 K×n×d); `timings_ms`, `info` and `execute_steps` (JSON
+           lists, one entry per sample; `execute_steps` null = run the whole chunk).
 
 Codecs: "raw" (lossless, ~150 KB for three 256² cameras) and "webp90" (WebP quality 90, ~26 KB, ~3 ms encode per
 camera). Measured on π0.5² with real RoboCasa frames: actions from WebP-90 frames differ from lossless ones by 0.078
@@ -26,7 +26,7 @@ from rojev.protocol import Observation
 
 from .policy import ActionChunk, Continuation
 
-VERSION = 3
+VERSION = 4
 IMG, WEBP = "img/", "webp/"
 CODECS = ("raw", "webp90")
 DEFAULT_CODEC = "webp90"
@@ -89,7 +89,8 @@ def encode_response(chunks: Sequence[ActionChunk]) -> bytes:
     np.savez_compressed(buf, version=np.array(VERSION),
                         actions=np.stack([np.asarray(c.actions, dtype=np.float32) for c in chunks]),
                         timings_ms=np.array(json.dumps([c.timings_ms for c in chunks])),
-                        info=np.array(json.dumps([c.info for c in chunks])))
+                        info=np.array(json.dumps([c.info for c in chunks])),
+                        execute_steps=np.array(json.dumps([c.execute_steps for c in chunks])))
     return buf.getvalue()
 
 
@@ -97,7 +98,8 @@ def decode_response(data: bytes) -> list[ActionChunk]:
     with np.load(io.BytesIO(data), allow_pickle=False) as z:
         _check_version(z)
         timings, info = json.loads(str(z["timings_ms"])), json.loads(str(z["info"]))
-        return [ActionChunk(a, t, i) for a, t, i in zip(z["actions"], timings, info, strict=True)]
+        steps = json.loads(str(z["execute_steps"]))
+        return [ActionChunk(a, t, i, n) for a, t, i, n in zip(z["actions"], timings, info, steps, strict=True)]
 
 
 def _check_version(z) -> None:

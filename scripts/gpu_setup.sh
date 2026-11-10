@@ -23,18 +23,19 @@
 #   local-assets:<n>    hook check_local / prepare_local on this Mac (first, so a missing login fails early)
 #   driver              nvidia-smi works; else install the -server driver branch + utils matching the built module
 #   gpu-mode            MIG partitioning off (MIG on with no instances hides the GPU from CUDA); refused while GPU processes run
-#   packages, uv        build-essential git rsync curl (evdev builds from source); uv >= this Mac's version
-#   code:core           rojev/ pyproject.toml uv.lock README.md (only with an executor: its env depends on the core)
+#   packages, uv        build-essential git git-lfs rsync curl ffmpeg libegl1 libopengl0 (evdev builds from source; vendors clone LFS files as pointers, a hook pulls what it needs; ffmpeg 4-7 for torchcodec video decoding; EGL + OpenGL loaders for MuJoCo rendering on the GPU); uv >= this Mac's version
+#   code:core           rojev/ pyproject.toml uv.lock README.md (when an executor is given or any component's lock lists rojev)
 #   code:shared         config/ (pins) and scripts/ (hf_pins.py)
 #   code:<n>            the component's hook files + gpu/; trees mirrored with --delete, compared by checksum
 #   vendor:<dir>        git clones at the commits pinned in config/*.commit (core + every hook's vendors, deduplicated)
 #   env:<n>             uv sync --frozen with uv-managed Python (system Python lacks Python.h)
-#   assets:<n>          hook assets copied to the box, compared by size + mtime: they are symlinks into the HF cache,
+#   assets:<n>          hook assets copied to the box (target folders created first), compared by size + mtime: they are symlinks into the HF cache,
 #                       and macOS openrsync with -c -L checksums the link rather than its target (every file reads as
 #                       changed, exit 23)
 #   prepare-remote:<n>  hook check_remote / prepare_remote on the box (weights pre-download); env, assets and
 #                       prepare-remote run for every component at once, one background job each (logs printed after)
-#   torch:<n>           the component env's torch sees CUDA
+#   torch:<n>           the component env's torch sees CUDA (components that declare GPU memory; a simulator
+#                       plug-in with gpu_mem_mib 0 may use CPU torch)
 #   service-json        ~/.config/rojev/services/<host>.json {"<key>": {"url", "token"?}}, mode 600; tokens made here;
 #                       other entries in the file are kept
 #   token:<key>         the box's copy of that token matches (sha256 compare; sent only when it differs)
@@ -44,6 +45,7 @@
 #   tunnel:<key>        ssh -L <local>:127.0.0.1:<remote_port> in the background; GET /health through it
 #
 # Component interface: <kind>/<name>/gpu/hook.sh <subcommand>, working dir = component dir, ROJEV_ROOT = repo root.
+# A component whose hook prints remote_port 0 serves nothing (e.g. a simulator plug-in): it is set up, never started.
 #   Mac:  key, auth, gpu_mem_mib, files, vendors, remote_port, check_local, prepare_local, assets, client_hint JSON URL
 #   Box:  check_remote, prepare_remote, serve
 # Full contract in executors/robocasa-pi052/gpu/hook.sh; box-side steps live in scripts/gpu_box.sh.
@@ -176,13 +178,26 @@ load_components() {
     done
   done
   for value in "$(printf '%s\n' "${NAMES[@]}" | sort | uniq -d)" "$(printf '%s\n' "${KEYS[@]}" | sort | uniq -d)" \
-               "$(printf '%s\n' "${REMOTE_PORTS[@]}" | sort | uniq -d)"; do
+               "$(printf '%s\n' "${REMOTE_PORTS[@]}" | grep -vx 0 | sort | uniq -d)"; do
     [[ -z "$value" ]] || die "components clash: name, key or remote port '$value' is used twice"
   done
 }
 
 has_executor() {
   [[ -n "$EXECUTOR" ]]
+}
+
+serves() {
+  (( REMOTE_PORTS[$1] > 0 ))
+}
+
+needs_core() {
+  has_executor && return 0
+  local component
+  for component in "${COMPONENTS[@]}"; do
+    grep -qx 'name = "rojev"' "$REPO/$component/uv.lock" 2>/dev/null && return 0
+  done
+  return 1
 }
 
 require_mac_tools() {
@@ -387,8 +402,8 @@ group_install() {
 
 step_code() {
   local i
-  if has_executor; then
-    run_step "$EXECUTOR" code:core "rsync the rojev core to ~/rojev" group_ready group_install core
+  if needs_core; then
+    run_step "${EXECUTOR:-core}" code:core "rsync the rojev core to ~/rojev" group_ready group_install core
   fi
   run_step all code:shared "rsync config/ and scripts/ to ~/rojev" group_ready group_install shared
   for i in "${!COMPONENTS[@]}"; do
@@ -452,6 +467,7 @@ rsync_assets() {
     while IFS= read -r source; do
       sources+=("$source")
     done < <(printf '%s\n' "$lines" | awk -F'\t' -v d="$dir" '$2 == d {print $1}')
+    [[ "$mode" == check ]] || ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p -- $(printf '%q' "$dir")" < /dev/null
     rsync "${flags[@]}" "${sources[@]}" "$HOST:$dir/" < /dev/null
   done < <(printf '%s\n' "$lines" | cut -f2 | sort -u)
 }
@@ -557,7 +573,9 @@ component_env() {
   await driver
   run_step "$name" "prepare-remote:$name" "run $name's box-side preparation" remote_prepared remote_prepare \
     "$component"
-  run_verify "torch:$name" torch_cuda "$component"
+  if (( GPU_MEMS[$1] > 0 )); then
+    run_verify "torch:$name" torch_cuda "$component"
+  fi
 }
 
 code_branch() {
@@ -609,12 +627,15 @@ ports_claimed() {
 pick_local_ports() {
   local i url port
   for i in "${!COMPONENTS[@]}"; do
+    LOCAL_PORTS[i]=
+    serves "$i" || continue
     LOCAL_PORTS[i]=$(local_port_flag "${KEYS[$i]}")
     if [[ -z "${LOCAL_PORTS[$i]}" ]] && url=$(json_get "${KEYS[$i]}" url); then
       LOCAL_PORTS[i]=${url##*:}
     fi
   done
   for i in "${!COMPONENTS[@]}"; do
+    serves "$i" || continue
     [[ -z "${LOCAL_PORTS[$i]}" ]] || continue
     for (( port = LOCAL_PORT_RANGE[0]; port <= LOCAL_PORT_RANGE[1]; port++ )); do
       if ! ports_claimed | grep -qx "$port" && ! lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null; then
@@ -625,7 +646,8 @@ pick_local_ports() {
     [[ -n "${LOCAL_PORTS[$i]}" ]] ||
       die "no free local port in ${LOCAL_PORT_RANGE[0]}-${LOCAL_PORT_RANGE[1]}; pass --local-port ${KEYS[$i]}=N"
   done
-  [[ $(printf '%s\n' "${LOCAL_PORTS[@]}" | sort | uniq -d | wc -l) -eq 0 ]] || die "two components got the same local port"
+  [[ $(printf '%s\n' "${LOCAL_PORTS[@]}" | grep -v '^$' | sort | uniq -d | wc -l) -eq 0 ]] ||
+    die "two components got the same local port"
 }
 
 service_url() {
@@ -635,6 +657,7 @@ service_url() {
 service_json_entries() {
   local i
   for i in "${!COMPONENTS[@]}"; do
+    serves "$i" || continue
     printf '%s\n%s\n%s\n' "${KEYS[$i]}" "$(service_url "$i")" "${AUTHS[$i]}"
   done
 }
@@ -762,6 +785,8 @@ service_wait() {
 step_services() {
   local i
   for i in "${!COMPONENTS[@]}"; do
+    SERVICE_WAIT[i]=0
+    serves "$i" || continue
     step_service "$i"
   done
   if (( DRY_RUN )); then
@@ -780,6 +805,7 @@ step_tunnels() {
   local i
   jobs_begin
   for i in "${!COMPONENTS[@]}"; do
+    serves "$i" || continue
     spawn "tunnel:${KEYS[$i]}" step_tunnel "$i"
   done
   join_all "a tunnel failed"
@@ -834,12 +860,14 @@ print_summary() {
   if (( DRY_RUN )); then
     log summary "dry run: nothing was changed (service JSON would be $SERVICE_JSON)"
     for i in "${!COMPONENTS[@]}"; do
+      serves "$i" || { log summary "${KEYS[$i]}: set up on the box, serves nothing"; continue; }
       log summary "${KEYS[$i]}: localhost:${LOCAL_PORTS[$i]} -> box 127.0.0.1:${REMOTE_PORTS[$i]}, unit rojev-${NAMES[$i]}, auth ${AUTHS[$i]}"
     done
     return
   fi
   log summary "service JSON (urls + tokens, mode 600): $SERVICE_JSON"
   for i in "${!COMPONENTS[@]}"; do
+    serves "$i" || continue
     log "next:${KEYS[$i]}" "$(hook_local "${COMPONENTS[$i]}" client_hint "$SERVICE_JSON" "$(service_url "$i")")"
   done
 }

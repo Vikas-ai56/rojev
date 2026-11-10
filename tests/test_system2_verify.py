@@ -105,6 +105,21 @@ def test_the_watcher_thread_confirms_claims_between_periodic_checks():
     assert len(posted) == 1 and posted[0].checked
 
 
+def test_a_cue_checks_at_once_and_a_found_done_is_rechecked_soon_not_after_the_fallback():
+    verifier = ScriptedVerifier([0.95] * 50)
+    w, posted = watcher(verifier, lambda: goal(5), every_s=30.0, recheck_s=0.05, confirmations=2)
+    w.start()
+    time.sleep(0.2)
+    assert verifier.calls == 0
+    w.cue("gripper off")
+    deadline = time.monotonic() + 2.0
+    while not posted and time.monotonic() < deadline:
+        time.sleep(0.01)
+    w.stop()
+    assert len(posted) == 1 and posted[0].detail["cue"] == "gripper off" and posted[0].detail["checks"] == 2
+    assert w.stats.cues == 1 and verifier.calls == 2
+
+
 def test_onejev_answers_the_same_question_with_neutral_option_ids(monkeypatch):
     from types import SimpleNamespace
 

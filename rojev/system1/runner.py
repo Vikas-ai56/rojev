@@ -1,8 +1,11 @@
 """S1 runner: keeps the command that needs actions supplied with chunks from an S1 policy, on its own thread.
 
-It asks the policy (any `Policy`: local, or a remote GPU service) for a chunk on the newest observation whenever the
-target command's queue reaches less than `refill_s` ahead of now, and places the chunk on that observation's time:
-action k is due at `t_capture + k · dt`. Actions whose time passed during inference are skipped by the runtime, so a
+It asks the policy (any `Policy`: local, or a remote GPU service) for a chunk on the newest observation when the
+target command's current chunk is due to be replaced, and places the chunk on that observation's time: action k is due
+at `t_capture + k · dt`. A chunk is due to be replaced once the actions its model means to run have run
+(`ActionChunk.execute_steps`, the model's own recipe, e.g. 8 of GR00T's 16 on LIBERO), or when the queue runs out if
+the model runs whole chunks; the request goes out the lead time earlier so the new chunk lands on time. The rest of
+the chunk stays queued behind that point, so a late answer leaves the robot moving on its plan instead of holding. Actions whose time passed during inference are skipped by the runtime, so a
 slow policy costs its latency, never stale motion. A revoked or replaced command's late chunk is rejected by the
 runtime. The policy sees the command's instruction (`AcceptedGoal.instruction`), so a changed instruction never
 reaches S1 as stale task text. Policy errors are counted and retried; they never stop the loop (the guard holds
@@ -10,11 +13,15 @@ the robot meanwhile).
 
 Liveness is derived from measured latency, not configured. Latency L = how old the observation is when its chunk is
 submitted (robot clock; includes K-sample cost and the network), estimated as the largest of the last
-`latency_window` requests. A chunk captured at c and committed for n steps covers [c, c + n·dt); the next request
-starts when less than the lead time is queued and its chunk lands L later, so the robot runs without gaps only if the
-lead time ≥ L and n·dt ≥ 2L (plus a tick of quantization). The runner therefore requests when less than
-`max(refill_s, L + dt)` is queued and passes `floor = ⌈2L/dt⌉ + 1` to the commitment policy; before the first
-measurement the floor is the whole chunk. Gaps that still happen (a slower request than any before) are counted by the
+`latency_window` requests. A chunk captured at c and committed for n steps covers [c, c + n·dt) (the runtime's
+`queued_end`); the next request starts the lead time before the replacement point and its chunk lands L later, so the
+robot runs without gaps only if the lead time ≥ L and n·dt ≥ 2L (plus a tick of quantization). When the robot clock
+runs while the policy thinks (`clock_runs_while_thinking`: real time, or lockstep that charges the model's delay) the
+lead time is L + dt and the runner passes `floor = ⌈2L/dt⌉ + 1` to the commitment policy; before the first
+measurement the floor is the whole chunk. When the clock stops while the policy thinks (lockstep) no time passes
+between request and answer, so the lead time is 0: the request is made on the tick of the replacement point itself and
+the robot runs exactly the actions the model means to run. Ticks are discrete, so a point within half a tick counts as
+reached (this absorbs rounding, never a whole tick). Gaps that still happen (a slower request than any before) are counted by the
 runtime (`ExecutionRuntime.starved_ticks`).
 
 How much of each chunk is committed is the `CommitPolicy`'s decision (`commit.py`; default `FixedCommit` = the whole
@@ -33,8 +40,8 @@ Each request has a deadline: the duration of the last chunk (its horizon × dt).
 observation's time, so an answer older than that is entirely in the past and useless; waiting longer only starves the
 robot (a stalled connection once held it for 105 s). On `TimeoutError` the request is abandoned, counted (`timeouts`)
 and the next one is made at once on the newest observation, with no back-off. Before the first chunk the horizon is
-unknown and the policy's own timeout applies (a cold first request is slow). With `deadline=False` (the robot clock
-stands still while the policy thinks: lockstep) no answer can be stale, so requests carry no deadline.
+unknown and the policy's own timeout applies (a cold first request is slow). With `clock_runs_while_thinking=False`
+no answer can be stale, so requests carry no deadline.
 
 Inference delay (real-time chunking): for a policy that `accepts_continuation`, each request after the first latency
 measurement carries the command's actions already queued from the observation's time and `delay_steps` = ⌈L/dt⌉,
@@ -85,18 +92,19 @@ class S1Stats:
 
 class S1Runner:
     def __init__(self, runtime: ExecutionRuntime, policy: Policy, latest: Callable[[], Capture],
-                 now: Callable[[], float], refill_s: float, poll_s: float = 0.005, error_backoff_s: float = 0.5,
+                 now: Callable[[], float], poll_s: float = 0.005, error_backoff_s: float = 0.5,
                  commit: CommitPolicy | None = None, latency_window: int = 20,
                  on_step: Callable[[StepEvent], None] | None = None,
-                 on_plan: Callable[[PlannedSubtask], None] | None = None, deadline: bool = True):
+                 on_plan: Callable[[PlannedSubtask], None] | None = None, clock_runs_while_thinking: bool = True):
         self.runtime, self.policy, self.latest, self.now = runtime, policy, latest, now
-        self.deadline = deadline
-        self.refill_s, self.poll_s, self.error_backoff_s = refill_s, poll_s, error_backoff_s
+        self.clock_runs_while_thinking = clock_runs_while_thinking
+        self.poll_s, self.error_backoff_s = poll_s, error_backoff_s
         self.commit = commit or FixedCommit()
         self.on_step, self.on_plan = on_step, on_plan
         self.stats = S1Stats()
         self._planned: tuple[int, str] | None = None
         self._horizon_s: float | None = None
+        self._replace_at: tuple[int, float] | None = None
         self._latency: deque[float] = deque(maxlen=latency_window)
         self._refill_lock = threading.Lock()
         self._refill_cmd: int | None = None
@@ -118,8 +126,19 @@ class S1Runner:
         return max(self._latency) if self._latency else None
 
     def lead_s(self) -> float:
-        latency = self.latency_s()
-        return self.refill_s if latency is None else max(self.refill_s, latency + self.runtime.spec.dt)
+        if not self.clock_runs_while_thinking:
+            return 0.0
+        return (self.latency_s() or 0.0) + self.runtime.spec.dt
+
+    def chunk_due(self, cmd_id: int, now: float) -> bool:
+        """Whether `cmd_id` needs a chunk requested at `now`: nothing is queued for it, or its current chunk's
+        replacement point (its `execute_steps`, else the end of the queue) is within the lead time."""
+        end = self.runtime.queued_end(cmd_id)
+        if end is None:
+            return True
+        replace = self._replace_at
+        due = min(end, replace[1]) if replace is not None and replace[0] == cmd_id else end
+        return due - now <= self.lead_s() + self.runtime.spec.dt / 2
 
     def floor(self, horizon: int) -> int:
         latency = self.latency_s()
@@ -128,7 +147,7 @@ class S1Runner:
         return math.ceil(2 * latency / self.runtime.spec.dt) + 1
 
     def deadline_s(self) -> float | None:
-        return self._horizon_s if self.deadline else None
+        return self._horizon_s if self.clock_runs_while_thinking else None
 
     def refill_now(self, cmd_id: int | None) -> bool:
         goal = self.runtime.target()
@@ -144,8 +163,7 @@ class S1Runner:
         if goal is None:
             return False
         forced = self._refill_for(goal.cmd_id)
-        until = self.runtime.queued_until(goal.cmd_id)
-        if not forced and until is not None and until - self.now() > self.lead_s():
+        if not forced and not self.chunk_due(goal.cmd_id, self.now()):
             return False
         with self._refill_lock:
             self._refill_cmd = None
@@ -193,6 +211,9 @@ class S1Runner:
         now = self.now()
         if self.runtime.submit(timed, now):
             self.stats.accepted += 1
+            execute = chunk.execute_steps
+            self._replace_at = ((goal.cmd_id, capture.t + execute * self.runtime.spec.dt)
+                                if execute is not None and execute < len(commitment.actions) else None)
         self.stats.obs_age_s.append(now - capture.t)
         self._latency.append(now - capture.t)
         return True

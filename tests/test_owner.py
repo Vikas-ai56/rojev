@@ -11,9 +11,9 @@ import pytest
 
 from rojev.eval import AlwaysContinue, NativePlanner, ScriptedSequence, TruthSequence
 from rojev.control import ControlLoop, ExecutionRuntime, Guard, Mode
-from rojev.owner import INTERACTION, PLANNING, StateOwner
+from rojev.owner import INTERACTION, PLANNING, EpisodicLog, StateOwner
 from rojev.protocol import (UNANSWERED, Capture, DecisionFailure, DecisionProposal, Deviation, Observation, Operation,
-                            OpKind, Precondition, StepEvent, TimedChunk, Transition, UserInstruction)
+                            OpKind, Precondition, StepEvent, StepStatus, TimedChunk, Transition, UserInstruction)
 from rojev.robot import KEEP, ActionDim, ActionSpec
 from rojev.system1 import ActionChunk, Policy, S1Runner
 from rojev.system2 import DecisionWorker
@@ -69,7 +69,7 @@ def unit_owner(interaction=False, **kw):
     return owner, runtime, worker, clock
 
 
-def ask(owner, trigger="heartbeat"):
+def ask(owner, trigger="watchdog"):
     owner.request_decision(trigger)
     return owner.workers[PLANNING].requests[-1].request_id
 
@@ -178,7 +178,7 @@ def test_a_rejected_chunk_keeps_the_command_a_rejected_command_asks_again():
 
 
 def test_complete_holds_and_stops_asking():
-    owner, runtime, worker, clock = unit_owner(decide_every_s=0.1)
+    owner, runtime, worker, clock = unit_owner(watchdog_s=0.1)
     owner.handle(proposal(owner, Operation(OpKind.COMPLETE)))
     n = len(worker.requests)
     clock["t"] = 1.0
@@ -217,7 +217,7 @@ def live(decider, policy, seconds, instruction="put the cube in A", events=(), i
     guard = Guard(runtime)
     ticks = []
     loop = ControlLoop(Robot(), guard, SPEC, on_tick=lambda r: ticks.append(r.tick))
-    runner = S1Runner(runtime, policy, loop.latest, loop.now, refill_s=0.2)
+    runner = S1Runner(runtime, policy, loop.latest, loop.now)
     owner = None
     worker = DecisionWorker(decider, lambda p: owner.post(p), loop.now, name="planning")
     responder = (DecisionWorker(interaction, lambda p: owner.post(p), loop.now, name="interaction")
@@ -239,7 +239,7 @@ def live(decider, policy, seconds, instruction="put the cube in A", events=(), i
 def test_scripted_arm_runs_its_sequence_live_then_completes():
     policy = StandInPolicy()
     owner, runtime, ticks, worker = live(ScriptedSequence(["pick the cube", "place the cube in A"], 0.3), policy, 1.5,
-                                         decide_every_s=0.05)
+                                         watchdog_s=0.05)
     commands = [e["subtask"] for e in owner.record.events if e["kind"] == "command"]
     assert commands[:2] == ["pick the cube", "place the cube in A"] and owner.complete
     assert {s for _, s in policy.calls} == {"pick the cube", "place the cube in A"}
@@ -250,7 +250,7 @@ def test_scripted_arm_runs_its_sequence_live_then_completes():
 def test_revoke_mode_live_holds_then_conditions_s1_on_the_new_instruction():
     policy = StandInPolicy()
     owner, runtime, ticks, _ = live(NativePlanner(), policy, 1.2,
-                                    events=[(0.5, UserInstruction("actually, put it in B"))], decide_every_s=0.2,
+                                    events=[(0.5, UserInstruction("actually, put it in B"))], watchdog_s=0.2,
                                     on_instruction_change="revoke")
     kinds = [e["kind"] for e in owner.record.events]
     assert "revoke" in kinds and owner.instruction_rev == 1
@@ -277,14 +277,15 @@ def test_oracle_arm_follows_truth_live():
     threading.Thread(target=flip, daemon=True).start()
     owner, _, _, _ = live(TruthSequence(["pick the cube", "place the cube in A"],
                                         lambda i: truth["picked"] if i == 0 else False), policy, 1.0,
-                          decide_every_s=0.05)
+                          watchdog_s=0.05)
     commands = [e["subtask"] for e in owner.record.events if e["kind"] == "command"]
     assert commands == ["pick the cube", "place the cube in A"]
 
 
-def test_continue_keeps_a_long_task_alive_past_the_lease():
+def test_the_owner_keeps_a_long_task_alive_past_the_lease_without_asking_anyone():
     policy = StandInPolicy()
-    owner, runtime, ticks, _ = live(NativePlanner(), policy, 1.5, lease_s=0.5, decide_every_s=0.1)
+    owner, runtime, ticks, worker = live(NativePlanner(), policy, 1.5, lease_s=0.5, watchdog_s=100.0)
+    assert worker.stats.decisions == 1
     statuses = [e["status"] for e in owner.record.events if e["kind"] == "ack"]
     assert "expired" not in statuses and runtime.mode == Mode.RUNNING
     assert sum(t.source == "chunk" for t in ticks) > 0.8 * len(ticks)
@@ -351,7 +352,7 @@ def test_unknown_instruction_change_mode_is_refused():
 def test_review_mode_live_never_pauses_and_conditions_s1_on_the_new_instruction():
     policy = StandInPolicy()
     owner, runtime, ticks, _ = live(NativePlanner(), policy, 1.2,
-                                    events=[(0.5, UserInstruction("actually, put it in B"))], decide_every_s=0.2)
+                                    events=[(0.5, UserInstruction("actually, put it in B"))], watchdog_s=0.2)
     kinds = [e["kind"] for e in owner.record.events]
     assert "review" in kinds and "reaffirm" in kinds and "revoke" not in kinds
     review_t = next(e["t"] for e in owner.record.events if e["kind"] == "review")
@@ -377,7 +378,7 @@ def test_change_triggers_go_to_the_interaction_lane_routine_ones_to_planning():
 
 
 def test_while_an_interaction_decision_is_pending_planning_waits():
-    owner, runtime, planning, clock = unit_owner(interaction=True, decide_every_s=0.1)
+    owner, runtime, planning, clock = unit_owner(interaction=True, watchdog_s=0.1)
     owner.handle(proposal(owner, A))
     run_command(owner, runtime, clock, 1)
     stale_plan = ask(owner)
@@ -517,7 +518,7 @@ def test_without_an_interaction_worker_every_trigger_goes_to_planning():
     assert planning.requests[-1].trigger == "instruction" and not owner.interaction_pending
 
 
-def test_moving_past_a_running_step_records_a_keyframe_with_the_decisions_observation():
+def test_moving_past_a_running_step_records_it_done_in_memory_with_the_decisions_observation():
     owner, runtime, planning, clock = unit_owner()
     owner.handle(proposal(owner, A))
     run_command(owner, runtime, clock, 1)
@@ -525,43 +526,43 @@ def test_moving_past_a_running_step_records_a_keyframe_with_the_decisions_observ
     request = ask(owner)
     seen = planning.requests[-1].capture
     owner.handle(proposal(owner, B, request, decider="oracle"))
-    assert [(k.cmd_id, k.subtask) for k in owner.keyframes] == [(1, "pick the cube")]
-    assert owner.keyframes[0].capture is seen and owner.keyframes[0].evidence.startswith("decider oracle")
-    assert planning.requests[-1].keyframes == ()
+    assert [(k.cmd_id, k.step) for k in owner.memory.records] == [(1, "pick the cube")]
+    assert owner.memory.records[0].capture is seen and owner.memory.records[0].evidence.startswith("decider oracle")
+    assert planning.requests[-1].memory.records == ()
     ask(owner)
-    assert planning.requests[-1].keyframes == tuple(owner.keyframes)
+    assert planning.requests[-1].memory.records == tuple(owner.memory.records)
     run_command(owner, runtime, clock, 2, value=2.0)
     owner.handle(proposal(owner, Operation(OpKind.COMPLETE)))
-    assert [k.subtask for k in owner.keyframes] == ["pick the cube", "place the cube in A"]
+    assert [k.step for k in owner.memory.records] == ["pick the cube", "place the cube in A"]
 
 
 def test_aborts_waits_retries_and_never_started_steps_are_not_progress():
     owner, runtime, planning, clock = unit_owner()
     owner.handle(proposal(owner, A))
     owner.handle(proposal(owner, B))
-    assert owner.keyframes == []
+    assert owner.memory.records == ()
     run_command(owner, runtime, clock, 2)
     for op in (Operation(OpKind.RETRY, subtask="place the cube in A"), Operation(OpKind.GUARDED_WAIT),
                Operation(OpKind.ABORT)):
         owner.handle(proposal(owner, op))
-    assert owner.keyframes == []
+    assert owner.memory.records == ()
 
 
-def test_keyframes_survive_a_deviation_and_an_instruction_change():
+def test_memory_survives_a_deviation_and_an_instruction_change():
     owner, runtime, planning, clock = unit_owner()
     owner.handle(proposal(owner, A))
     run_command(owner, runtime, clock, 1)
     owner.handle(proposal(owner, B))
     run_command(owner, runtime, clock, 2, value=2.0)
     owner.handle(Deviation(1, 2, 0.1, 5.0, 2.0))
-    assert [k.subtask for k in planning.requests[-1].keyframes] == ["pick the cube"]
+    assert [k.step for k in planning.requests[-1].memory.records] == ["pick the cube"]
     owner.handle(UserInstruction("actually, put it in B"))
-    assert [k.subtask for k in planning.requests[-1].keyframes] == ["pick the cube"]
+    assert [k.step for k in planning.requests[-1].memory.records] == ["pick the cube"]
     owner.handle(proposal(owner, Operation(OpKind.CONTINUE), planning.requests[-1].request_id,
                           task="actually, put it in B"))
     run_command(owner, runtime, clock, 3, value=2.0)
     owner.handle(proposal(owner, Operation(OpKind.COMPLETE)))
-    assert [(k.subtask, k.instruction_rev, k.cmd_id) for k in owner.keyframes] == [
+    assert [(k.step, k.instruction_rev, k.cmd_id) for k in owner.memory.records] == [
         ("pick the cube", 0, 1), ("place the cube in A", 1, 3)]
 
 
@@ -573,7 +574,7 @@ def test_a_failing_decider_posts_a_decision_failure():
             raise RuntimeError("model down")
 
     owner, runtime, planning, clock = unit_owner()
-    owner.request_decision("heartbeat")
+    owner.request_decision("watchdog")
     out = DecisionWorker(Broken(), lambda p: None, lambda: 0.0).decide(planning.requests[-1])
     assert isinstance(out, DecisionFailure) and out.request_id == planning.requests[-1].request_id
     assert "model down" in out.error
@@ -582,7 +583,7 @@ def test_a_failing_decider_posts_a_decision_failure():
 def test_two_lanes_live_answer_a_change_of_mind_from_the_interaction_lane_without_a_pause():
     policy = StandInPolicy()
     owner, runtime, ticks, _ = live(NativePlanner(), policy, 1.2, interaction=AlwaysContinue(),
-                                    events=[(0.5, UserInstruction("actually, put it in B"))], decide_every_s=0.1)
+                                    events=[(0.5, UserInstruction("actually, put it in B"))], watchdog_s=0.1)
     events = owner.record.events
     change = next(i for i, e in enumerate(events) if e["kind"] == "instruction")
     reaffirm = next(i for i, e in enumerate(events) if e["kind"] == "reaffirm")
@@ -599,7 +600,7 @@ def interaction_answer(owner, op):
 
 
 def test_a_stop_holds_until_a_change_and_the_planner_cannot_restart_the_task():
-    owner, runtime, planning, clock = unit_owner(interaction=True, decide_every_s=0.1)
+    owner, runtime, planning, clock = unit_owner(interaction=True, watchdog_s=0.1)
     owner.handle(proposal(owner, A))
     run_command(owner, runtime, clock, 1)
     owner.handle(UserInstruction("stop"))
@@ -654,7 +655,7 @@ def test_instructions_are_acknowledged_at_once_and_questions_join_the_dialogue()
     assert len(owner.workers[INTERACTION].requests[-1].dialogue) == 3
 
 
-def test_a_step_event_asks_planning_at_once_and_becomes_the_keyframe_evidence():
+def test_a_step_event_asks_planning_at_once_and_becomes_the_records_evidence():
     owner, runtime, planning, clock = unit_owner()
     owner.handle(proposal(owner, A))
     run_command(owner, runtime, clock, 1)
@@ -664,7 +665,7 @@ def test_a_step_event_asks_planning_at_once_and_becomes_the_keyframe_evidence():
     snap = planning.requests[-1]
     assert snap.trigger == "step" and snap.step_event.source == "mjev"
     owner.handle(proposal(owner, B, snap.request_id))
-    assert owner.keyframes[-1].evidence == "mjev: {'done': 0.9}"
+    assert owner.memory.records[-1].evidence == "mjev: {'done': 0.9}"
 
 
 def test_a_dropped_command_is_replaced_by_a_new_decision():
@@ -724,16 +725,16 @@ def test_a_step_finishing_while_a_change_is_pending_is_planned_after_the_change(
     assert after.trigger == "step" and after.instruction_rev == 1 and after.step_event.source == "mjev"
 
 
-def test_when_s1_plans_its_own_steps_only_a_checked_step_event_is_the_keyframe():
+def test_when_s1_plans_its_own_steps_only_a_checked_step_event_is_recorded_done():
     owner, runtime, planning, clock = unit_owner()
     native = Operation(OpKind.SWITCH_TO)
     owner.handle(proposal(owner, native))
     run_command(owner, runtime, clock, 1)
     owner.handle(StepEvent(1, 1, 0.5, "s1-planner", "pick the cube", {"next": "place the cube"}))
-    assert owner.keyframes == [] and planning.requests[-1].trigger == "step"
+    assert owner.memory.records == () and planning.requests[-1].trigger == "step"
     owner.handle(StepEvent(1, 1, 0.6, "mjev", "pick the cube", {"p_done": 0.9, "claimed_by": "s1-planner"},
                            checked=True))
-    assert [(k.subtask, k.evidence) for k in owner.keyframes] == [
+    assert [(k.step, k.evidence) for k in owner.memory.records] == [
         ("pick the cube", "mjev: {'p_done': 0.9, 'claimed_by': 's1-planner'}")]
 
 
@@ -749,3 +750,103 @@ def test_the_review_window_lasts_until_the_interaction_answer_is_due():
     owner.tick()
     owner.handle(interaction_answer(owner, Operation(OpKind.GUARDED_WAIT)))
     assert owner.desired.operation.kind == OpKind.GUARDED_WAIT and owner.hold is not None
+
+
+def test_planning_is_asked_at_the_start_on_an_overdue_step_and_by_the_watchdog_not_on_a_beat():
+    owner, runtime, planning, clock = unit_owner(watchdog_s=10.0, step_budget_s=3.0)
+    owner.tick()
+    assert [r.trigger for r in planning.requests] == ["start"]
+    owner.handle(proposal(owner, A, planning.requests[-1].request_id))
+    run_command(owner, runtime, clock, 1)
+    for t in (0.5, 1.0, 2.0, 2.9):
+        clock["t"] = t
+        owner.tick()
+    assert [r.trigger for r in planning.requests] == ["start"]
+    clock["t"] = 3.1
+    owner.tick()
+    clock["t"] = 3.2
+    owner.tick()
+    assert [r.trigger for r in planning.requests] == ["start", "overdue"]
+    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), planning.requests[-1].request_id))
+    clock["t"] = 6.0
+    owner.tick()
+    assert planning.requests[-1].trigger == "overdue" and len(planning.requests) == 2
+    clock["t"] = 6.2
+    owner.tick()
+    assert len(planning.requests) == 3
+    owner, _, planning, clock = unit_owner(watchdog_s=10.0)
+    owner.tick()
+    clock["t"] = 9.9
+    owner.tick()
+    assert len(planning.requests) == 1
+    clock["t"] = 10.1
+    owner.tick()
+    assert [r.trigger for r in planning.requests] == ["start", "watchdog"]
+
+
+def test_the_owner_renews_the_lease_but_not_under_review_and_not_once_the_planner_is_silent():
+    owner, runtime, planning, clock = unit_owner(lease_s=1.0, liveness_s=2.0, watchdog_s=100.0, review_s=0.3)
+    owner.tick()
+    owner.handle(proposal(owner, A, planning.requests[-1].request_id))
+    run_command(owner, runtime, clock, 1, n=500)
+    clock["t"] = 0.8
+    owner.tick()
+    assert owner.desired.expires_t == 1.8
+    owner.handle(UserInstruction("hmm"))
+    review_end = owner.desired.expires_t
+    clock["t"] = 1.0
+    owner.tick()
+    assert owner.desired.expires_t == review_end
+    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), planning.requests[-1].request_id))
+    ask(owner)
+    for t in (1.5, 2.5, 3.5):
+        clock["t"] = t
+        owner.tick()
+    assert any(e["kind"] == "liveness lapsed" for e in owner.record.events)
+    lapsed_at = owner.desired.expires_t
+    clock["t"] = lapsed_at + 0.1
+    runtime.tick(clock["t"])
+    owner.tick()
+    assert "expired" in [e["status"] for e in owner.record.events if e["kind"] == "ack"]
+
+
+def test_choosing_a_step_recorded_done_records_it_undone_and_new_task_text_becomes_the_goal():
+    owner, runtime, planning, clock = unit_owner()
+    owner.handle(proposal(owner, A))
+    run_command(owner, runtime, clock, 1)
+    owner.handle(proposal(owner, B))
+    assert owner.memory.done() == ["pick the cube"]
+    run_command(owner, runtime, clock, 2, value=2.0)
+    owner.handle(proposal(owner, A, decider="planner"))
+    assert [(r.step, r.status) for r in owner.memory.records][-2:] == [
+        ("pick the cube", StepStatus.UNDONE), ("place the cube in A", StepStatus.DONE)]
+    assert owner.memory.done() == ["place the cube in A"]
+    owner.handle(proposal(owner, Operation(OpKind.CONTINUE), task="put the cube in B"))
+    assert owner.memory.goal == "put the cube in B"
+
+
+def test_a_finished_task_is_appended_to_the_episodic_log_once(tmp_path):
+    log = EpisodicLog(tmp_path / "episodes.jsonl")
+    owner, runtime, planning, clock = unit_owner(episodic=log)
+    owner.handle(proposal(owner, A))
+    run_command(owner, runtime, clock, 1)
+    owner.handle(proposal(owner, Operation(OpKind.COMPLETE)))
+    owner.stop()
+    [episode] = log.read()
+    assert episode["outcome"] == "complete" and episode["goal"] == "put the cube in A"
+    assert [(s["step"], s["status"]) for s in episode["steps"]] == [("pick the cube", "done")]
+    stopped_log = EpisodicLog(tmp_path / "stopped.jsonl")
+    owner, _, _, _ = unit_owner(episodic=stopped_log)
+    owner.handle(proposal(owner, A))
+    owner.stop()
+    assert [e["outcome"] for e in stopped_log.read()] == ["stopped"]
+
+
+def test_a_checked_step_event_records_the_step_done_at_once_and_moving_past_adds_no_duplicate():
+    owner, runtime, planning, clock = unit_owner()
+    owner.handle(proposal(owner, A))
+    run_command(owner, runtime, clock, 1)
+    owner.handle(StepEvent(1, 1, 0.2, "checker", "pick the cube", {"p_done": 0.9}, checked=True))
+    assert planning.requests[-1].memory.done() == ["pick the cube"]
+    owner.handle(proposal(owner, B, planning.requests[-1].request_id))
+    assert [(r.step, r.checked) for r in owner.memory.records] == [("pick the cube", True)]

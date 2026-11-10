@@ -4,9 +4,11 @@ execution runtime, and keeps the record of what is active from the runtime's ACK
 One thread, one event queue; it never waits for a model. Events: `UserInstruction`, `DecisionProposal` and
 `DecisionFailure` (from the S2 workers), `Deviation` (from the execution monitor), `StepEvent` (step-completion
 evidence), and a periodic tick that drains ACKs, sends the guard its heartbeat, enforces the interaction deadline,
-keeps a hold alive and asks for a decision when one is due. Out: commands to the runtime, `Utterance`s to `say`.
+keeps the desired command leased and asks for a decision when an event or a timer calls for one. Out: commands to the
+runtime, `Utterance`s to `say`, finished tasks to the episodic log.
 
-Lanes: decisions go to the planning worker (heartbeat, step events, failed or expired commands) or, when one is given,
+Lanes: decisions go to the planning worker (start, step events, S1's planned subtasks, failed or expired commands, an
+overdue step, the watchdog) or, when one is given,
 the interaction worker (changes: `instruction`, `deviation`, `hold`). The interaction lane has priority: while its
 request is pending, planning requests are deferred (the latest is sent once the interaction decision is applied) and
 planning proposals are refused, so a routine next-step decision never overrides the response to what the user just
@@ -15,8 +17,18 @@ nobody answered (failure, timeout, refused proposal) is never handed to the plan
 (GUARDED_WAIT `UNANSWERED`, said to the user), so an unread "stop" can never move the robot. After a failure or a
 refusal the interaction lane is asked again on the hold recheck; after a timeout the answer is still awaited: when it
 comes it is applied to the situation it was decided on (the placeholder hold is not a new base; CONTINUE resumes what
-was in force), and it is never asked again meanwhile. A newer interaction request ends the wait. Without an interaction worker every trigger goes to the planning worker (one
-lane).
+was in force), and it is never asked again meanwhile. A newer interaction request ends the wait. Without an interaction
+worker every trigger goes to the planning worker (one lane).
+
+Planning is event-driven: the planner is asked at the start, on a step event, on a subtask S1's planner chose, when a
+command ended without being revoked, when the running step has lasted `step_budget_s` without being moved past (trigger
+`overdue`, once per budget), and by the watchdog after `watchdog_s` without any planning request. Nothing asks it on a
+fixed beat: a planner that reasons for seconds is asked only when its answer can change.
+
+Liveness: the lease is the owner's, not a decision. The owner renews the desired command (moving or holding) whenever
+less than half a lease is left, except while it is under review (its answer is due) or while a planning request has
+gone unanswered for more than `liveness_s` (the planner is gone): then the command lapses, the runtime expires it and
+the robot holds. CONTINUE still renews, so an answer that keeps the step also keeps it alive.
 
 Rules:
 - A user instruction bumps `instruction_rev`, joins the dialogue, is acknowledged at once (`Utterance` `ACK`, before
@@ -38,17 +50,19 @@ Rules:
   (default `immediate`); after a revoke, or into a hold, `pause_hold`. An operation with a template (an ASK question,
   a report) is said (`Utterance`) and joins the dialogue.
 - Holds answer changes: ABORT, GUARDED_WAIT or ASK accepted in answer to a change becomes the standing `Hold`. It
-  persists until a later change resolves it with a moving operation or COMPLETE: meanwhile no heartbeat is sent and
-  routine planning proposals are refused (so a planner never restarts a task the user stopped), the owner keeps the
-  hold's command leased, and every `hold_recheck_s` (if set) asks the interaction lane again (trigger `hold`: the
-  decider's wait budget). The hold remembers the moving step it interrupted, for a resume.
-- Progress keyframes: when an accepted proposal moves past a step that was running (SWITCH_TO another subtask, or
-  COMPLETE), the step is recorded as a `Keyframe` with the observation the decision used; its evidence is the step
-  event about that command if one came, else the decider's judgement. When S1 plans its own steps (the running command
-  has no subtask), no decider moves past them: a checked step event about that command is itself the keyframe (an
-  unchecked claim, e.g. S1's planner moving on, is not progress). Snapshots carry
-  all keyframes, so after a repair or a revision no decider redoes a done step. ABORT, waits, asks and retries are not
-  progress.
+  persists until a later change resolves it with a moving operation or COMPLETE: meanwhile no planning request is
+  made and routine planning proposals are refused (so a planner never restarts a task the user stopped), the owner
+  keeps the hold's command leased, and every `hold_recheck_s` (if set) asks the interaction lane again (trigger `hold`:
+  the decider's wait budget). The hold remembers the moving step it interrupted, for a resume.
+- Task memory (`TaskMemory`, the owner is its only writer; snapshots carry it): a checked step event about the running
+  command records its step DONE at once, with the check's evidence, so the planner asked on that event already reads
+  the step as done (the running subtask, or the event's step when S1 plans its own). When an accepted proposal moves
+  past a step that was running (SWITCH_TO another subtask, or COMPLETE) and no checked event recorded it, the step is
+  recorded DONE with the observation the decision used; its evidence is the step event about that command if one came,
+  else the decider's judgement. An unchecked claim (e.g. S1's planner moving on) is never progress on its own. A proposal that
+  switches to a step recorded DONE records it UNDONE first (the decider saw the scene contradict the memory). New task
+  text becomes the memory's goal. ABORT, waits, asks and retries are not progress. A finished task (COMPLETE accepted,
+  or the owner stopped first) is appended to the episodic log when one is given.
 - A subtask S1's own planner chose for the active command (`PlannedSubtask`) is kept (`snapshot.planned`) and asks
   the planning lane at once (trigger `planned`); one about another command is stale.
 - A deviation or step event about the active command is kept for the decider (`snapshot.deviation`,
@@ -69,14 +83,17 @@ from dataclasses import dataclass, field
 
 from rojev.control import ExecutionRuntime, Guard
 from rojev.protocol import (ACK, ROBOT, UNANSWERED, USER, AcceptedGoal, AckStatus, Capture, DecisionFailure,
-                            DecisionProposal, Deviation, ExecutionAck, Hold, Keyframe, ObservationSnapshot, Operation,
-                            OpKind, PlannedSubtask, Revoke, StepEvent, Transition, Turn, UserInstruction, Utterance)
+                            DecisionProposal, Deviation, ExecutionAck, Hold, ObservationSnapshot, Operation, OpKind,
+                            PlannedSubtask, Revoke, StepEvent, StepRecord, StepStatus, TaskMemory, Transition, Turn,
+                            UserInstruction, Utterance)
 from rojev.system2 import DecisionWorker
+
+from .episodic import EpisodicLog
 
 INSTRUCTION_CHANGE_MODES = ("review", "revoke")
 PLANNING, INTERACTION = "planning", "interaction"
 INTERACTION_TRIGGERS = ("instruction", "deviation", "hold")
-STEP, PLANNED = "step", "planned"
+STEP, PLANNED, START, OVERDUE, WATCHDOG = "step", "planned", "start", "overdue", "watchdog"
 HOLD_KINDS = (OpKind.ABORT, OpKind.GUARDED_WAIT, OpKind.ASK)
 ENDED = (AckStatus.REJECTED, AckStatus.EXPIRED, AckStatus.REVOKED, AckStatus.DROPPED)
 
@@ -110,12 +127,13 @@ class _Awaited:
 
 class StateOwner:
     def __init__(self, runtime: ExecutionRuntime, guard: Guard, planner: DecisionWorker, latest: Callable[[], Capture],
-                 now: Callable[[], float], instruction: str, lease_s: float = 3.0, decide_every_s: float = 1.0,
+                 now: Callable[[], float], instruction: str, lease_s: float = 3.0, watchdog_s: float = 10.0,
+                 step_budget_s: float | None = None, liveness_s: float = 30.0,
                  transition: Transition = Transition.IMMEDIATE, period_s: float = 0.05,
                  on_instruction_change: str = "review", review_s: float = 1.0,
                  interaction: DecisionWorker | None = None, interaction_timeout_s: float = 1.0,
                  say: Callable[[Utterance], None] | None = None, dialogue_turns: int = 8,
-                 hold_recheck_s: float | None = None):
+                 hold_recheck_s: float | None = None, episodic: EpisodicLog | None = None):
         if on_instruction_change not in INSTRUCTION_CHANGE_MODES:
             raise ValueError(f"on_instruction_change {on_instruction_change!r} not in {INSTRUCTION_CHANGE_MODES}")
         self.runtime, self.guard, self.latest, self.now = runtime, guard, latest, now
@@ -123,7 +141,9 @@ class StateOwner:
         self.interaction_timeout_s = interaction_timeout_s
         self.on_instruction_change, self.review_s = on_instruction_change, review_s
         self.epoch = runtime.epoch
-        self.lease_s, self.decide_every_s = lease_s, decide_every_s
+        self.lease_s, self.watchdog_s = lease_s, watchdog_s
+        self.step_budget_s, self.liveness_s = step_budget_s, liveness_s
+        self.episodic = episodic
         self.transition, self.period_s = transition, period_s
         self.say, self.hold_recheck_s = say, hold_recheck_s
         self.instruction, self.instruction_rev = instruction, 0
@@ -136,7 +156,7 @@ class StateOwner:
         self.step_event: StepEvent | None = None
         self.planned: PlannedSubtask | None = None
         self.hold: Hold | None = None
-        self.keyframes: list[Keyframe] = []
+        self.memory = TaskMemory(instruction)
         self.dialogue: deque[Turn] = deque(maxlen=dialogue_turns)
         self.complete = False
         self.record = OwnerRecord()
@@ -150,6 +170,10 @@ class StateOwner:
         self._hold_checked_t: float | None = None
         self._last_ack_seq = 0
         self._last_request_t: float | None = None
+        self._planning_unanswered_since: float | None = None
+        self._overdue_asked_t: float | None = None
+        self._liveness_lost = False
+        self._ended = False
         self._events: queue.Queue = queue.Queue()
         self._running = False
         self._thread: threading.Thread | None = None
@@ -190,6 +214,7 @@ class StateOwner:
         if self._thread is not None:
             self._thread.join()
             self._thread = None
+        self._end("stopped", self.now())
 
     def handle(self, event: Event) -> None:
         if isinstance(event, UserInstruction):
@@ -215,12 +240,44 @@ class StateOwner:
             self._interaction_pending = None
             self.record.add(now, "interaction timeout", request=request_id)
             self._unanswered(self._requests[request_id], "interaction timeout", awaiting=True)
+        self._keep_leased(now)
         if self.hold is not None:
-            self._keep_hold(now)
+            self._recheck_hold(now)
             return
-        due = self._last_request_t is None or now - self._last_request_t >= self.decide_every_s
-        if not self.complete and due and not self.interaction_pending and not self.workers[PLANNING].busy:
-            self.request_decision("heartbeat")
+        if self.complete or self.interaction_pending or self.workers[PLANNING].busy:
+            return
+        trigger = self._due_trigger(now)
+        if trigger is not None:
+            self.request_decision(trigger)
+
+    def _due_trigger(self, now: float) -> str | None:
+        """The timer-driven planning triggers: `start` (never asked yet), `overdue` (the running step has lasted a step
+        budget since it started or since it was last found overdue), `watchdog` (no planning request for `watchdog_s`)."""
+        if self._last_request_t is None:
+            return START
+        goal = self.desired
+        if self.step_budget_s is not None and goal is not None and goal.operation.moves_robot() \
+                and self.active_cmd == goal.cmd_id and self.active_since is not None:
+            since = max(self.active_since, self._overdue_asked_t or self.active_since)
+            if now - since >= self.step_budget_s:
+                self._overdue_asked_t = now
+                return OVERDUE
+        return WATCHDOG if now - self._last_request_t >= self.watchdog_s else None
+
+    def _keep_leased(self, now: float) -> None:
+        """Renew the desired command's lease while the system is alive (see module docstring: Liveness)."""
+        goal = self.desired
+        if goal is None or self.reviewing == goal.cmd_id or goal.expires_t - now >= self.lease_s / 2:
+            return
+        silent = self._planning_unanswered_since is not None and now - self._planning_unanswered_since > self.liveness_s
+        if silent:
+            if not self._liveness_lost:
+                self._liveness_lost = True
+                self.record.add(now, "liveness lapsed", cmd=goal.cmd_id,
+                                unanswered_s=round(now - self._planning_unanswered_since, 3))
+            return
+        if self.runtime.renew(goal.cmd_id, now + self.lease_s, now):
+            self.desired = self.goals[goal.cmd_id] = dataclasses.replace(goal, expires_t=now + self.lease_s)
 
     def request_decision(self, trigger: str, lane: str | None = None) -> None:
         """Ask a lane for a decision on the newest observation; the lane follows the trigger unless given."""
@@ -241,11 +298,13 @@ class StateOwner:
                                    self.instruction, desired.cmd_id if desired else None,
                                    desired.operation if desired else None,
                                    self.active_since if desired and self.active_cmd == desired.cmd_id else None,
-                                   tuple(self.keyframes), trigger,
+                                   self.memory, trigger,
                                    review=desired is not None and self.reviewing == desired.cmd_id,
                                    deviation=self.deviation, step_event=self.step_event, planned=self.planned,
                                    hold=self.hold, dialogue=tuple(self.dialogue))
         self._requests[snap.request_id] = _Request(lane, snap)
+        if lane == PLANNING and self._planning_unanswered_since is None:
+            self._planning_unanswered_since = now
         if lane == INTERACTION:
             self._interaction_pending = (snap.request_id, now + self.interaction_timeout_s)
             self._awaited = None
@@ -304,8 +363,10 @@ class StateOwner:
         self.step_event = e
         self.record.add(now, "step event", cmd=e.cmd_id, t_detect=e.t, source=e.source, step=e.step, detail=e.detail)
         running = self.goals.get(e.cmd_id)
-        if e.checked and running is not None and running.operation.subtask is None:
-            self._keyframe(running, e.step, self.latest(), f"{e.source}: {e.detail}", True, now)
+        if e.checked and running is not None:
+            step = running.operation.subtask or e.step
+            if not self._recorded_done(step, running.cmd_id):
+                self._remember(running, step, StepStatus.DONE, self.latest(), f"{e.source}: {e.detail}", True, now)
         self.request_decision(STEP)
 
     def _on_planned(self, e: PlannedSubtask) -> None:
@@ -323,6 +384,7 @@ class StateOwner:
         now = self.now()
         request = self._requests.pop(f.request_id, None)
         lane = request.lane if request is not None else None
+        self._answered(lane)
         self.record.add(now, "decision failed", request=f.request_id, lane=lane, error=f.error)
         if self._awaited is not None and self._awaited.request_id == f.request_id:
             self._awaited = None
@@ -336,6 +398,7 @@ class StateOwner:
         now = self.now()
         request = self._requests.get(p.request_id)
         lane = request.lane if request is not None else None
+        self._answered(lane)
         pending = self._interaction_pending[0] if self._interaction_pending is not None else None
         base = self.desired.cmd_id if self.desired is not None else None
         late = self._awaited is not None and self._awaited.request_id == p.request_id
@@ -376,6 +439,12 @@ class StateOwner:
             trigger, self._deferred = self._deferred, None
             self.request_decision(trigger)
 
+    def _answered(self, lane: str | None) -> None:
+        """The planning lane answered (a proposal, accepted or not, or a failure): it is alive."""
+        if lane == PLANNING:
+            self._planning_unanswered_since = None
+            self._liveness_lost = False
+
     def _apply(self, p: DecisionProposal, request: _Request, now: float) -> None:
         self._applied_request = p.request_id
         for old in [r for r in self._requests if r <= p.request_id]:
@@ -387,6 +456,7 @@ class StateOwner:
         same = desired is not None and (op.kind == OpKind.CONTINUE or op == desired.operation)
         if p.task is not None and p.task != self.instruction:
             self.instruction = p.task
+            self.memory = self.memory.with_goal(p.task)
             self.record.add(now, "task", text=p.task, request=p.request_id)
         if same and desired.instruction != self.instruction and desired.operation.moves_robot():
             self._issue(desired.operation, now, "reaffirm", detail, Transition.IMMEDIATE)
@@ -407,6 +477,8 @@ class StateOwner:
         self._record_progress(p, request.snapshot, op, now)
         self._update_hold(op, request.snapshot.trigger in INTERACTION_TRIGGERS, now)
         self._issue(op, now, "command", detail)
+        if op.kind == OpKind.COMPLETE:
+            self._end("complete", now)
 
     def _as_decided(self, p: DecisionProposal, request: _Request) -> DecisionProposal:
         """A late answer is applied to the situation it was decided on, not to the owner's placeholder hold: CONTINUE
@@ -449,40 +521,53 @@ class StateOwner:
             self.record.add(now, "hold released", op=op.kind.value, subtask=op.subtask)
             self.hold = None
 
-    def _keep_hold(self, now: float) -> None:
-        """While a hold stands the owner keeps its command leased (holding needs no decision), and asks the
-        interaction lane again (trigger `hold`) every `hold_recheck_s` without a change, unless an answer is still
-        awaited."""
-        goal = self.desired
-        if goal is not None and goal.operation == self.hold.operation and goal.expires_t - now < self.lease_s / 2 \
-                and self.runtime.renew(goal.cmd_id, now + self.lease_s, now):
-            self.desired = self.goals[goal.cmd_id] = dataclasses.replace(goal, expires_t=now + self.lease_s)
+    def _recheck_hold(self, now: float) -> None:
+        """While a hold stands, ask the interaction lane again (trigger `hold`) every `hold_recheck_s` without a change,
+        unless an answer is still awaited."""
         if self.hold_recheck_s is not None and not self.interaction_pending and self._awaited is None \
                 and now - self._hold_checked_t >= self.hold_recheck_s:
             self._hold_checked_t = now
             self.request_decision("hold")
 
     def _record_progress(self, p: DecisionProposal, snap: ObservationSnapshot, op: Operation, now: float) -> None:
-        """A keyframe when the proposal moves past a step that was running (see module docstring)."""
+        """DONE when the proposal moves past a step that was running, UNDONE when it returns to a step recorded DONE
+        (see module docstring)."""
+        reason = f"decider {p.evidence.get('decider')}: {p.evidence.get('reason', '')}"
+        if op.kind == OpKind.SWITCH_TO and op.subtask is not None \
+                and self.memory.status(op.subtask) == StepStatus.DONE:
+            self.memory = self.memory.with_record(StepRecord(op.subtask, StepStatus.UNDONE, snap.active_cmd,
+                                                             self.instruction_rev, snap.capture, reason, False, now))
+            self.record.add(now, "step undone", subtask=op.subtask, evidence=reason)
         step = self.desired.operation if self.desired is not None else None
         if step is None or step.subtask is None:
             return
         moves_on = op.kind == OpKind.COMPLETE or (op.kind == OpKind.SWITCH_TO and op.subtask != step.subtask)
         running = self.goals.get(self.active_cmd) if self.active_cmd is not None else None
-        if not moves_on or running is None or running.operation != step:
+        if not moves_on or running is None or running.operation != step \
+                or self._recorded_done(step.subtask, running.cmd_id):
             return
         seen = snap.step_event
         about = seen is not None and seen.cmd_id == running.cmd_id
-        evidence = (f"{seen.source}: {seen.detail}" if about else
-                    f"decider {p.evidence.get('decider')}: {p.evidence.get('reason', '')}")
-        self._keyframe(running, step.subtask, snap.capture, evidence, about and seen.checked, now)
+        evidence = f"{seen.source}: {seen.detail}" if about else reason
+        self._remember(running, step.subtask, StepStatus.DONE, snap.capture, evidence, about and seen.checked, now)
 
-    def _keyframe(self, running: AcceptedGoal, subtask: str, capture: Capture, evidence: str, checked: bool,
-                  now: float) -> None:
-        frame = Keyframe(running.cmd_id, subtask, running.instruction_rev, capture, evidence, checked)
-        self.keyframes.append(frame)
-        self.record.add(now, "keyframe", cmd=frame.cmd_id, subtask=frame.subtask, obs_id=frame.capture.obs_id,
-                        evidence=frame.evidence, checked=checked)
+    def _recorded_done(self, step: str, cmd_id: int) -> bool:
+        latest = next((r for r in reversed(self.memory.records) if r.step == step), None)
+        return latest is not None and latest.status == StepStatus.DONE and latest.cmd_id == cmd_id
+
+    def _remember(self, running: AcceptedGoal, step: str, status: StepStatus, capture: Capture, evidence: str,
+                  checked: bool, now: float) -> None:
+        record = StepRecord(step, status, running.cmd_id, running.instruction_rev, capture, evidence, checked, now)
+        self.memory = self.memory.with_record(record)
+        self.record.add(now, "step " + status.value, cmd=record.cmd_id, subtask=step, obs_id=capture.obs_id,
+                        evidence=evidence, checked=checked)
+
+    def _end(self, outcome: str, now: float) -> None:
+        """Append the finished task to the episodic log, once."""
+        if self._ended or self.episodic is None or (outcome == "stopped" and self.complete):
+            return
+        self._ended = True
+        self.episodic.append(self.memory, outcome, now, tuple(self.dialogue))
 
     def _issue(self, op: Operation, now: float, kind: str, detail: dict, transition: Transition | None = None) -> None:
         """A new command for `op` under the current instruction. Between moving commands the configured transition

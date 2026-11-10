@@ -228,3 +228,18 @@ def test_realtime_physics_stops_on_disconnect():
 def test_unknown_time_mode_is_rejected():
     with pytest.raises(ValueError, match="time_mode"):
         _sim("fast")
+
+
+def test_front_and_wrist_cameras_render_the_workspace():
+    cams = (CameraSpec("front", width=160, height=120), CameraSpec("wrist_cam", width=160, height=120))
+    with so101.simulated(cameras=cams) as robot:
+        frames = robot.read().cameras
+        assert set(frames) == {"front", "wrist_cam"}
+        assert frames["front"].info.parent_frame == "world" and frames["wrist_cam"].info.parent_frame == "camera_mount"
+        r = mujoco.Renderer(robot.model, height=120, width=160)
+        r.enable_segmentation_rendering()
+        r.update_scene(robot.data, camera="front")
+        seg = r.render()
+        r.close()
+        assert ((seg[..., 0] == robot.model.geom("box").id) & (seg[..., 1] == mujoco.mjtObj.mjOBJ_GEOM)).any()
+        assert all(f.rgb.shape == (120, 160, 3) and f.rgb.std() > 3 for f in frames.values())

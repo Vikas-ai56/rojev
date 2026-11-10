@@ -3,3 +3,13 @@ control_rate_hz: 30            # command/observation loop; LeRobot dataset defau
 max_velocity_rad_s:
   value: 4.40                  # STS3215 no-load 0.238 s/60° @ 6 V
   source: "retailer listing of STS3215 (no-load, 6 V); unverified on our units"
+lerobot:                       # LeRobot so_follower units, use_degrees=True (data and S1 model I/O; decision 2026-11-07)
+  source: "vendor/lerobot motors_bus.py _normalize: body DEGREES = (raw - calibration midpoint) * 360 / 4095; gripper RANGE_0_100 over its calibrated range; so_follower config use_degrees=True"
+  values_source: "simulator: the MJCF zero is taken as the calibration midpoint and the gripper's MJCF range as its calibrated 0-100; declared, not measured; the real arm's values come from its calibration"
+  body:                        # rad = zero_rad + sign * radians(degrees)
+    shoulder_pan: {sign: 1, zero_rad: 0.0}
+    shoulder_lift: {sign: 1, zero_rad: 0.0}
+    elbow_flex: {sign: 1, zero_rad: 0.0}
+    wrist_flex: {sign: 1, zero_rad: 0.0}
+    wrist_roll: {sign: 1, zero_rad: 0.0}
+  gripper: {joint: gripper, rad_at_0: -0.174533, rad_at_100: 1.7453292}

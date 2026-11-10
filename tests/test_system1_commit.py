@@ -251,8 +251,9 @@ class ReachWorld:
 
 
 class ReachPolicy(Policy):
-    """Plans a velocity ramp to where it believes the object is and closes the gripper on arrival. Each sample sees
-    the object at `OBJECT + noise`; `bad` samples believe it is right here (a perception failure). `batched`: K
+    """Plans a velocity ramp, from the position it observed (the request's capture, as a real policy plans from its
+    observation), to where it believes the object is, and closes the gripper on arrival. Each sample sees the object
+    at `OBJECT + noise`; `bad` samples believe it is right here (a perception failure). `batched`: K
     samples cost one latency (a batching service); otherwise K (the default `act_samples`, e.g. today's remote π0.5²)."""
 
     def __init__(self, clock: Clock, world: ReachWorld, latency_s=0.1, horizon=25, noise=0.0, bad=(), seed=0,
@@ -260,9 +261,9 @@ class ReachPolicy(Policy):
         self.clock, self.world, self.latency_s, self.horizon = clock, world, latency_s, horizon
         self.noise, self.bad, self.rng, self.batched = noise, set(bad), np.random.default_rng(seed), batched
 
-    def sample(self, i: int) -> ActionChunk:
-        believed = self.world.x if i in self.bad else OBJECT + self.rng.normal(0.0, self.noise)
-        x, rows = self.world.x, []
+    def sample(self, i: int, observed_x: float) -> ActionChunk:
+        believed = observed_x if i in self.bad else OBJECT + self.rng.normal(0.0, self.noise)
+        x, rows = observed_x, []
         for _ in range(self.horizon):
             arrived = abs(believed - x) < 0.01
             v = 0.0 if arrived else float(np.clip(3.0 * (believed - x), -0.5, 0.5))
@@ -271,8 +272,9 @@ class ReachPolicy(Policy):
         return ActionChunk(np.array(rows))
 
     def act_samples(self, obs, subtask, k, timeout_s=None):
+        observed_x = self.world.x
         self.clock.advance(self.latency_s * (1 if self.batched else k))
-        return [self.sample(i) for i in range(k)]
+        return [self.sample(i, observed_x) for i in range(k)]
 
     def act(self, obs, subtask, timeout_s=None):
         return self.act_samples(obs, subtask, 1)[0]
@@ -291,14 +293,14 @@ class IgnoresFloor(CommitPolicy):
         return Commitment(np.asarray(candidates[0])[:self.n], 0, "ignores floor")
 
 
-def reach(commit, seconds=4.0, refill_s=0.15, **policy_kw):
+def reach(commit, seconds=4.0, **policy_kw):
     world = ReachWorld()
     runtime = ExecutionRuntime(VEL, epoch=1, last=np.array([0.0, OPEN]), blend_s=0.0)
     clock = Clock(runtime, world)
     policy = ReachPolicy(clock, world, **policy_kw)
     captures = iter(range(10**9))
     runner = S1Runner(runtime, policy, lambda: Capture(next(captures), clock.t, Observation({}, np.zeros(2), "pick")),
-                      lambda: clock.t, refill_s=refill_s, commit=commit)
+                      lambda: clock.t, commit=commit)
     runtime.accept(AcceptedGoal(1, 1, 0, Operation(OpKind.SWITCH_TO, subtask="pick"), Transition.PAUSE_HOLD,
                                 expires_t=100.0), 0.0)
     grasp_t = None
@@ -315,7 +317,7 @@ def test_runner_derives_floor_and_lead_time_from_measured_latency():
     assert runner.stats.floors[0] == 25
     assert runner.latency_s() == pytest.approx(0.1, abs=DT)
     assert runner.floor(25) == math.ceil(2 * runner.latency_s() / DT) + 1
-    assert runner.lead_s() == pytest.approx(max(0.15, runner.latency_s() + DT))
+    assert runner.lead_s() == pytest.approx(runner.latency_s() + DT)
 
 
 def test_closed_loop_fixed_commitment_grasps_with_a_clean_policy():
@@ -323,10 +325,10 @@ def test_closed_loop_fixed_commitment_grasps_with_a_clean_policy():
     assert world.grasped and runner.stats.accepted == runner.stats.requests and runtime.starved_ticks == 0
 
 
-def test_lead_time_covers_latency_even_when_refill_is_configured_too_low():
-    """Only the first refill can starve (no latency measured yet, so the lead is the configured 0 s): at most one
-    latency of ticks; every later request leads by the measured latency."""
-    world, runner, runtime = reach(FixedCommit(), refill_s=0.0, latency_s=0.2)
+def test_only_the_first_request_can_starve_and_later_ones_lead_by_the_measured_latency():
+    """Before the first answer no latency is known (lead one tick), so the first chunk can land at most one latency
+    of ticks late; every later request leads by the measured latency."""
+    world, runner, runtime = reach(FixedCommit(), latency_s=0.2)
     assert world.grasped and runtime.starved_ticks <= round(0.2 / DT) + 1
 
 

@@ -291,10 +291,12 @@ class ExecutionRuntime:
             actions = [e.action for e in self._queue if e.cmd_id == cmd_id and e.t >= t - self.spec.dt / 2]
         return np.stack(actions) if actions else None
 
-    def queued_until(self, cmd_id: int) -> float | None:
-        """Due time of the last queued action of `cmd_id` (None if nothing is queued for it)."""
+    def queued_end(self, cmd_id: int) -> float | None:
+        """When the queued actions of `cmd_id` run out: the last one's due time plus its control period (None if
+        nothing is queued for it)."""
         with self._lock:
-            return max((e.t for e in self._queue if e.cmd_id == cmd_id), default=None)
+            last = max((e.t for e in self._queue if e.cmd_id == cmd_id), default=None)
+        return None if last is None else last + self.spec.dt
 
     def tick(self, now: float) -> TickResult:
         with self._lock:

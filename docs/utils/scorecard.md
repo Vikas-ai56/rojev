@@ -17,7 +17,7 @@ use their own per-line judge (`executors/robocasa-pi052/campaign.py`).
 - Window: change time → next injection or run end. Change time: speech = the owner's first `instruction` event at or
   after `t`; deviation = `t` (fault onset, so detection time counts).
 - Answers = owner `command` / `reaffirm` / `continue` events in the window with the change's trigger (`instruction` /
-  `deviation`). Heartbeat decisions are never answers.
+  `deviation`). Routine planning decisions (start, step, watchdog, overdue) are never answers.
 - Applied answer = the first answer a decider made. A late decider answer (after the owner's `UNANSWERED` hold, applied
   as decided since 2026-10-24) is scored as the answer, noted "answered late".
 - No decider answer, only the owner's safety hold after an `unanswered` event → act `unanswered`, never correct (a safe

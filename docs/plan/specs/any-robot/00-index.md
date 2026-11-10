@@ -1,7 +1,21 @@
 # Any robot: one assembly layer, robots as executor plug-ins (spec suite index)
 
-**Status:** SPEC, not built. Grounded on `v3-runtime` @ `0b5caa9` (2026-10-22). Not security-sensitive (no new external
-surface; services and transport unchanged).
+**Status (2026-11-10):** slice 1 **built** as `rojev/app`, with the differences below; slice 2 **not built** (owner:
+keep the RoboCasa app as is); slice 3 **replaced** by LIBERO (`executors/libero`, decision 2026-11-09). Grounded on
+`v3-runtime` @ `0b5caa9` (2026-10-22); the runtime has changed since (event-driven planning, owner-owned lease, done-check
+cues, task memory: decision 2026-11-09). How it works now: `docs/features/app-session.md`.
+
+## Built vs this spec (slice 1)
+| Spec | Built |
+|---|---|
+| Plug-ins passed in code | also named in the config file (`package.module:callable`) |
+| `SessionConfig` with `decide_every_s`, `realtime`, commitment and monitor settings | event-driven settings (`watchdog_s`, `step_budget_s`, `liveness_s`), done-check settings (`recheck_s`, …), `lockstep`; no commitment choice (whole chunk), no motion monitor |
+| Shared CLI flags, `Speaker`, moved recording wrappers, `rojev/eval/invariants.py` | none; new call logs in `rojev/app`; the RoboCasa harness keeps its own wrappers and invariants |
+| `run` then `write` | `run` writes the records itself; run video added |
+| Lockstep in the executor | lockstep built in; it also waits for the done checker |
+| `app` may import `eval`, `transport`, `observability` | `app` imports protocol, robot, control, system1, system2, owner only |
+
+Not security-sensitive (no new external surface; services and transport unchanged).
 
 ## Goal
 A new robot = a new executor that supplies only **its embodiment, its backend, its S1 policy adapter and its tasks**.
@@ -43,11 +57,10 @@ Slices 2 and 3 are independent after 1.
 - **D-A5** The SO-101 proof uses a declared stand-in S1 (a scripted joint-space policy); no trained S1 exists for the
   SO-101 (spec "Not v1").
 
-## Open decisions (user)
-1. Package name: `rojev/app` (proposed) or `rojev/session`.
-2. Generic CLI flags in the core (`rojev.app.cli`, proposed: every executor gets the same runtime / S2 / monitor
-   flags) or per executor.
-3. Real SO-101 hardware driver: out of scope here (proposed); this suite proves the sim path only.
+## Open decisions (user), as settled
+1. Package name: `rojev/app`.
+2. CLI flags: per executor; settings come from a config file instead of shared flags.
+3. Real SO-101 hardware driver: out of scope.
 
 ## Invariants preserved (every slice)
 - One-way dependencies (`tests/test_architecture.py`); `rojev/` never imports an executor; core never bends to a

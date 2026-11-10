@@ -24,4 +24,31 @@ Robot interface: `features/robot-interface.md`; SO-101 executor spec: `plan/spec
 - **Clocks:** camera, joint and model timestamps on one timeline (stale joints → wrong camera pose).
 - **Calibration and slop:** hand-eye offsets and joint backlash (SO-101) turn into centimetres at the object.
 - **Contract:** the robot's own action / state layout and rate; never truncate a Panda action to fit an SO arm.
-- **Safety:** local stop path with measured stopping time, independent of any model.
+- **Safety:** local stop path with measured stopping time, independent of any model; the full layer is below.
+
+## Robot safety layer (backlog: research, then spec; nothing beyond the first row is built)
+Built today: per-joint position and per-tick velocity clamps (`SafetyFilter`), holds on starvation / owner loss,
+`stop`, and a non-finite S1 action failing its request (GR00T adapter). Damage also comes from commands that are only
+impossible after an earlier action (a grasp changes the wrist pose, a target past reach stalls a servo), so each layer
+below is a per-robot plug-in (a safety model: limits, kinematic model, keep-out zones, telemetry thresholds, reactions)
+checked by a generic core guard; S2 touches only layer 4.
+
+| Layer | Catches | Robot-specific input |
+|---|---|---|
+| 0 Hardware | servo angle / torque / overload limits (STS3215 EEPROM), e-stop | per arm, set once |
+| 1 Command | non-finite, position, velocity, **acceleration / jerk**, across chunk boundaries | joint limits |
+| 2 Whole chunk, before execution | forward kinematics over every future target: self-collision, table / walls (keep-out zones measured at calibration) | URDF / MJCF, zones |
+| 3 Live telemetry | tracking error, load / current, temperature, voltage → back off, lower torque; gripper effort cap once grasped | thresholds fitted on nominal runs |
+| 4 Task (S2 + owner) | a step whose preconditions do not hold (drawer closed, object absent); S2 points checked for reachability (IK) | skill list with preconditions / effects |
+| 5 Reaction | hold keeping grip, slow back-off along the last safe path, low-torque mode, then ask; never just drop | per robot |
+
+Research first (real hardware only): STS3215 protections and telemetry rates, LeRobot's limits, lab practice for VLA
+safety (safety filters, chunk validation, Gemini Robotics' semantic + collision layers), chunk-checking libraries
+within a 30 Hz budget (MuJoCo, Pinocchio + coal, cuRobo), stall / contact detection from servo current.
+
+## Other open items for the SO-101 (2026-11-07)
+- Calibration: the arm's sign / offset / gripper span for `config/so101.yaml` `lerobot` (simulator values declared).
+- S1: GR00T parity with its reference client and p50 / p95 latency on an Ampere+ GPU near the arm (`model-bringup/groot.md`); accept the gated `nvidia/Cosmos-Reason2-2B` terms once; MolmoAct2 adapter; bake-off on the arm.
+- Data: recorder for LeRobot datasets with `sub_tasks` step labels and `modality.json`; front + wrist cameras on rigid mounts.
+- Runtime: the any-robot assembly layer (`plan/specs/any-robot/`) to run S1 / S2 in the loop on the SO-101; the
+  deferred controller fixes (decision 2026-11-06).

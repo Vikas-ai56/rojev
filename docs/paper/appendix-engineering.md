@@ -2,7 +2,7 @@
 
 What makes the loop correct in real time, honest to evaluate, portable to another robot and reproducible on a fresh GPU
 box. Each item: **problem** → what we do · *evidence* · `source`. Paths are relative to the repo root; dated entries
-are in `docs/decisions.md`. Code as of 2026-10-24.
+are in `docs/decisions.md`. Code as of 2026-10-24; items marked 2026-11-10 updated since.
 
 ## A. S1 executor contracts
 
@@ -46,8 +46,8 @@ model's own evaluation client so a query matches its published evaluation.
   due when the chunk lands are skipped, never replayed. *Evidence:* `tests/test_control_execution.py::
   test_elapsed_actions_are_skipped_never_replayed`, `tests/test_system1_runner.py::
   test_actions_due_during_inference_are_skipped_and_latency_is_measured`. `rojev/control/execution.py:220,299`.
-- **Gaps between chunks.** Latency L = max of the last 20 observation ages; request when less than
-  `max(refill_s, L + dt)` is queued; commit at least ⌈2L/dt⌉ + 1 actions (whole chunk before the first measurement);
+- **Gaps between chunks.** Latency L = max of the last 20 observation ages; request L + dt before the chunk's
+  replacement point (after the model's `execute_steps`, else the queue's end; at the point itself in lockstep); commit at least ⌈2L/dt⌉ + 1 actions (whole chunk before the first measurement);
   `floor_over_chunk` and `starved_ticks` counted, not inferred. Deadline = one chunk duration (an older answer is all
   in the past); none in lockstep. *Evidence:* `test_after_the_first_request_the_lead_time_covers_the_latency`; XR-1
   real time: ~0.5 s wall per request vs a 0.8 s chunk → floor exceeds the chunk, supply-bound. `rojev/system1/runner.py:129-158`.
@@ -69,6 +69,10 @@ model's own evaluation client so a query matches its published evaluation.
   for a model; what is active comes only from runtime ACKs (newest `seq`). The interaction lane outranks planning; a
   change nobody answered holds the robot and never reaches planning. `rojev/owner/state_owner.py` docstring;
   `test_an_unanswered_change_holds_the_robot_and_never_reaches_planning`.
+- **Keeping the robot alive without asking a model** (2026-11-10). The planner is asked only on events (start, step
+  done, a command that ended, a step over budget, 10 s of silence), never on a fixed beat; the owner renews the running
+  command's lease itself and stops after 30 s of planner silence, so the command expires and the robot holds.
+  *Evidence:* `tests/test_owner.py` (triggers, lease renewal, lapse when planning is silent). Decision 2026-11-09.
 - **Late interaction answers.** OneJev takes 1.1–1.5 s against a 1.0 s deadline: the owner holds (`UNANSWERED`), then
   applies the late answer to the situation it was decided on (CONTINUE resumes what was in force), never re-decides.
   *Evidence:* `test_a_late_answer_is_applied_to_the_situation_it_was_decided_on`; not yet exercised live (campaign
@@ -77,7 +81,7 @@ model's own evaluation client so a query matches its published evaluation.
   declaring `accepts_continuation` (wire v3); the policy decides how to use it (8.7 µs on the runner thread).
   XR-1 does not accept one. *Evidence:* `test_a_continuing_policy_gets_the_queued_actions_from_its_observation_and_the_latency_in_steps`.
 - **GC pauses.** `gc.collect(); gc.freeze()` before the threads start (a full pass over the setup heap measured
-  45–96 ms vs a 50 ms period). `executors/robocasa-pi052/realtime.py:561`.
+  45–96 ms vs a 50 ms period). RoboCasa app and the shared assembly.
 
 ## C. Evaluation integrity (`executors/robocasa-pi052`)
 - **Model time vs network time.** `--lockstep`: the loop does not tick while S1 or either S2 lane is busy, so every
@@ -133,7 +137,8 @@ model's own evaluation client so a query matches its published evaluation.
 - One command turns a fresh Ubuntu GPU box into running services + tunnels + a service JSON; idempotent, `--dry-run`
   changes nothing.
 - Components plug in through `<kind>/<name>/gpu/hook.sh` (key, auth, GPU memory, files, vendors, port, prepare, serve):
-  `executors/robocasa-{pi052,xr1}`, `services/{onejev,mjev,sam2}`.
+  `executors/robocasa-{pi052,xr1}`, `executors/so101-groot`, `executors/libero` (simulator only, serves nothing),
+  `services/{onejev,mjev,sam2,planner-vlm,lerobot-policy}` (2026-11-10).
 - Pins: weights `config/*_weights.txt` (`repo @ revision`), vendor clones `config/*.commit`, one `uv.lock` per
   component (`uv sync --frozen`, uv-managed Python).
 - flash-attn 2.8.3 for XR-1 from its sdist with the CUDA build skipped, so its setup fetches the matching prebuilt
@@ -151,8 +156,9 @@ model's own evaluation client so a query matches its published evaluation.
 - `EffectModel` (execution monitor): `tracked(state)`, `command(state, action)`, `resolution`; the monitor fits the
   command → motion map, so a robot states only which numbers correspond. `rojev/robot/effect.py`.
 - Backends: RoboCasa PandaOmron (`executors/robocasa-pi052/embodiment.py`: 12 dims, gripper irreversible at 0.5,
-  base mode a switch, 20 Hz) and any `rojev.robot.Robot` via `RobotBackend` + `joint_target_spec` (MuJoCo SO-101
-  now; `SafetyFilter` clamps reported). *Evidence:* `test_robocasa_panda_omron_plugs_in`,
+  base mode a switch, 20 Hz), LIBERO Panda (`executors/libero`: 7 dims, LeRobot's own environment, through the shared
+  assembly; 2026-11-10) and any `rojev.robot.Robot` via `RobotBackend` + `joint_target_spec` (MuJoCo SO-101 now;
+  `SafetyFilter` clamps reported). *Evidence:* `test_robocasa_panda_omron_plugs_in`,
   `test_any_rojev_robot_plugs_in_so101_lockstep`, `test_so101_realtime_keeps_its_clock_and_lag_budget`,
   16 contract tests in `tests/test_robot_contract.py`.
 - A new robot supplies: a backend (`observe` / `step`, or a `Robot` with clock and limits), its `ActionSpec`, an
@@ -160,9 +166,11 @@ model's own evaluation client so a query matches its published evaluation.
   robot's action to fit). Model needs (history, crop, prompt) stay in that policy's executor. On hardware: camera
   staleness, a model-independent stop path, one clock for cameras and joints (`docs/hardware-port.md`).
 
-## G. Tests re-run 2026-10-24 (Mac, no GPU)
+## G. Tests re-run 2026-11-10 (Mac, no GPU)
 | Suite | Result |
 |---|---|
-| core `uv run pytest -q` | 329 passed, 1 skipped, 2 timing deselected |
-| `executors/robocasa-pi052` | 36 passed |
-| `executors/robocasa-xr1` | 2 passed |
+| core `uv run pytest -q` | 357 passed, 1 skipped, 3 timing deselected |
+| `executors/robocasa-pi052` | 37 passed |
+| `executors/libero` (fake simulator under LeRobot's real code) | 21 passed |
+| `services/lerobot-policy` (stand-in policy) | 32 passed |
+| `executors/robocasa-xr1` | 2 passed (2026-10-24, not re-run) |

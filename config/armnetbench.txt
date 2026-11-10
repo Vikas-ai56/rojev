@@ -1,0 +1,5 @@
+repo armnet/armnetbench_v01_lerobot_so101 @ 1db69c82b589c7172ee31a6b8f7ef58d1fc2c663
+ArmnetBench v0.1, single-arm SO-101 (LeRobot v3.0, Apache-2.0; arXiv 2607.24481): 2,499 episodes over 8 tasks, 20 fps,
+cameras front / top (overhead) / wrist in AV1. Each episode's operator label is in meta/episodes: success_class
+(successful / failure / suboptimal) with policy_type. Main differs from tag v1.0 only in README links. The S2 done-check
+cases are its pi0.5 rollouts (executors/so101-data/rollouts.py); the bimanual repo is not used.

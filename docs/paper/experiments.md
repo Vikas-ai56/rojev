@@ -42,6 +42,9 @@
 | E29 | 10-24 | OneJev latency breakdown; kept connection | 1269 → 604 ms median, identical probabilities | valid | `docs/features/remote-models.md` |
 | E30 | 10-24 | Live rerun: effect hesitation, kept connection, late answers | stop/go-on ×2 4/4; "ruko" asks; late answers applied; idle connection dropped after ~5 s | valid | `results/campaign/20261024-rerun/` |
 | E31 | 10-30 | RynnValue-4B (frozen) on the E17 done-check pairs | P(success) ranks the done step first on identical images 0.82 (OneJev 0.46, MJev 0.28); written verdict never "Yes" (0/108) | valid (still states, 1 camera) | `results/rynnvalue-check/20261030/` |
+| E34 | 11-10 | S2 bake-off: Embodied-R1.5 as next-step planner and done checker on recorded SO-101 data (newest frame only) | fails every accuracy bar: next step 0.63 with the true step list (bar 0.90), 0.00 when the list is wrong; done check balanced 0.50 (SO-101 steps), 0.69 (ArmNetBench); 0.12–0.25 s per question | valid (recorded data, open loop) | `results/gpu-session/20261110-132408/` |
+| E33 | 11-10 | Stage 1: GR00T N1.7 (NVIDIA's LIBERO-goal checkpoint) through the whole rojev runtime on LIBERO-goal | 49/50 (NVIDIA / LeRobot: 98%) when S1 is asked again after 7 of 16 actions; 17/20 after 14–15; runtime clean | valid (lockstep, 5 episodes per task) | `results/libero/20261110-stage1/` |
+| E32 | 11-07 | GR00T N1.7 base, zero-shot on DROID: does our env reproduce NVIDIA, how fast, does text steer it? | MAE 0.0765 (NVIDIA 0.0753); 89 ms per 40-action call compiled; contradicting or empty text moves actions only 1.5–2× seed noise | valid (zero-shot, 2 episodes, open loop) | `results/gpu-session/20261107-183203/` |
 
 ## E17 — Done-check A/B: neither model can tell a finished step (2026-10-22)
 - Setup: kitchen states set in the simulator (object placed, door closed, appliance on), labelled by the task's own completion test; 2 of 80 states dropped (predicate failed), never relabelled; 222 pairs (108 done, 114 not). Two question forms: "is this step done?" and yes / no postconditions. Still frames, 0 of 444 images corrupt.
@@ -198,8 +201,103 @@
 - Source: `results/rynnvalue-check/20261030/{answers.jsonl,report.json,run.log}`; E17 numbers recomputed from
   `results/done-check/20261022/scores.jsonl` (P(done), same pairs).
 
+## E32 — GR00T N1.7 base, zero-shot on DROID: reproduction, latency, instruction probe (2026-11-07)
+- Setup: `nvidia/GR00T-N1.7-3B` @2fc962b (`config/groot_base_weights.txt`) [nvidia2025gr00tn1], backbone
+  `nvidia/Cosmos-Reason2-2B` @9ce19a1, Isaac-GR00T @9fbe86a in its own tested lock (`executors/so101-groot`); one
+  A100-SXM4-40GB; embodiment `OXE_DROID_RELATIVE_EEF_RELATIVE_JOINT`; Isaac-GR00T's DROID sample [khazatsky2024droid],
+  episodes 1–2 (episode 0 has an empty instruction). Steps from `executors/so101-groot/gpu/session.sh`, NVIDIA's own
+  scripts for reference and latency.
+
+| check | result | NVIDIA |
+|---|---|---|
+| Reference (`standalone_inference_script.py`, horizon 8), MAE | **0.0765** (episode 1: 0.0355, episode 2: 0.1176) | 0.0753 |
+| Reference, MSE | 0.0201 (episode 1: 0.0030, episode 2: 0.0371) | 0.0149 |
+| Reference, time per step (script, data loading included) | 311 ms (p90 317) | ~262 ms (H100) |
+| `benchmark_inference.py`, 4 denoising steps, 40 actions: eager | 157 ms (backbone 56, action head 91, data 10) | — |
+| same, `torch.compile` | **89 ms** (backbone 56, action head 23) | — |
+
+| instruction (probe: 8 points × 2 episodes × 5 seeds × 4 / 8 denoising steps) | error vs recorded | moved from original | spread across seeds |
+|---|---|---|---|
+| original | 0.164 | — | 0.053 |
+| paraphrase | 0.167 | 0.039 | 0.055 |
+| other target | 0.185 | 0.081 | 0.056 |
+| unrelated | 0.192 | 0.113 | 0.063 |
+| empty | 0.183 | 0.094 | 0.053 |
+- Distances are mean absolute differences in action units (mean |action| 0.60); "moved" compares a variant's chunk with
+  the original's at the same seed; "spread" is the standard deviation across seeds (the noise floor). 800 calls, none
+  failed.
+- Per episode: episode 1's other target moves 0.063 against spread 0.022 (≈3×), episode 2's 0.100 against 0.078.
+- Denoising 8 vs 4: no lower error (episode 1: 0.081 vs 0.079), p50 261 vs 171 ms in the probe (eager): keep 4.
+- Meaning: the env reproduces NVIDIA's zero-shot error; latency fits S1. Text has an effect but the scene dominates: a
+  contradicting instruction nudges the actions, it does not redirect them, the language neglect seen in other VLAs
+  [fei2025liberoplus, hou2026langgap, chen2026resteer]. Step steering on the SO-101 depends on a step-labelled
+  fine-tune, gated by this probe.
+- Not shown: whether the moved actions head for the new target (open loop, no closed-loop rollout); 2 episodes, one
+  robot, zero-shot only.
+- Found while running: transformers 4.57.3 (GR00T's pin) queries the Hub while loading the tokenizer even with
+  `HF_HUB_OFFLINE=1`, so GR00T runs online behind a check that the Hub's backbone still equals the pin; the probe
+  script was missing from the hook's synced files (both fixed before this run).
+- Source: `results/gpu-session/20261107-183203/{summary.tsv, box/groot/droid_reference/standalone_inference.log,
+  box/groot/droid_latency/benchmark_inference.log, box/groot/droid_probe/probe.json}`; `docs/model-bringup/groot.md`.
+
 ## Superseded findings still worth knowing (one line each)
 - E2/E3: an instruction in the prompt raises the model's *visibility* answers; evidence questions must not share the instruction's state (now: `task` and `user_just_said` kept apart).
 - E7: three LeRobot eval mismatches (camera mapping, scene split, task names vs sentences) silently invalidate VLA runs; eval settings must come from the checkpoint.
 - E12: MJev's latency was one Conv3d on T4 (20.6 of 23.8 s), exact as a matrix multiply (fp16 1,280 ms per 3-question request).
 - E13: the image ablation shuffled options per variant, so it shows no image benefit, not that OneJev ignores images.
+
+## E33 — Stage 1: GR00T N1.7 on LIBERO-goal through the whole runtime (2026-11-10)
+- Setup: `nvidia/gr00t17-lerobot-libero_goal-640` @436c57c (base `nvidia/GR00T-N1.7-3B` @2fc962b) served by the
+  generic LeRobot service (LeRobot 0.6.1, action head compiled `max-autotune-no-cudagraphs`, 3 warm-up calls); LeRobot's
+  own LIBERO environment on the same A100 (EGL); one `rojev.app.Session` per episode with the native planner (the whole
+  instruction to S1, no S2 steps); lockstep; lossless frames; episode e = LeRobot's init state e, seed 1000 + e; at most
+  300 steps; success = LIBERO's own goal check.
+
+| run | when S1 is asked again (16-action chunks) | episodes | success |
+|---|---|---|---|
+| first run | after 14–15 actions (`refill_s` 0.05) | 10 tasks × 2 | 17/20 |
+| comparison, tasks 2 and 3 | after 14–15 actions | 2 tasks × 10 | 15/20 (bottle 9/10, drawer + bowl 6/10) |
+| comparison, tasks 2 and 3 | after 7 actions (`refill_s` 0.425) | 2 tasks × 10 | 18/20 (10/10, 8/10) |
+| **final** | after 7 actions | 10 tasks × 5 | **49/50**; 9 tasks 5/5, wine bottle on the rack 4/5 |
+
+- NVIDIA / LeRobot report 98% on LIBERO-goal for this checkpoint; NVIDIA's own LIBERO rollout asks again after 8.
+- Final run: 839 S1 calls, round trip p50 139 ms (model 115 ms, image encoding 40 ms, request 267 kB lossless), all
+  accepted; 0 starved ticks, 0 rule violations, 0 lease lapses.
+- Failures with late asking: the arm went for the bowl without opening the drawer first; the bottle tipped in the
+  grasp. The same episode passed and failed under the same setting on different runs: GR00T samples differently each
+  call, so 2 episodes per task cannot separate settings.
+- Found while running: `max-autotune` with CUDA graphs failed every request (CUDA graphs are tied to the thread that
+  recorded them; the HTTP worker threads differ), hence `no-cudagraphs`; the first call after warm-up recompiled for
+  the real instruction length (~60 s wall, no robot time in lockstep); the runtime's "time left" counts to the start of
+  the last queued action, one tick short, so the setting meant as 8 actions ran 7 (and 15 ran 14–15). Fixed the same
+  day: the queue's end is now the last action's due time plus a tick, and the count comes from the model
+  (`execute_steps` 8 for GR00T on LIBERO) instead of a lead time; not re-run on the GPU yet.
+- Not shown: the other LIBERO suites; real-time mode; anything with S2 steps.
+- Source: `results/libero/20261110-stage1/replan-ab/{full8, replan8, replan16}/results.json` (per-episode records and
+  videos beside them); first run `results/gpu-session/20261110-125427/`.
+
+## E34 — S2 bake-off: Embodied-R1.5 as planner and done checker (2026-11-10)
+- Setup: Embodied-R1.5 (`config/embodied_r1_weights.txt`) on vLLM 0.18 (offline engine, one A100); questions in its
+  official wrapper, wording from `config/s2/embodied-r1.5.yaml` (the live client's file); each case shows the newest
+  frame per camera; pass bars fixed before the run (`config/s2_pass_bars.yaml`); scored by
+  `executors/so101-data/score.py` with 95% intervals from resampling episodes. Cases: `docs/model-bringup/s2-bakeoff.md`.
+
+| measure | so101-steps (12 episodes) | armnetbench (218 attempts) | bar |
+|---|---|---|---|
+| next step, true step list | 0.625 [0.56, 0.69] (n 48) | — | ≥ 0.90 |
+| next step, no step list | 0.208 (n 48) | — | — |
+| next step, list claims an undone step | 0.000 (n 24) | — | — |
+| done check, either camera: false done | 0.375 [0.29, 0.46] | 0.110 [0.06, 0.17] | ≤ 0.10 |
+| done check, either camera: missed done | 0.633 | 0.514 | — |
+| done check, either camera: balanced accuracy | 0.496 [0.40, 0.58] | 0.688 [0.63, 0.74] | ≥ 0.75 |
+| best single camera, balanced accuracy | wrist 0.527 | overhead 0.628 | — |
+| latency p50 / p95 (single question) | next step 245 / 311 ms; status 123 / 124 ms | status 231 / 344 ms | ≤ 3 s |
+
+- Verdicts: every accuracy bar fails (ArmNetBench false done: uncertain); latency passes.
+- Answers are about 8 tokens: no reasoning before the answer, though the wrapper asks for it; wording, chat template
+  and settings match R1.5's official example (`inference/hf_example.py` @b38627f2), so this is the model's behaviour.
+- Meaning: R1.5 cannot pick steps or confirm them for rojev as it is. It follows the step list over the image (0/24
+  when the list is wrong), and on one frame it cannot tell a finished SO-101 step from one in progress.
+- Not shown: other prompt forms (multiple choice, its unreleased Corrector prompt); fine-tuning; closed loop.
+- Source: `results/gpu-session/20261110-132408/box/planner-vlm/r15/{report.json, so101-steps/answers.jsonl,
+  armnetbench/answers.jsonl}`.

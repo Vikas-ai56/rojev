@@ -8,7 +8,7 @@ A guide for reading and reviewing the code; documents are listed in [`README.md`
 
 ## 1. Big picture
 
-System 2 (Jev on OneJev; MJev out of the loop since 2026-10-22; or a baseline) chooses what to do; System 1 (XR-1 RoboCasa365; π0.5² still supported) does it; the control layer owns what is physically active; the state owner is the only writer of intent between them. Every part runs on its own thread; nothing waits for a model. Simulation runs on the Mac; the models run as services on a GPU.
+System 2 (Jev on OneJev for the user's changes; a step planner and a done checker, Embodied-R1.5 next; or a baseline) chooses what to do and checks it; System 1 (XR-1 RoboCasa365 on RoboCasa; GR00T N1.7 through the LeRobot service on LIBERO; π0.5² still supported) does it; the control layer owns what is physically active; the state owner is the only writer of intent and of the task memory between them. Every part runs on its own thread (or in lockstep on one); nothing waits for a model. RoboCasa runs on the Mac, LIBERO on the GPU box; the models run as services on a GPU. One page for reports: [`features/pipeline.md`](features/pipeline.md).
 
 ```
  user ── UserInstruction ─────────────────────────────▶ owner.StateOwner ── AcceptedGoal / Revoke / renew ──┐
@@ -19,7 +19,7 @@ System 2 (Jev on OneJev; MJev out of the loop since 2026-10-22; or a baseline) c
  control.ControlLoop ◀── control.Guard ◀───────────────────────────┘                                                    │
         │ backend.step(action) → observation → latest Capture ──────────────────────────────────────────────────────────┘
         ▼
- RoboCasa Franka (executors/robocasa-pi052)  |  any rojev.robot.Robot via control.RobotBackend (SO-101 sim, later hardware)
+ RoboCasa Franka (executors/robocasa-pi052)  |  LIBERO Panda (executors/libero, via app.Session)  |  any rojev.robot.Robot via control.RobotBackend
 ```
 
 Authority: advice is evidence; a proposal is not a command; a command is active only once the execution runtime has applied its first action. Every message carries the session epoch.
@@ -32,24 +32,30 @@ Bottom to top; each package imports only those listed as its dependencies (enfor
 
 ```
 rojev/
-  protocol/        shared contracts: observation.py (Observation, Capture) · commands.py · decisions.py        deps: —
+  protocol/        shared contracts: observation.py (Observation, Capture) · commands.py · decisions.py · memory.py (TaskMemory)  deps: —
   robot/           robot layer: Robot, clocks, limits, ActionSpec; sim/ = MuJoCo backend (robot, world, GL)    deps: —
   transport/       remote model calls: HTTP/3 (pinned TLS), HTTP/1.1 keep-alive, shared server Endpoint      deps: —
-  control/         real-time layer: execution.py (ExecutionRuntime), guard.py, loop.py, robot_backend.py     deps: protocol, robot
+  control/         real-time layer: execution.py (ExecutionRuntime), guard.py, loop.py, robot_backend.py, cues.py (SwitchCues)  deps: protocol, robot
   system1/         policy.py (Policy, ActionChunk), commit.py (CommitPolicy), wire.py, remote.py (RemotePolicy), runner.py (S1Runner)  deps: protocol, robot, control, transport
-  system2/         decider.py, worker.py, jev/ (Jev v1 interaction), verify/ (end-state checks), models/  deps: protocol, observability, transport
-  owner/           state_owner.py (StateOwner): single writer of intent                                     deps: protocol, control, system2
+  system2/         decider.py, worker.py, planning.py (StepPlanner, CommitVerifyPlanner), jev/ (Jev v1 interaction), verify/ (done checks, step watcher), models/ (OneJev, MJev, SAM 2, chat VLM clients)  deps: protocol, observability, transport
+  owner/           state_owner.py (StateOwner): single writer of intent and task memory; episodic.py      deps: protocol, control, system2
   eval/            deciders.py: baselines scripted / oracle / native / always-continue (evaluation only)                      deps: protocol, system2
   observability/   tracing.py (Phoenix), run_trace.py (post-run span tree)                                 deps: —
   legacy_v2/       QUARANTINED v2 chunk-synchronous supervisor (arm D, B/E, candidate filter); delete after T8  deps: protocol, system2, eval
-executors/robocasa-pi052/  RoboCasa backend + PandaOmron ActionSpec, live runner and scenario harness (any S1), π0.5² service, GPU hook
+  app/             shared assembly: Embodiment, SessionConfig, plug-ins from config, Session, VideoRecorder (top layer)  deps: protocol, robot, control, system1, system2, owner
+executors/libero/          LIBERO robot plug-in on app.Session: LeRobot's LiberoEnv backend, Panda embodiment, suites, evaluation CLI, GPU-box setup (own env; simulator on Linux only)
+executors/robocasa-pi052/  RoboCasa backend + PandaOmron ActionSpec, legacy live app and scenario harness (any S1), π0.5² service, GPU hook
 executors/robocasa-xr1/    XR-1 RoboCasa365 service (the S1 now) + its input builder, GPU hook (own env)
+executors/so101-groot/     GR00T N1.7 SO-101 service (S1 candidate): I/O adapter, server, GPU hook (own env; model on Linux only)
+executors/so101-data/      SO-101 recordings (LeRobot): step ends, S2 bake-off case sets, scorer (own env)
 services/onejev, services/mjev, services/sam2  S2 model services (own envs, GPU hooks)
 scripts/         gpu_setup.sh: one command from the Mac to a serving GPU box
 executors/robocasa/        earlier SmolVLA executor env (v2 G0)
 services/mjev/             MJev-Spatial service + checks (own env)
 services/sam2/             SAM 2.1 masks + streaming tracks (own env)
 services/rynnvalue/        RynnValue-4B done-signal check on the Mac GPU (own env; measurement, not in the loop)
+services/planner-vlm/      Embodied-R1.5 (S2 planner / done-checker candidate): `vllm serve` endpoint + bake-off runner, GPU hook (own env; model on Linux only)
+services/lerobot-policy/   generic S1 service for any LeRobot checkpoint chosen by config/s1/*.yaml (GR00T N1.7 LIBERO first), GPU hook (own env)
 examples/ tests/ playground/ scenes/ config/ vendor/ (git-ignored)
 ```
 
@@ -61,18 +67,19 @@ Read in this order; each step adds one layer of the loop.
 
 | # | Read | To understand |
 |---|---|---|
-| 1 | [`protocol/`](../rojev/protocol/__init__.py): [`observation.py`](../rojev/protocol/observation.py) → [`commands.py`](../rojev/protocol/commands.py) → [`decisions.py`](../rojev/protocol/decisions.py) | Everything that crosses between layers, and the authority rules |
+| 1 | [`protocol/`](../rojev/protocol/__init__.py): [`observation.py`](../rojev/protocol/observation.py) → [`commands.py`](../rojev/protocol/commands.py) → [`decisions.py`](../rojev/protocol/decisions.py) → [`memory.py`](../rojev/protocol/memory.py) | Everything that crosses between layers, the authority rules, the task memory |
 | 2 | [`robot/action_spec.py`](../rojev/robot/action_spec.py) | How any robot plugs in: its action vector as an `ActionSpec` |
 | 3 | [`control/execution.py`](../rojev/control/execution.py) `ExecutionRuntime.tick` | What is physically active: leases, revoke, irreversible switches, skipped actions, blending |
 | 4 | [`control/guard.py`](../rojev/control/guard.py) → [`control/loop.py`](../rojev/control/loop.py) | What keeps the robot safe, and how it keeps its own clock |
 | 5 | [`system1/policy.py`](../rojev/system1/policy.py) → [`system1/commit.py`](../rojev/system1/commit.py) → [`system1/runner.py`](../rojev/system1/runner.py) | How S1 is kept supplied with chunks, how much of each is committed, placed at observation time |
-| 6 | [`system2/decider.py`](../rojev/system2/decider.py) → [`system2/worker.py`](../rojev/system2/worker.py) | How a decider's verdict becomes a stamped proposal |
-| 7 | [`owner/state_owner.py`](../rojev/owner/state_owner.py) | How proposals and instructions become commands; why stale ones are refused |
+| 6 | [`system2/decider.py`](../rojev/system2/decider.py) → [`system2/worker.py`](../rojev/system2/worker.py) → [`system2/planning.py`](../rojev/system2/planning.py) | How a decider's verdict becomes a stamped proposal; how the next step is chosen |
+| 7 | [`owner/state_owner.py`](../rojev/owner/state_owner.py) | How proposals and instructions become commands; why stale ones are refused; triggers, lease, memory |
 | 8 | [`eval/deciders.py`](../rojev/eval/deciders.py) | The baselines Jev must beat |
-| 9 | [`executors/robocasa-pi052/realtime.py`](../executors/robocasa-pi052/realtime.py) `main` | The whole v1 loop wired together in RoboCasa |
-| 10 | [`system1/wire.py`](../rojev/system1/wire.py) → [`system1/remote.py`](../rojev/system1/remote.py) → [`executors/robocasa-pi052/serve.py`](../executors/robocasa-pi052/serve.py) | How a chunk is fetched from the S1 on a GPU (XR-1: [`executors/robocasa-xr1/serve.py`](../executors/robocasa-xr1/serve.py); π0.5² shown) |
-| 11 | [`robot/base.py`](../rojev/robot/base.py) → [`robot/sim/mujoco_robot.py`](../rojev/robot/sim/mujoco_robot.py) → [`control/robot_backend.py`](../rojev/control/robot_backend.py) | The hardware-shaped robot interface, the SO-101 simulator, and how it joins the loop |
-| 12 | [`system2/models/`](../rojev/system2/models/__init__.py) → [`system2/jev/`](../rojev/system2/jev/__init__.py) → [`system2/verify/`](../rojev/system2/verify/__init__.py) | The OneJev client (MJev client kept, out of the loop); Jev v1 answering a change; end-state checks posting step events |
+| 9 | [`app/session.py`](../rojev/app/session.py) → [`executors/libero/evaluate.py`](../executors/libero/evaluate.py) | The shared assembly, and the first robot plug-in on it |
+| 10 | [`executors/robocasa-pi052/realtime.py`](../executors/robocasa-pi052/realtime.py) `main` | The legacy v1 loop wired by hand in RoboCasa |
+| 11 | [`system1/wire.py`](../rojev/system1/wire.py) → [`system1/remote.py`](../rojev/system1/remote.py) → [`executors/robocasa-pi052/serve.py`](../executors/robocasa-pi052/serve.py) | How a chunk is fetched from the S1 on a GPU (XR-1: [`executors/robocasa-xr1/serve.py`](../executors/robocasa-xr1/serve.py); π0.5² shown) |
+| 12 | [`robot/base.py`](../rojev/robot/base.py) → [`robot/sim/mujoco_robot.py`](../rojev/robot/sim/mujoco_robot.py) → [`control/robot_backend.py`](../rojev/control/robot_backend.py) | The hardware-shaped robot interface, the SO-101 simulator, and how it joins the loop |
+| 13 | [`system2/models/`](../rojev/system2/models/__init__.py) → [`system2/jev/`](../rojev/system2/jev/__init__.py) → [`control/cues.py`](../rojev/control/cues.py) → [`system2/verify/`](../rojev/system2/verify/__init__.py) | The OneJev and chat VLM clients (MJev client kept, out of the loop); Jev v1 answering a change; the done-check cascade posting step events |
 
 ---
 
@@ -83,7 +90,8 @@ Read in this order; each step adds one layer of the loop.
 |---|---|---|
 | [`observation.py`](../rojev/protocol/observation.py) | What every layer sees: one observation; an observation stamped with its robot-clock time | `Observation`, `Capture` |
 | [`commands.py`](../rojev/protocol/commands.py) | Owner ↔ S1 runner ↔ execution runtime; each carries `epoch` | `OpKind`, `Operation`, `Transition`, `AcceptedGoal`, `Revoke`, `TimedChunk`, `AckStatus`, `ExecutionAck` |
-| [`decisions.py`](../rojev/protocol/decisions.py) | Owner ↔ System 2 (and the monitor): what a decider sees and proposes; progress keyframes; failures; deviations | `UserInstruction`, `ObservationSnapshot`, `Keyframe`, `StepEvent`, `Turn`, `Utterance`, `Hold`, `DecisionProposal`, `DecisionFailure`, `Deviation`, `Precondition`, `Advice` |
+| [`decisions.py`](../rojev/protocol/decisions.py) | Owner ↔ System 2 (and the monitor): what a decider sees (snapshot with the task memory) and proposes; failures; deviations | `UserInstruction`, `ObservationSnapshot`, `StepEvent`, `Turn`, `Utterance`, `Hold`, `DecisionProposal`, `DecisionFailure`, `Deviation`, `Precondition`, `Advice` |
+| [`memory.py`](../rojev/protocol/memory.py) | Task memory: immutable goal + append-only step ledger (DONE / UNDONE with evidence, observation, checked); what deciders read as steps done | `TaskMemory`, `StepRecord`, `StepStatus` |
 
 ### `rojev/robot/` (robot layer; simulator = one backend)
 | File | What it does | Look at |
@@ -94,7 +102,7 @@ Read in this order; each step adds one layer of the loop.
 | [`effect.py`](../rojev/robot/effect.py) | What an action should do to the measured state (execution-monitor plug-in): tracked quantities + commanded change; `JointTargetEffect` for any joint-target robot | `EffectModel`, `JointTargetEffect` |
 | [`action_spec.py`](../rojev/robot/action_spec.py) | A robot's action vector for the control layer: bounds, hold value (`KEEP` = repeat last), switch threshold, irreversible flag; `joint_target_spec` for any `Robot` | `ActionSpec.hold`, `irreversible_change`, `limit`, `joint_target_spec` |
 | [`mock.py`](../rojev/robot/mock.py) | No physics: commands become state | `MockRobot` |
-| [`so101.py`](../rojev/robot/so101.py) | SO-101 factory from `config/so101.yaml` | `simulated` |
+| [`so101.py`](../rojev/robot/so101.py) | SO-101 factory and LeRobot units from `config/so101.yaml` | `simulated`, `LeRobotUnits`, `lerobot_units` |
 | [`sim/mujoco_robot.py`](../rojev/robot/sim/mujoco_robot.py) | MuJoCo backend: time modes `lockstep` / `paced` / `realtime` (physics thread), cameras with rate/latency/calibration, privileged truth for evaluators | `MujocoRobot`, `SimClock`, `RealtimeSimClock`, `SimGroundTruth`, `camera_info` |
 | [`sim/gl.py`](../rojev/robot/sim/gl.py) | One thread owns all OpenGL contexts of a simulated robot (macOS CGL blocks across threads) | `GLThread.call` |
 | [`sim/world.py`](../rojev/robot/sim/world.py) | World + vendor robot composition (solver options kept), contacts, segmentation pixel counts | `compose`, `contacts_with`, `visible_pixels` |
@@ -113,29 +121,31 @@ Read in this order; each step adds one layer of the loop.
 |---|---|---|
 | [`execution.py`](../rojev/control/execution.py) | One action per tick. Only current epoch / newer command / unexpired lease; active on first applied action; revoke drops queued actions; review keeps motion but freezes irreversible switches; irreversible switches only while running a chunk outside review; elapsed actions skipped; segments blended; decelerating hold (`stop_s`); `rejected` vs `chunk_rejected` ACKs; starvation measured (`starved_ticks`); `queued_from(cmd, t)` = the command's queued actions from t (read-only) | `ExecutionRuntime.accept`, `submit`, `revoke`, `review`, `renew`, `tick`, `target`, `queued_from`, `Mode` |
 | [`guard.py`](../rojev/control/guard.py) | Watchdog ("starved", keeps the command), owner heartbeat ("owner lost") and runtime errors (drop the commands: `dropped` ACK), stop | `Guard.step` |
+| [`cues.py`](../rojev/control/cues.py) | Done-check cues from applied actions: a switch dimension (gripper, base mode) crossing its threshold → `notify(reason)`; runs in the loop's `on_tick` | `SwitchCues` |
 | [`loop.py`](../rojev/control/loop.py) | Steps a `Backend` at its control rate on its own thread: the robot's clock if it has one, else the wall clock; lag reported; newest observation in a latest-value slot; `TickRecord` carries the observation the action was applied to and the one that followed | `ControlLoop`, `Backend`, `TickRecord` |
 | [`robot_backend.py`](../rojev/control/robot_backend.py) | Any `rojev.robot.Robot` as a loop backend (joint targets through its safety filter; its clock paces the loop) | `RobotBackend` |
 
 ### `rojev/system1/` (fast visuomotor policy)
 | File | What it does | Look at |
 |---|---|---|
-| [`policy.py`](../rojev/system1/policy.py) | Policy contract: observation + subtask text → action chunk; empty subtask = the policy's own planner; `info` = what it reports; `act_samples` = K candidates; a policy that `accepts_continuation` is given the actions it runs while it thinks (real-time chunking) | `Policy`, `ActionChunk`, `Continuation` |
+| [`policy.py`](../rojev/system1/policy.py) | Policy contract: observation + subtask text → action chunk; empty subtask = the policy's own planner; `info` = what it reports; `execute_steps` = how many of its actions the model means to run before it is asked again (None = all); `act_samples` = K candidates; a policy that `accepts_continuation` is given the actions it runs while it thinks (real-time chunking) | `Policy`, `ActionChunk`, `Continuation` |
 | [`commit.py`](../rojev/system1/commit.py) | How much of a chunk to commit: whole · through the first slow point · K-sample majority consensus (`speculative_predict`, opt-in); never below the runner's latency-derived floor; per-step strict majority on irreversible switches, ties keep the value in effect (the robot's at the first step, from `last`) | `majority_switches`, `make_commit_policy`, `FixedCommit`, `PhaseCommit`, `ConsensusCommit`, `Commitment` |
 | [`monitor.py`](../rojev/system1/monitor.py) | Execution monitor (opt-in): per tick, measured vs predicted change of the tracked state over a window; linear map from this and the previous window's commands (lag-aware), residual scale ≥ the effect model's resolution; split-conformal threshold, split by run; command directions never exercised are not scored; one `Deviation` per excursion | `ExecutionMonitor.observe`, `fit_monitor`, `MonitorModel`, `Recording` |
-| [`wire.py`](../rojev/system1/wire.py) | Versioned npz wire (v3, no pickle): K samples per request, optional continuation, codecs `raw` / `webp90` (default) | `VERSION`, `DEFAULT_CODEC`, `ActRequest`, `encode_request`, `decode_request`, `encode_response`, `decode_response` |
+| [`wire.py`](../rojev/system1/wire.py) | Versioned npz wire (v4, no pickle): K samples per request, optional continuation, each chunk's `execute_steps`, codecs `raw` / `webp90` (default) | `VERSION`, `DEFAULT_CODEC`, `ActRequest`, `encode_request`, `decode_request`, `encode_response`, `decode_response` |
 | [`service.py`](../rojev/system1/service.py) | The server half of a remote S1: any `Policy` behind the wire (`/act`, `/reset`, `/health`), one model lock, idle shutdown; wrapped by `Endpoint` | `PolicyService`, `serve_policy` |
 | [`remote.py`](../rojev/system1/remote.py) | A remote S1 through `rojev.transport`; K samples in one request; forwards a continuation; network and round-trip timings; passes the server's `info` through | `RemotePolicy`, `act_samples` |
-| [`runner.py`](../rojev/system1/runner.py) | Keeps the target command supplied: measures request latency; asks the policy (with the command's instruction) when less than `max(refill_s, latency + dt)` is queued; passes the floor ⌈2·latency/dt⌉ + 1 to the commitment policy; passes the action last applied to the commitment policy; submits the committed prefix at the observation time; `refill_now(cmd_id)` forces a fresh chunk only for the command it supplies; counts `refill_ignored`, `floor_over_chunk`; posts π0.5²'s own subtask switches as unchecked `StepEvent` claims (`on_step`); each request's deadline = one chunk duration (`deadline_s`, `timeouts`); a continuation (queued actions from the capture, ⌈L/dt⌉ delay steps) to a policy that accepts one (`continuations`) | `S1Runner.step`, `floor`, `lead_s`, `refill_now`, `S1Stats` |
+| [`runner.py`](../rojev/system1/runner.py) | Keeps the target command supplied: measures request latency; asks the policy (with the command's instruction) when the current chunk is due to be replaced (after the model's `execute_steps`, else when the queue runs out), the lead time ahead (latency + dt; 0 in lockstep); passes the floor ⌈2·latency/dt⌉ + 1 to the commitment policy; passes the action last applied to the commitment policy; submits the committed prefix at the observation time; `refill_now(cmd_id)` forces a fresh chunk only for the command it supplies; counts `refill_ignored`, `floor_over_chunk`; posts π0.5²'s own subtask switches as unchecked `StepEvent` claims (`on_step`); each request's deadline = one chunk duration (`deadline_s`, `timeouts`); a continuation (queued actions from the capture, ⌈L/dt⌉ delay steps) to a policy that accepts one (`continuations`) | `S1Runner.step`, `floor`, `lead_s`, `refill_now`, `S1Stats` |
 
 ### `rojev/system2/` (slow decision layer)
 | File | What it does | Look at |
 |---|---|---|
 | [`decider.py`](../rojev/system2/decider.py) | Decider contract: snapshot → verdict (operation, reason, scores, preconditions, evidence) | `Decider`, `Verdict` |
 | [`worker.py`](../rojev/system2/worker.py) | Runs a decider on its own thread (one per lane); newest request wins; stamps the `DecisionProposal` (epoch, request id, instruction revision, base command, expiry); a decider error becomes a `DecisionFailure`; `busy` clears only after the outcome is posted | `DecisionWorker`, `S2Stats` |
-| [`planning.py`](../rojev/system2/planning.py) | Commit and verify for a self-planning S1: commit its planned subtask, release on a checked step event or the declared bound, never re-commit a verified step | `CommitVerifyPlanner` |
+| [`planning.py`](../rojev/system2/planning.py) | Planning-lane deciders: the step planner (next step from a `NextStepModel` and the memory's done steps; an answer outside the skills never moves the robot) and commit-and-verify for a self-planning S1 (commit its planned subtask, release on a checked step event or the declared bound, never re-commit a verified step) | `StepPlanner`, `NextStepModel`, `NextStep`, `COMPLETE_STEP`, `CommitVerifyPlanner` |
 | [`models/onejev.py`](../rojev/system2/models/onejev.py) | OneJev call traced as an OpenInference span (images, state, answers, logits); qev's client over one kept connection | `system_one`, `KeptClient` |
 | [`models/images.py`](../rojev/system2/models/images.py) | Lossless image / 1-bit mask encoding shared by the S2 clients | `png_b64`, `mask_from_b64` |
 | [`models/mjev.py`](../rojev/system2/models/mjev.py) | MJev-Spatial client over one kept `rojev.transport` connection | `RemoteMJev.ask` |
+| [`models/chat_vlm.py`](../rojev/system2/models/chat_vlm.py) | Any VLM behind an OpenAI-compatible `/v1/chat/completions` (vLLM): prompts, answer regex, yes / no words, sampling from `config/s2/<model>.yaml`; PNG data URLs, the newest frame per camera; the done check asks each camera alone, any yes is done; strict reading (off-list step → none, non-yes → not done); fills the planner slot and the done-checker slot. New, may still change; no plug-in factory yet | `PromptConfig`, `ChatVLM`, `ChatNextStep`, `ChatVerifier` |
 | [`models/sam2.py`](../rojev/system2/models/sam2.py) | SAM 2.1 client: masks from point prompts; streaming tracks (frame-numbered steps, retry-safe) | `RemoteSam2.segment`, `track_start`, `track_step`, `track_end`, `PointPrompt`, `Mask`, `Track` |
 | [`jev/acts.py`](../rojev/system2/jev/acts.py) | Legal interaction acts per situation (one per distinct effect; no retry), question budget, act → operation, the `Reviser` / `Revision` contract for REVISE, robot speech templates | `candidates`, `situation_of`, `effect`, `may_ask`, `operation`, `Revision`, `Reviser`, `TEMPLATES` |
 | [`jev/task_choice.py`](../rojev/system2/jev/task_choice.py) | The second question: which of S1's trained task sentences a revision means (or none → ask); the user's words never become the task | `CanonicalTask`, `NONE`, `TASK_QUESTION` |
@@ -143,16 +153,21 @@ Read in this order; each step adds one layer of the loop.
 | [`jev/chooser.py`](../rojev/system2/jev/chooser.py) | Who scores one question's options: one OneJev Choice over instruction, step, progress, dialogue, hold, images | `Chooser`, `OneJevChooser`, `situation`, `ACT_QUESTION` |
 | [`jev/interaction.py`](../rojev/system2/jev/interaction.py) | Jev v1 interaction decider: wait budget, dwell, act question, calibrate, abstain, task question on revise, budgets, operation | `JevInteraction` |
 | [`verify/checks.py`](../rojev/system2/verify/checks.py) | End-state check per step (done / possible / blocked) for any step text: MJev in one request, or OneJev with the identical question | `Verifier`, `MJevVerifier`, `OneJevVerifier`, `STATES` |
-| [`verify/watcher.py`](../rojev/system2/verify/watcher.py) | Thread checking the running step; confirmed P(done) → one checked `StepEvent` per command; confirms claims (π0.5²'s subtask switch) with one check | `StepWatcher`, `claim`, `confirm` |
+| [`verify/postconditions.py`](../rojev/system2/verify/postconditions.py) | Step text → one concrete yes / no visual fact from verb templates (place / open / close / pick / press); `None` when no template matches; used by the verifiers with `postconditions=True` | `fact`, `placement` |
+| [`verify/watcher.py`](../rojev/system2/verify/watcher.py) | Thread checking the running step as a cascade: at once on a cue, else on a fallback period, rechecked soon to confirm (periods on the wall clock); confirmed P(done) → one checked `StepEvent` per command (naming the cue); confirms claims (π0.5²'s subtask switch) with one check; `busy` for lockstep | `StepWatcher`, `cue`, `claim`, `confirm`, `busy` |
 
 ### `rojev/owner/`, `rojev/eval/`, `rojev/observability/`
 | File | What it does | Look at |
 |---|---|---|
-| [`owner/state_owner.py`](../rojev/owner/state_owner.py) | Single writer of instruction (revision), desired command and active record (from ACKs). On an instruction change: `review` (default; reaffirm on CONTINUE) or `revoke`; two lanes (interaction: instruction / deviation / hold, priority, deadline, escalation to planning, deferred planning replayed; planning: the rest); standing holds answering changes; dialogue + utterances (`say`); step events; accepts only proposals answering its own current requests; CONTINUE renews leases; progress keyframes when a running step is moved past; falls back to the running command if a pending one fails or is dropped; heartbeat to the guard; runs on its own thread (`start`) or driven by the caller (`step`: every posted event, then a tick; lockstep) | `StateOwner.handle`, `tick`, `step`, `has_events`, `request_decision`, `_on_instruction`, `_on_deviation`, `_on_step`, `_on_failure`, `_on_proposal`, `_apply`, `_update_hold`, `_keep_hold`, `_record_progress`, `_issue`, `_on_ack` |
+| [`owner/state_owner.py`](../rojev/owner/state_owner.py) | Single writer of instruction (revision), desired command and active record (from ACKs). On an instruction change: `review` (default; reaffirm on CONTINUE) or `revoke`; two lanes (interaction: instruction / deviation / hold, priority, deadline, escalation to planning, deferred planning replayed; planning: the rest); standing holds answering changes; dialogue + utterances (`say`); step events; accepts only proposals answering its own current requests; event-driven planning (`start`, step, planned, ended command, `overdue`, `watchdog`; no fixed beat); owns the lease (renews the desired command unless under review or planning has gone unanswered for `liveness_s`); task memory (DONE when a running step is moved past, UNDONE when a done step is chosen again); episodic log on COMPLETE / stop; falls back to the running command if a pending one fails or is dropped; heartbeat to the guard; runs on its own thread (`start`) or driven by the caller (`step`: every posted event, then a tick; lockstep) | `StateOwner.handle`, `tick`, `step`, `has_events`, `request_decision`, `_due_trigger`, `_keep_leased`, `_on_instruction`, `_on_deviation`, `_on_step`, `_on_failure`, `_on_proposal`, `_apply`, `_update_hold`, `_recheck_hold`, `_record_progress`, `_remember`, `_end`, `_issue`, `_on_ack` |
+| [`owner/episodic.py`](../rojev/owner/episodic.py) | Episodic memory: one JSON line per finished task (outcome, goal, step ledger with evidence and observation ids, dialogue), failures included | `EpisodicLog` |
+| [`app/session.py`](../rojev/app/session.py) | The one assembly for any robot and models: runtime, guard, loop, S1 runner, lane workers, owner, step watcher + switch cues; lockstep (waits for lanes and the done checker) or real time; ends on seconds, COMPLETE, `stop_when` or error; writes the run's records | `Session`, `RunResult` |
+| [`app/embodiment.py`](../rojev/app/embodiment.py), [`app/config.py`](../rojev/app/config.py), [`app/plugins.py`](../rojev/app/plugins.py) | What the core knows of a robot; every runtime knob (unknown keys refused) and YAML loading; plug-ins built from `package.module:callable` | `Embodiment`, `SessionConfig`, `load_config`, `build`, `resolve` |
+| [`app/records.py`](../rojev/app/records.py), [`app/video.py`](../rojev/app/video.py) | Call logs of S1 and both lanes; record files and summary; the run video (cameras + panel, encoded after the run) | `RecordedPolicy`, `RecordedDecider`, `write_records`, `VideoRecorder` |
 | [`eval/deciders.py`](../rojev/eval/deciders.py) | Baselines: `scripted` (time budget), `oracle` (simulator truth), `native` (S1's own planner), `always-continue` (interaction lane). Never shipped | `ScriptedSequence`, `TruthSequence`, `NativePlanner`, `AlwaysContinue`, `next_after_latest_done` |
 | [`eval/scorecard.py`](../rojev/eval/scorecard.py) | Revision-benchmark scorecard (T8): `Injection` / `Case` / `RunRecords` → `score_run` per run, `aggregate` per arm, `render_markdown` / `render_json`; robot-agnostic, reads record dicts only | `score_run`, `aggregate`, `Injection`, `Case`, `RunRecords` |
 | [`observability/tracing.py`](../rojev/observability/tracing.py) | OpenTelemetry → local Phoenix | `setup` |
-| [`observability/run_trace.py`](../rojev/observability/run_trace.py) | One run as a Phoenix span tree after the run: commands (ACKs, reviews, keyframes, deviations), S1 requests + commitments, S2 decisions per lane with outcome, user utterances | `export_run` |
+| [`observability/run_trace.py`](../rojev/observability/run_trace.py) | One run as a Phoenix span tree after the run: commands (ACKs, reviews, steps done / undone, deviations), S1 requests + commitments, S2 decisions per lane with outcome, user utterances | `export_run` |
 
 ### `rojev/legacy_v2/` (QUARANTINED; only `workflow.py`, E9/E13 playground scripts and their tests use it)
 | File | What it does |
@@ -161,6 +176,17 @@ Read in this order; each step adds one layer of the loop.
 | [`onejev_arm.py`](../rojev/legacy_v2/onejev_arm.py) | Arm D: MJev judges candidates, one OneJev choice |
 | [`candidates.py`](../rojev/legacy_v2/candidates.py) | v2 candidate filter over π0.5²'s 21,326 subtasks (BM25, transitions, object overlap) |
 | [`baselines.py`](../rojev/legacy_v2/baselines.py) | v2 arms B (fixed) and E (truth) |
+
+### `executors/libero/` (LIBERO robot plug-in on `rojev.app.Session`; own env, simulator on Linux only)
+| File | What it does | Look at |
+|---|---|---|
+| [`embodiment.py`](../executors/libero/embodiment.py) | LIBERO Panda as an `Embodiment`: LeRobot's 7-D action (end-effector deltas hold 0; gripper a `KEEP` switch at 0.0, irreversible), 20 Hz, cameras `top` / `wrist`, start = LeRobot's no-op action | `LIBERO_PANDA`, `START`, `EMBODIMENT` |
+| [`backend.py`](../executors/libero/backend.py) | A `Backend` over LeRobot 0.6.1's own `LiberoEnv`: lerobot-eval's episode seeding and reset protocol, its observation batching + `LiberoProcessorStep`, exact uint8 frames back, sticky success with its step; every simulator call on one thread it owns (MuJoCo's EGL context is bound to the thread that rendered last, and the real-time loop steps from its own) | `LiberoBackend`, `to_frame` |
+| [`suites.py`](../executors/libero/suites.py) | LIBERO's own suite registry and LeRobot's step budget per suite; CLI lists the tasks | `load_suite`, `describe`, `suite_names` |
+| [`evaluate.py`](../executors/libero/evaluate.py) | One `Session` per task episode (fresh env, policy reset, `NativePlanner`, until success or LeRobot's budget); `remote` (service JSON, codec `raw`) or `zero` policy; `results.json` rewritten after every episode | `run_episode`, `summarize`, `make_policy`, `HoldingPolicy`, `main` |
+| [`gpu/hook.sh`](../executors/libero/gpu/hook.sh), [`gpu/box_setup.py`](../executors/libero/gpu/box_setup.py), [`gpu/session.sh`](../executors/libero/gpu/session.sh) | Box side: the hook serves nothing (`--skip-serve`); `box_setup` downloads LeRobot's pinned assets into the Hugging Face cache, writes LIBERO's config, links its asset cache, checks one EGL render; session steps `stage1_goal` / `stage1_spatial` / `stage1_10` (lockstep) and `realtime_goal` (`config/runs/libero-realtime.yaml`) against the running S1 service | `prepare`, `check`, `render`, `write_service_json` |
+| [`pyproject.toml`](../executors/libero/pyproject.toml) | `lerobot[libero]` 0.6.1 on Linux; hf-libero without its own dependencies (uv `dependency-metadata`), robosuite with headless OpenCV, LeRobot's pinned simulator set, CPU torch on Linux | |
+| [`tests/`](../executors/libero/tests/conftest.py) (21) | A fake `libero` package (`fake_libero.py`) under LeRobot's real env and processors: reset order, init-state wrap, processing, exact frames, sticky success, budgets; embodiment vs LeRobot's definitions and switch cues; evaluation wiring; a zero policy through the real `Session` | |
 
 ### `executors/robocasa-pi052/` (π0.5² + RoboCasa integration; own env)
 | File | What it does | Look at |
@@ -202,10 +228,15 @@ Read in this order; each step adds one layer of the loop.
 | [`services/mjev/serve_mjev.py`](../services/mjev/serve_mjev.py) | MJev-Spatial-4B service: half-precision trunk (bf16 on A100), fp32 readout, exact `PatchLinear` patch embedding; HTTP/1.1 keep-alive, threaded |
 | `services/onejev/` | OneJev 1.6 4B via `qev serve` (PyTorch backend), own env; loopback only (qev has no auth) |
 | [`executors/robocasa-xr1/serve.py`](../executors/robocasa-xr1/serve.py), [`xr1_inputs.py`](../executors/robocasa-xr1/xr1_inputs.py) | Xiaomi-Robotics-1 RoboCasa365 checkpoint (pinned `config/xr1_weights.txt`) as a remote S1 on our wire (never its pickle socket); inputs ported from its evaluation client (4 frames 2 ticks apart, 0.95 crop, end-effector-first 14-value state); own env (torch 2.8, transformers 4.57.1, flash-attn 2.8.3 from its sdist, fetching the prebuilt kernels; readiness imports them) |
+| [`executors/so101-groot/groot_io.py`](../executors/so101-groot/groot_io.py), [`serve.py`](../executors/so101-groot/serve.py), [`modality.json`](../executors/so101-groot/modality.json), [`parity.py`](../executors/so101-groot/parity.py), [`probe.py`](../executors/so101-groot/probe.py), [`gpu/hook.sh`](../executors/so101-groot/gpu/hook.sh), [`gpu/session.sh`](../executors/so101-groot/gpu/session.sh), [`gpu/constraints.py`](../executors/so101-groot/gpu/constraints.py) | GR00T N1.7 for the SO-101 as a remote S1 (env constrained to Isaac-GR00T's own tested lock): `Binding` from the checkpoint's modality config + our layout (`modality.json`, GR00T's format), radians ↔ LeRobot units, non-finite actions refused, `GrootPolicy` behind `PolicyService`; `parity.py` checks our path against GR00T called directly (same seed); `probe.py` measures an official checkpoint across instruction variants, seeds and denoising steps (`gpu/droid_variants.json`); hook copies the Mac's Hugging Face login (mode 600, `scripts/hf_gated.py`) so the box downloads the gated backbone itself, pre-downloads the official base, pulls Isaac-GR00T's two sample datasets (LFS); session steps run GR00T's own eval / latency / fine-tune tools. Tests: `executors/so101-groot/tests/` (14, stand-in model) |
+| [`executors/so101-data/recording.py`](../executors/so101-data/recording.py), [`steps.py`](../executors/so101-data/steps.py), [`cases.py`](../executors/so101-data/cases.py), [`rollouts.py`](../executors/so101-data/rollouts.py), [`score.py`](../executors/so101-data/score.py) | S2 bake-off data and scoring (own env, LeRobot 0.4.4): a pinned LeRobot SO-101 recording read with LeRobot's own metadata / parquet / pyav decoder, fetching only the cameras asked for (`config/s2_dataset.txt`); step ends from the gripper's two plateaus; the case set (next step with true / no / contradicting ledger, status pairs on the same frame; each case shows the asked frame alone, as the live system sends) from the checked labels in `data/s2-labels/`; ArmNetBench's single-arm π0.5 rollouts as balanced whole-attempt done / failed cases (`config/armnetbench.txt`, operator labels); the scorer (false / missed done, balanced accuracy pooled and per goal, paired steps, episode-bootstrap intervals, verdicts against `config/s2_pass_bars.yaml`). Tests: `executors/so101-data/tests/` |
+| [`services/lerobot-policy/adapter.py`](../services/lerobot-policy/adapter.py), [`model_config.py`](../services/lerobot-policy/model_config.py), [`serve.py`](../services/lerobot-policy/serve.py), [`gpu/hook.sh`](../services/lerobot-policy/gpu/hook.sh) | Generic S1 service for any LeRobot-format checkpoint, chosen by a model config (`config/s1/*.yaml`: checkpoint @ revision, overrides, our camera / state names → the checkpoint's keys, action width, optional `execute_steps` sent with every chunk): LeRobot 0.6.1's own config, policy class, pre / post processors; loud refusals for a wrong map or override; optional `torch.compile` of config-named submodules (GR00T: its action head, `max-autotune-no-cudagraphs`) and a warm-up before the port opens, with instructions of growing length so a text-length recompile never lands in a robot's first request; first user GR00T N1.7 LIBERO (base model pinned to a local snapshot, gated backbone via `scripts/hf_gated.py`); one config per served process (`LEROBOT_POLICY_CONFIG`). Tests: `services/lerobot-policy/tests/` (32, stand-in policy) |
+| [`services/planner-vlm/prompts.py`](../services/planner-vlm/prompts.py), [`engine.py`](../services/planner-vlm/engine.py), [`bench.py`](../services/planner-vlm/bench.py), [`gpu/hook.sh`](../services/planner-vlm/gpu/hook.sh), [`gpu/session.sh`](../services/planner-vlm/gpu/session.sh) | Embodied-R1.5 (pinned `config/embodied_r1_weights.txt`) on vLLM 0.18 as in its official offline example: official question forms (RoboVQA next step + our allowed-step list, SFT "is it satisfied?") from `config/s2/embodied-r1.5.yaml` (shared with `chat_vlm`) inside its answer wrapper, strict reading, one batch per case set plus single-question latency; hook ships the case sets, pre-downloads the weights and serves R1.5 live with `vllm serve` (OpenAI-compatible, port 8006, GPU share 0.45) for `rojev.system2.models.chat_vlm`; plan `config/gpu_session_s2.txt`. Tests: `services/planner-vlm/tests/` (2, stand-in engine) |
 | [`services/sam2/serve_sam2.py`](../services/sam2/serve_sam2.py) | SAM 2.1 Hiera Tiny (transformers, pinned `config/sam2_weights.txt`): `/segment` and streaming `/track/*` (session state on CPU, idle sessions closed, errors → 500); own env, GPU hook |
 | [`services/rynnvalue/check_done.py`](../services/rynnvalue/check_done.py) | RynnValue-4B (pinned `config/rynnvalue_weights.txt`, int8 weight-only, Mac GPU) on the E17 done-check pairs: `smoke` on one video, `score --mode still / chain / repeat`, `report` (identical-image AUROC, length medians); answers carry `valid` (finite logits, value in support) (E31) |
-| `services/*/gpu/hook.sh`, `executors/*/gpu/hook.sh` | Component hooks for `scripts/gpu_setup.sh`: OneJev, MJev, SAM 2; π0.5², XR-1 |
-| `scripts/gpu_setup.sh`, `scripts/gpu_box.sh`, `scripts/hf_pins.py` | One command from the Mac: fresh GPU box → driver, uv, code, vendors at pins, envs, pinned weights, systemd units, tunnels, one service JSON per box (`docs/features/gpu-setup.md`) |
+| `services/*/gpu/hook.sh`, `executors/*/gpu/hook.sh` | Component hooks for `scripts/gpu_setup.sh`: OneJev, MJev, SAM 2, planner-vlm, lerobot-policy; π0.5², XR-1, GR00T, LIBERO (serves nothing) |
+| `scripts/gpu_setup.sh`, `scripts/gpu_box.sh`, `scripts/hf_pins.py` (public pins, no token sent), `scripts/hf_gated.py` (gated pins with the owner's login file; never reads the token) | One command from the Mac: fresh GPU box → driver, uv, code, vendors at pins, envs, pinned weights, systemd units, tunnels, one service JSON per box (`docs/features/gpu-setup.md`) |
+| [`scripts/gpu_session.sh`](../scripts/gpu_session.sh), [`config/gpu_session.txt`](../config/gpu_session.txt) (GR00T), [`config/gpu_session_s2.txt`](../config/gpu_session_s2.txt) (S2 bake-off) | One command from the Mac: runs a planned list of component session steps on a prepared box (timeout and log each), copies results back to `results/gpu-session/<stamp>/` with `summary.tsv` |
 | [`check_precision.py`](../services/mjev/check_precision.py), [`speed_check.py`](../services/mjev/speed_check.py), [`profile_mjev.py`](../services/mjev/profile_mjev.py), [`patch_embed_check.py`](../services/mjev/patch_embed_check.py), [`make_testdata.py`](../services/mjev/make_testdata.py) | Precision vs fp32, speed levers, profile, patch-embedding fix, test scenes (E11–E12) |
 | [`executors/robocasa/`](../executors/robocasa/rollout.py) | SmolVLA env: `checkpoint.py`, `rollout.py`, `check_policy_load.py`, `capability_table.py` |
 
@@ -219,11 +250,13 @@ Read in this order; each step adds one layer of the loop.
 | `ObservationSnapshot` | `StateOwner.request_decision` | `DecisionWorker` → decider |
 | `Verdict` → `DecisionProposal` | decider → `DecisionWorker` | `StateOwner` (accepts, or refuses with a reason) |
 | `AcceptedGoal`, `Revoke`, lease renewal | `StateOwner` | `ExecutionRuntime`; `S1Runner` (via `target()`) |
-| `ActionChunk` | S1 `Policy` (π0.5² service) | `S1Runner` |
+| `ActionChunk` | S1 `Policy` (a remote service: XR-1, π0.5², LeRobot policy) | `S1Runner` |
 | `TimedChunk` | `S1Runner` (chunk + command id + observation time) | `ExecutionRuntime.submit` |
 | `ExecutionAck` | `ExecutionRuntime` (`seq`; `rejected` = command, `chunk_rejected` = one chunk) | `StateOwner` (active record) |
 | action per tick, `TickResult` | `Guard.step` | backend (robot / simulator), logs |
-| `Capture` | `ControlLoop` (latest-value slot) | `S1Runner`, `StateOwner` → snapshots |
+| `Capture` | `ControlLoop` (latest-value slot) | `S1Runner`, `StateOwner` → snapshots, `StepWatcher` |
+| `StepEvent` | `StepWatcher` (checked); `S1Runner` (π0.5²'s unchecked claim) | `StateOwner` (trigger `step`; memory DONE if checked) |
+| `TaskMemory` (`StepRecord`s) | `StateOwner` only | every decider through its snapshot; `summary.json`, `episodes.jsonl` (`EpisodicLog`) |
 | `SimGroundTruth`, `tasks.py` truth | simulator | evaluators and baselines only, never model input |
 
 ---
@@ -244,9 +277,11 @@ loop = ControlLoop(backend, Guard(runtime), spec)
 
 | To add | Where |
 |---|---|
-| Robot | a `rojev.robot.Robot` (must pass `tests/test_robot_contract.py`) → `RobotBackend` + `joint_target_spec`; or any `Backend` (observe / step) with its own `ActionSpec` (like `executors/robocasa-pi052/embodiment.py`) |
-| S1 policy | a `rojev.system1.Policy` (local) or a service speaking `system1/wire.py` (remote) |
+| Robot | an executor with an `Embodiment` + a `Backend` (observe / step) run by `rojev.app.Session` (like `executors/libero/`); or a `rojev.robot.Robot` (must pass `tests/test_robot_contract.py`) → `RobotBackend` + `joint_target_spec` |
+| S1 policy | a `rojev.system1.Policy` (local) or a service speaking `system1/wire.py` (remote); a LeRobot-format checkpoint needs only a `config/s1/<name>.yaml` for `services/lerobot-policy` |
 | S2 decider (Jev, a new arm) | a `rojev.system2.Decider`: `decide(ObservationSnapshot) -> Verdict`; deployable in `system2/`, truth-reading baselines in `eval/` |
+| S2 model (planner, done checker) | a `NextStepModel` for `StepPlanner`, a `Verifier` for `StepWatcher`; a VLM on an OpenAI-compatible endpoint needs only a `config/s2/<model>.yaml` for `models/chat_vlm.py` |
+| Plug-in by configuration | `{factory: "package.module:callable", args: {…}}` → `rojev.app.build` |
 | New message | the right `protocol/` module (`commands` for execution, `decisions` for S2), with `epoch` |
 
 ---
@@ -258,7 +293,12 @@ loop = ControlLoop(backend, Guard(runtime), spec)
 | [`pyproject.toml`](../pyproject.toml) / `uv.lock` | SDK env: `qev` editable from `vendor/OneJev`; Phoenix in `dev`; pytest `testpaths = tests` |
 | `executors/*/pyproject.toml`, `services/*/pyproject.toml` | Separate envs (RoboCasa/LeRobot, MJev, OneJev) whose pins conflict with the SDK and each other |
 | [`config/so101.yaml`](../config/so101.yaml) | SO-101 values the MJCF lacks, each with its source |
-| `config/*.commit`, `config/onejev_weights.txt`, `config/mjev_weights.txt`, `config/toolchain.txt` | Pinned vendor sources, OneJev 1.6 4B and MJev-Spatial-4B weight revisions, host toolchain |
+| `config/*.commit`, `config/*_weights.txt`, `config/toolchain.txt` | Pinned vendor sources, weight revisions (OneJev 1.6 4B, MJev, XR-1, GR00T base / backbone, Embodied-R1.5, …), host toolchain |
+| `config/s1/*.yaml` | LeRobot S1 model configs: checkpoint @ revision, overrides, camera / state map, action width, actions run per chunk (`execute_steps`; GR00T N1.7 LIBERO ×4: 8 of 16) |
+| `config/s2/*.yaml` | Chat-VLM prompt configs (R1.5): wording, answer regex, yes / no words, sampling; read by `chat_vlm` and the bench |
+| `config/s2_pass_bars.yaml`, `config/s2_dataset.txt`, `config/armnetbench.txt` | S2 bake-off bars and pinned datasets |
+| `config/gpu_session*.txt` | GPU session plans (`scripts/gpu_session.sh`): GR00T DROID, S2 bake-off, LIBERO stage 1 |
+| `config/runs/*.yaml` (or any run YAML) | `runtime:` section → `rojev.app.SessionConfig` (unknown keys refused); other sections for plug-ins. `libero-stage1.yaml`: lockstep, no blending (actions per chunk come from the model's `execute_steps`); `libero-realtime.yaml`: the same with lockstep off |
 | [`Makefile`](../Makefile) | `phoenix`, `qev`, `sim`, `sim-viewer`, `test` |
 | `graphify-out/` (git-ignored) | Code-only Graphify graph (`graphify extract . --code-only`; refresh with `graphify update .`) |
 
@@ -278,22 +318,31 @@ loop = ControlLoop(backend, Guard(runtime), spec)
 | `executors/robocasa-pi052/tests/test_label_jev.py` (1) | Labelling CLI writes the chosen act, skip leaves it empty |
 | `executors/robocasa-pi052/tests/test_campaign.py` (5) | Fuzz sessions replayable per seed, typo noise, allowance by state, state read before the answer, unsafe answers |
 | `executors/robocasa-pi052/tests/test_serve.py` (3) | π0.5² service routing behind `Endpoint` + `HttpServer` with a stand-in policy; `Draws` K-row batch with a fake model |
+| `executors/libero/tests/` (21) | LIBERO plug-in over a fake `libero` under LeRobot's real env and processors (see §4) |
+| `services/lerobot-policy/tests/`, `services/planner-vlm/tests/` (2) | LeRobot policy service with a stand-in policy (config, feature checks, batch, timings); R1.5 bench with a stand-in engine |
 | [`tests/test_system1_runner.py`](../tests/test_system1_runner.py) (14 + 2 `timing`) | Control loop + S1 runner, deterministic (simulated time): continuous supply, actions due during inference skipped (exact index), lead time, too-slow policy, revoke incl. a chunk in flight, policy errors, instruction conditioning, refill-now only for the supplied command, floor over chunk counted, S1-planner subtask switch posted as a step event; **SO-101 MuJoCo lockstep under the same runtime**; `timing`: pacing and SO-101 real-time budgets (one control period) |
-| [`tests/test_owner.py`](../tests/test_owner.py) (47) | Owner rules (valid proposal, seven kinds of stale or unknown proposal, review vs revoke on an instruction change, reaffirm without a pause, review timeout, CONTINUE renews, rejected chunk vs command, COMPLETE, deviation of the active command vs stale deviations; lanes: routing, planning waits while interaction pends, superseded requests, unanswered change holds on failure / timeout / refusal and is decided on the recheck, one-lane mode; keyframes: recorded with the decision's observation, not for aborts / waits / retries / unstarted steps, kept across deviation and revision; worker failure; holds through heartbeats, resume, recheck, one-lane race; dialogue + utterances; step events + D8 ordering; dropped commands; reaffirm always immediate; continue `renewed`; driven owner `step`; a worker posts before it stops being busy) and live scripted / native (review and revoke) / oracle / two-lane arms |
-| [`tests/test_system2_jev.py`](../tests/test_system2_jev.py) (17) | Jev v1 with a stub chooser: candidates per situation, budgets, act → operation, abstention, dwell, wait budget, temperature and margin fit, unanswered hold decided on recheck, model inputs; owner + Jev stop → heartbeats → go on |
-| [`tests/test_eval_scorecard.py`](../tests/test_eval_scorecard.py) (27) | Scorecard: validation, goal-swap metrics, answer rule (heartbeats never count), act mapping, pause, ask precision, unanswered hold, edge cases, ECE, aggregation and renderers |
-| [`tests/test_system2_verify.py`](../tests/test_system2_verify.py) (5) | Step watcher confirmation streaks, one event per command, no check without a step, failures counted; MJev request shape |
-| [`tests/test_robot_contract.py`](../tests/test_robot_contract.py) (24 incl. 1 `timing`, mujoco + mock) | Robot contract, cameras, calibration, time modes |
+| [`tests/test_owner.py`](../tests/test_owner.py) (52) | Owner rules (valid proposal, seven kinds of stale or unknown proposal, review vs revoke on an instruction change, reaffirm without a pause, review timeout, CONTINUE renews, rejected chunk vs command, COMPLETE, deviation of the active command vs stale deviations; lanes: routing, planning waits while interaction pends, superseded requests, unanswered change holds on failure / timeout / refusal and is decided on the recheck, one-lane mode; task memory: recorded done with the decision's observation, not for aborts / waits / retries / unstarted steps, kept across deviation and revision, UNDONE on a return to a done step, goal follows new task text; triggers: start / overdue / watchdog, no fixed beat; lease: owner-renewed, not under review, lapses when planning is silent; episodic log once per task; worker failure; holds through watchdog ticks, resume, recheck, one-lane race; dialogue + utterances; step events + D8 ordering; dropped commands; reaffirm always immediate; continue `renewed`; driven owner `step`; a worker posts before it stops being busy) and live scripted / native (review and revoke) / oracle / two-lane arms |
+| [`tests/test_system2_jev.py`](../tests/test_system2_jev.py) (17) | Jev v1 with a stub chooser: candidates per situation, budgets, act → operation, abstention, dwell, wait budget, temperature and margin fit, unanswered hold decided on recheck, model inputs; owner + Jev stop → owner ticks → go on |
+| [`tests/test_eval_scorecard.py`](../tests/test_eval_scorecard.py) (27) | Scorecard: validation, goal-swap metrics, answer rule (only decisions with the change's trigger count), act mapping, pause, ask precision, unanswered hold, edge cases, ECE, aggregation and renderers |
+| [`tests/test_system2_planning.py`](../tests/test_system2_planning.py) (5) | Step planner: allowed step → SWITCH_TO, running step → CONTINUE, complete, off-list answer never moves the robot, memory's done steps passed as the record; commit-and-verify |
+| [`tests/test_chat_vlm.py`](../tests/test_chat_vlm.py) (2) | Chat VLM client against a stand-in OpenAI-compatible server: model name, PNG images before the question, token, sampling from R1.5's config; only an allowed step / a yes word counts |
+| [`tests/test_hf_gated.py`](../tests/test_hf_gated.py) (4), [`tests/test_onejev_client.py`](../tests/test_onejev_client.py) (1) | Gated Hugging Face pins with the owner's login file; OneJev kept connection |
+| [`tests/test_system2_verify.py`](../tests/test_system2_verify.py) (11) | Step watcher confirmation streaks, one event per command, no check without a step, failures counted, a cue checks at once and a positive check is rechecked soon; MJev request shape |
+| [`tests/test_control_cues.py`](../tests/test_control_cues.py) (1) | Switch cues: only a switch crossing its threshold on an applied action is a cue |
+| [`tests/test_app_session.py`](../tests/test_app_session.py) (6) | Shared assembly with a stepped stand-in robot: records and control rate in lockstep; step planner + cue-driven done checker finish a two-step task; acknowledgement, `stop_when`; a failing backend ends as an error with records; video; plug-ins and settings from config |
+| [`tests/test_robot_contract.py`](../tests/test_robot_contract.py) (25 incl. 1 `timing`, mujoco + mock) | Robot contract, cameras, calibration, time modes |
 | [`tests/test_robot_sim_world.py`](../tests/test_robot_sim_world.py) (4) | World composition |
+| [`tests/test_so101_units.py`](../tests/test_so101_units.py) (5) | SO-101 LeRobot units: joint order, degrees, gripper 0–100, round trips |
 | `tests/test_legacy_v2_*.py` (11) | Quarantined v2 arms, candidate filter |
 | [`tests/test_install.py`](../tests/test_install.py) (10) | Install gate ([`features/history/phase0-install.md`](features/history/phase0-install.md)) |
 | [`examples/scripted_trajectory.py`](../examples/scripted_trajectory.py) | SO-101 scripted trajectory through `rojev.robot`, traced; optional OneJev checkpoints with a truth evaluator |
 | [`playground/onejev_bench/`](../playground/onejev_bench/run_bench.py), [`playground/candidates/`](../playground/candidates/coverage.py), [`playground/archive/`](../playground/archive/e3_prompt_variants.py) | Experiments E13, E9/E9b, E3/E6 (`templates.py` to be adopted for Jev v1) |
 
 ```bash
-uv run pytest -q          # SDK tests (217; deterministic)
+uv run pytest -q          # SDK tests (357 passed, 1 skipped on 2026-11-10; deterministic)
 cd executors/robocasa-pi052 && uv run python scenarios.py   # live matrix (20 cases; --viewer, --trace, --policy remote)
-uv run pytest -m timing   # wall-clock budgets, run alone (2)
+uv run pytest -m timing   # wall-clock budgets, run alone (3)
+cd executors/libero && uv run python evaluate.py --policy zero --suite libero_goal --tasks 0 --out /tmp/libero   # plumbing, Linux (LIBERO)
 make phoenix              # traces at http://localhost:6006
 make sim                  # SO-101 scripted trajectory (ARGS="--time-mode realtime")
 cd executors/robocasa-pi052 && uv run python realtime.py --task MicrowaveThawingFridge --arm oracle --policy wiggle
@@ -316,5 +365,7 @@ cd executors/robocasa-pi052 && uv run python realtime.py --task MicrowaveThawing
 | Review mode + decelerating hold (step 4.1) | ✓ tests; live: no pause after a change of mind vs 0.3 s stop with `revoke` |
 | Commitment policy (step 4.2) | ✓ tests + simulated grasp; live stand-in; **not validated with π0.5²** (T8a) |
 | Execution monitor (step 4.3) | ✓ tests; live RoboCasa: blocked arm detected in 0.3 s; calibrated on stand-in runs only (recalibrate with π0.5²) |
-| Two lanes + progress keyframes (step 4.4) | ✓ tests; live RoboCasa: change of mind answered by the interaction lane at once, 40/40 ticks in motion after it, keyframe recorded |
+| Two lanes + progress keyframes (step 4.4; keyframes replaced by task memory 2026-11-09) | ✓ tests; live RoboCasa: change of mind answered by the interaction lane at once, 40/40 ticks in motion after it, keyframe recorded |
+| Event-driven planning, owner-owned lease, task memory, done-check cascade (2026-11-09) | ✓ 343 core + 37 RoboCasa executor tests; scenario matrix 17/17 on the scripted S1 (step-events, blocked, jev-blocked skipped: need a remote S1 or a monitor model); every run writes its memory and `episodes.jsonl`; 0 liveness lapses; planning asked by `start` (one per run), `instruction`, `hold` and the 1 s watchdog of the polling baselines only |
+| Shared assembly `rojev/app` + LIBERO plug-in + LeRobot S1 service + chat VLM client (2026-11-10) | ✓ tests only (357 core, 21 LIBERO over a fake simulator, lerobot-policy and chat client with stand-ins); no GPU run of GR00T on LIBERO, of R1.5 live, or of both together |
 | Fault suite; Jev v1; tracker | ✗ |

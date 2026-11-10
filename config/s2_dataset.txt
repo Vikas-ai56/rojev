@@ -1,0 +1,3 @@
+repo hungho77/so101_left_arm_open_drawer_pick_red_cube_stack_on_blue_cube @ 16943465b231465b0261dd515bed68382ee84c1f
+Public SO-101 recording (LeRobot v3.0, Apache-2.0, 51 episodes, 30 fps): open the drawer, pick the red cube, stack it on
+the blue cube. The S2 bake-off's cases are cut from its top and wrist cameras (the top_depth stream is not fetched).

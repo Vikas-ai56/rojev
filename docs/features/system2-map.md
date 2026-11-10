@@ -1,46 +1,57 @@
-# System 2 map: how decisions are made and reach System 1 (code as of 2026-10-24)
+# System 2 map: how decisions are made and reach System 1 (code as of 2026-11-10)
 
 System 2 decides *what* to do (how to answer a change, whether a step is done, which step next where S1 cannot plan);
 System 1 does it (see [`system1-map.md`](system1-map.md)). The state owner is the only bridge: S2 proposes an
-`Operation`; the owner turns it into a command for the runtime; S1 is conditioned on that command. Details per feature:
-`jev-interaction.md`, `live-harness.md`, `v3-runtime.md`.
+`Operation`; the owner turns it into a command for the runtime; S1 is conditioned on that command. Whole system:
+[`pipeline.md`](pipeline.md). Details per feature: `jev-interaction.md`, `live-harness.md`, `v3-runtime.md`,
+`app-session.md`.
 
 ## 0. Call map
 ```
-realtime.main → executors/robocasa-pi052/realtime.py          builds and wires every part, one thread each
+Session.run   → rojev/app/session.py                         the shared assembly (any robot; LIBERO evaluate.py)
+realtime.main → executors/robocasa-pi052/realtime.py          legacy RoboCasa assembly, one thread each
  ├ Console           → realtime.py:385                         --interactive: typed lines → UserInstruction
  ├ StateOwner        → rojev/owner/state_owner.py              gatekeeper: lanes, holds, dialogue, commands, speech
  ├ DecisionWorker ×2 → rojev/system2/worker.py                 one decider per lane; stamps proposals
- │  ├ planning       → rojev/eval/deciders.py | system2/planning.py   NativePlanner (S1 plans) | commit-verify | baselines
+ │  ├ planning       → rojev/eval/deciders.py | system2/planning.py   NativePlanner (S1 plans) | StepPlanner | commit-verify | baselines
+ │  │    └ StepPlanner → NextStepModel → models/chat_vlm.py ChatNextStep → vllm serve (Embodied-R1.5)
  │  └ interaction    → rojev/system2/jev/interaction.py         answers changes
  │       ├ acts.py → chooser.py → models/onejev.py → qev        legal acts, one OneJev Choice (all cameras, one request)
  │       ├ task_choice.py → chooser.py                           revise: which trained task sentence (or none → ask)
  │       └ calibration.py                                       temperature + abstain margin, one per question
  └ StepWatcher       → rojev/system2/verify/watcher.py          is the running step done? (opt-in --verify)
-      └ checks.py → OneJevVerifier | MJevVerifier | TruthVerifier
+      ├ cues ← rojev/control/cues.py SwitchCues (loop on_tick)   gripper / mode switch → check now
+      └ checks.py → OneJevVerifier | MJevVerifier | TruthVerifier; models/chat_vlm.py ChatVerifier (R1.5)
 models/sam2.py (RemoteSam2)                                     measurement only (sam_check.py), not in the loop
 ```
 - Dependencies: protocol, transport, observability ← system2; owner → control + system2; the executor on top. S2 never
   imports S1 or control: it reaches the robot only through the owner.
 - v1 default stack: XR-1 (S1, plans its own steps from the task text) + Jev over OneJev (interaction) + `NativePlanner`
   (planning). MJev is not loaded (failed the done-check gate, `decisions.md` 2026-10-22).
+- Next stack: GR00T as S1 on LIBERO through `Session` (run on the GPU: 49/50, E33); R1.5 as `StepPlanner`'s model and
+  as the done checker (built, not run on a GPU; `decisions.md` 2026-11-09).
 - RynnValue-4B (frozen) is the first model above chance on that gate (identical-image AUROC 0.82, E31) but is not a
   verifier: its verdict never says done and a question takes 30 s on the Mac (`services/rynnvalue/`, `decisions.md` 2026-10-30).
 
-## 1. Entrypoint (`realtime.py:462`)
-- Planning worker: `DecisionWorker(RecordingDecider(make_planner(a)))` (`:514`); `--arm fixed | scripted | oracle |
+## 1. Entrypoints
+Shared assembly (`rojev/app/session.py`): one worker per lane, the owner with an episode log, and with a done
+checker the step watcher fed by switch cues. Its lockstep also waits for the done checker.
+
+RoboCasa app (`realtime.py:503`):
+- Planning worker: `DecisionWorker(RecordingDecider(make_planner(a)))` (`:558`); `--arm fixed | scripted | oracle |
   revisable(-truth) | native | commit`.
-- Interaction worker (`:517`), if `--interaction` is given: `continue` (baseline), `rules` (keyword spoof) or `jev`
-  (`make_jev`, `:346`: `--chooser onejev|keywords`, `--reviser canonical|rewrite`, `--skills FILE` (trained task
+- Interaction worker (`:561`), if `--interaction` is given: `continue` (baseline), `rules` (keyword spoof) or `jev`
+  (`make_jev`, `:367`: `--chooser onejev|keywords`, `--reviser canonical|rewrite`, `--skills FILE` (trained task
   sentences; the run's instruction is always one), `--max-asks`, `--jev-calibration` `{act, task}` JSON).
-- `StateOwner(runtime, guard, planning, latest, now, instruction, lease_s, decide_every_s, on_change, review_s,
-  interaction, interaction_timeout_s, say=Speaker.say, hold_recheck_s)` (`:520`); `instruction` = `--instruction`,
-  else the environment's sentence.
-- `StepWatcher(make_verifier(a), runtime.active_goal, loop.latest, owner.post, …)` (`:524`) with `--verify
-  onejev|mjev|truth`; `make_verifier` (`:369`) wraps it in `RecordingVerifier` (every check logged with the truth).
+- `StateOwner(runtime, guard, planning, latest, now, instruction, lease_s, watchdog_s, step_budget_s, liveness_s,
+  on_change, review_s, interaction, interaction_timeout_s, say=Speaker.say, hold_recheck_s, episodic)`;
+  `instruction` = `--instruction`, else the environment's sentence; finished tasks → `<out>/episodes.jsonl`.
+- `StepWatcher(make_verifier(a), runtime.active_goal, loop.latest, owner.post, …, recheck_s)` with `--verify
+  onejev|mjev|truth`; `make_verifier` wraps it in `RecordingVerifier` (every check logged with the truth);
+  `SwitchCues(PANDA_OMRON, watcher.cue)` runs in the loop's `on_tick`.
 - User speech: `--say T:TEXT` (scripted) or `--interactive` (`Console`, `typed.jsonl`), both → `owner.post(UserInstruction)`.
   Robot speech: `Speaker.say` prints and logs `utterances.jsonl`.
-- **Lockstep** (`--lockstep`, run loop `:588`; the simulator evaluation mode, decisions 2026-10-23 / 25): the owner
+- **Lockstep** (`--lockstep`, run loop `:622`; the simulator evaluation mode, decisions 2026-10-23 / 25): the owner
   runs on the main thread (`owner.step()`), and the world does not tick while either lane is `busy` (`worker.py:44`;
   cleared only after the answer is posted) or, read after the lanes, `owner.has_events`, so a decision takes zero
   simulated time and is applied before the next tick and the owner's deadlines
@@ -66,7 +77,7 @@ S1Runner (π0.5² planner mode) ─PlannedSubtask / StepEvent claim─▶ owner 
 | Message | From → to | Carries |
 |---|---|---|
 | `UserInstruction` | user → owner | text |
-| `ObservationSnapshot` | owner → worker | capture, instruction + rev, desired cmd + operation, active_since, keyframes, trigger, review, deviation, step_event, planned, hold, dialogue |
+| `ObservationSnapshot` | owner → worker | capture, instruction + rev, desired cmd + operation, active_since, task memory (goal + step records), trigger, review, deviation, step_event, planned, hold, dialogue |
 | `Verdict` | decider → worker | operation, reason, scores, preconditions, evidence, task (REVISE only) |
 | `DecisionProposal` / `DecisionFailure` | worker → owner | the verdict stamped with epoch, request id, rev, base cmd, obs, expiry / the error |
 | `Utterance` | owner → executor | `ACK` or a template + objects, cmd_id |
@@ -86,63 +97,79 @@ S1Runner (π0.5² planner mode) ─PlannedSubtask / StepEvent claim─▶ owner 
 ABORT, WAIT and ASK activate at once as holds; `target()` is then None, so S1 is no longer asked.
 
 ## 3. State owner (`owner/state_owner.py`)
-- `handle` (`:175`): routes instruction, deviation, step event, planned subtask, failure or proposal; one thread, one
+- `handle` (`:219`): routes instruction, deviation, step event, planned subtask, failure or proposal; one thread, one
   queue, never waits for a model.
-- `tick` (`:189`), every 50 ms:
+- `tick`, every 50 ms:
   - heartbeat to the guard; drain ACKs;
   - an interaction request past its deadline → `_unanswered(awaiting=True)` (hold, said; never planning; the answer
     is still awaited);
-  - a standing hold → `_keep_hold`, and no heartbeat;
-  - else a planning heartbeat every `decide_every_s`.
-- `request_decision` (`:206`):
-  - lane from the trigger: `instruction` / `deviation` / `hold` → interaction; heartbeat / `step` / `planned` /
-    `cmd N rejected|expired|dropped` → planning;
+  - `_keep_leased`: renew the desired command when less than half a lease is left, unless it is under review or a
+    planning request has gone unanswered for `liveness_s` (then `liveness lapsed`: the command expires, the robot holds);
+  - a standing hold → `_recheck_hold`, and no planning;
+  - else `_due_trigger`: `start` (never asked), `overdue` (the running step has lasted `step_budget_s`, once per
+    budget), `watchdog` (no planning request for `watchdog_s`). No fixed beat: step events, planned subtasks and ended
+    commands ask at once.
+- `request_decision` (`:282`):
+  - lane from the trigger: `instruction` / `deviation` / `hold` → interaction; `start` / `step` / `planned` /
+    `overdue` / `watchdog` / `cmd N rejected|expired|dropped` → planning (the first unanswered planning request starts
+    the liveness clock; any planning answer stops it);
   - planning deferred while interaction is pending (the latest trigger is replayed once that decision is applied);
   - routine planning blocked while a hold stands;
   - freezes the snapshot; a new interaction request ends any awaited answer.
-- `_on_instruction` (`:250`): rev + 1; user `Turn`; `ACK` utterance at once; the task text is NOT changed; the moving
-  command under review until the interaction deadline (`review_window_s`, `:244`); asks the interaction lane.
-- `_on_deviation` (`:270`), `_on_step` (`:280`), `_on_planned` (`:292`): only about the active command, else logged
+- `_on_instruction` (`:328`): rev + 1; user `Turn`; `ACK` utterance at once; the task text is NOT changed; the moving
+  command under review until the interaction deadline (`review_window_s`, `:322`); asks the interaction lane.
+- `_on_deviation` (`:348`), `_on_step` (`:358`), `_on_planned` (`:372`): only about the active command, else logged
   stale.
-- `_on_proposal` (`:316`), refusal chain (first match): epoch → revision → not newer than the last applied request →
+- `_on_proposal` (`:397`), refusal chain (first match): epoch → revision → not newer than the last applied request →
   not a request this owner made → interaction pending (refuses planning) → superseded interaction request → wrong base
   command (the owner's own placeholder hold does not count for an awaited answer) → a hold stands and the proposal
-  isn't answering a change → expired → preconditions. A refused interaction answer → `_unanswered` (`:401`):
+  isn't answering a change → expired → preconditions. A refused interaction answer → `_unanswered` (`:492`):
   GUARDED_WAIT `UNANSWERED` as a standing hold, said, decided again on the hold recheck.
-- Late answer (fix 2026-10-24): an awaited answer that passes the chain → `_as_decided` (`:392`): applied to the
+- Late answer (fix 2026-10-24): an awaited answer that passes the chain → `_as_decided` (`:483`): applied to the
   situation it was decided on; CONTINUE = re-issue the operation in force then (a plain hold if none), so "keep going"
   resumes the motion the placeholder stopped. Live 2026-10-23 cause: OneJev 1.1–1.5 s vs the 1.0 s deadline; the answer
   was refused (its base was the placeholder) and the change decided again.
-- `_apply` (`:360`):
+- `_apply` (`:448`):
   - `p.task` set and different → it becomes the task text; the same moving operation under new task text →
     **reaffirm**: a new command carrying it, always `immediate`;
   - same operation or CONTINUE → renew the lease; if the operation carries a template and answers an instruction, the
-    robot turn is appended and **said again** (`:382`): a repeated question or "waiting" is never silent;
-  - else COMPLETE flag → keyframe → hold update → `_issue`.
-- `_update_hold` (`:420`) / `_keep_hold` (`:433`): ABORT, WAIT or ASK answering a change = a standing
-  `Hold{operation, since, interrupted}`; leased by the owner; every `hold_recheck_s` the interaction lane is asked
-  again (trigger `hold`) unless an answer is awaited; released only by a moving operation or COMPLETE answering a
-  change.
-- `_record_progress` (`:446`): a keyframe when a running step is moved past; evidence = the step event, else the reason.
-- `_issue` (`:468`): new `AcceptedGoal`; transition configured between moving commands, `pause_hold` into or out of a
-  hold; a templated operation → `_utter` (`:485`) + robot `Turn`.
-- `_on_ack` (`:490`): the only source of "active"; `rejected` / `expired` / `dropped` → fall back to the command still
+    robot turn is appended and **said again** (`:471`): a repeated question or "waiting" is never silent;
+  - else COMPLETE flag → task memory → hold update → `_issue`; COMPLETE also appends the task to the episodic log.
+- `_update_hold` / `_recheck_hold`: ABORT, WAIT or ASK answering a change = a standing
+  `Hold{operation, since, interrupted}`; leased by the owner like any command; every `hold_recheck_s` the interaction
+  lane is asked again (trigger `hold`) unless an answer is awaited; released only by a moving operation or COMPLETE
+  answering a change.
+- `_on_step`: a checked event about the running command → `StepRecord` DONE at once (`_recorded_done` prevents a
+  duplicate). `_record_progress`: the running step moved past and not yet recorded → DONE (evidence = the step event,
+  else the reason); a switch to a step recorded DONE → UNDONE first. `memory.done()` is what deciders read as steps done; new task text
+  becomes `memory.goal`.
+- `_issue` (`:572`): new `AcceptedGoal`; transition configured between moving commands, `pause_hold` into or out of a
+  hold; a templated operation → `_utter` (`:589`) + robot `Turn`.
+- `_on_ack` (`:594`): the only source of "active"; `rejected` / `expired` / `dropped` → fall back to the command still
   running and ask again.
 
 ## 4. Decision worker (`system2/worker.py`)
-- `request` (`:45`): the newest snapshot replaces an unstarted one (`replaced`); `busy` (`:41`) feeds lockstep.
-- `decide` (`:65`): `Verdict` → `DecisionProposal` (epoch, request id, rev, base cmd, obs, expiry 2 s, evidence:
+- `request` (`:47`): the newest snapshot replaces an unstarted one (`replaced`); `busy` (`:43`) feeds lockstep.
+- `decide` (`:67`): `Verdict` → `DecisionProposal` (epoch, request id, rev, base cmd, obs, expiry 2 s, evidence:
   reason, trigger, decide_ms, decider); an exception → `DecisionFailure`.
 
 ## 5. Planning lane
-- **XR-1 (v1 default): `NativePlanner`** (`eval/deciders.py:84`): one `SWITCH_TO(None)` under the task text, then
+- Asked on events only (§3 `tick`): `start`, step event, planned subtask, ended command, `overdue`, `watchdog`.
+  Liveness is the owner's lease renewal, so a planner is never asked just to keep the robot moving.
+- **XR-1 (v1 default): `NativePlanner`** (`eval/deciders.py`): one `SWITCH_TO(None)` under the task text, then
   CONTINUE. XR-1 sequences its own steps inside the model and reports none: no `PlannedSubtask`, no step events, no
   completion. The planning lane never says COMPLETE, so S1 keeps acting after success (run 5).
-- **π0.5² commit-and-verify** (`--arm commit`, `system2/planning.py:23` `CommitVerifyPlanner`): π0.5²'s planned subtask
-  (`snapshot.planned`) is committed as `SWITCH_TO(text)`; a checked step event releases it; `max_commit_s` (25 s)
-  releases an unverifiable one. Live: switches 19 → 2, but nothing verified and a wrong first pick pinned.
+- **Step planner (for an S1 that follows step text)** (`system2/planning.py:54` `StepPlanner`): asks a `NextStepModel`
+  for the next step from the skill list + COMPLETE_STEP, with `memory.done()` as its "last steps" and the newest frame
+  per camera; another step → `SWITCH_TO`, the running one → CONTINUE, COMPLETE_STEP → COMPLETE, anything else →
+  CONTINUE (logged). Choosing a done step makes the owner record it UNDONE. Model: R1.5 through the chat client
+  (prompts in `config/s2/embodied-r1.5.yaml`). Tested through the shared assembly with a stand-in; no robot runs it
+  yet.
+- **π0.5² commit-and-verify** (`--arm commit`, `system2/planning.py` `CommitVerifyPlanner`): π0.5²'s planned subtask
+  (`snapshot.planned`) is committed as `SWITCH_TO(text)`; a checked step event releases it; `max_commit_s` (25 s, also
+  the owner's `step_budget_s`, so the `overdue` trigger asks it on time) releases an unverifiable one. Live: switches 19 → 2, but nothing verified and a wrong first pick pinned.
 - Baselines: `ScriptedSequence` (time budget), `TruthSequence` (oracle), `AlwaysContinue`; harness stand-in
-  `RevisableSequence`.
+  `RevisableSequence`. They poll a clock or simulator truth, so the executor gives them a 1 s watchdog.
 
 ## 6. Jev v1 (`system2/jev/`; stateless, everything comes from the snapshot)
 `JevInteraction.decide` (`interaction.py:39`):
@@ -168,7 +195,7 @@ ABORT, WAIT and ASK activate at once as holds; `target()` is then None, so S1 is
    conversation, hold, motion check; every camera its own `<image:k>` in one request.
 5. `Calibration.apply` (temperature); probabilities summed per effect (`acts.effect`: move · hold · switch); top-two
    effect margin < `margin` → ask (if allowed) else wait; else the most probable act with the winning effect.
-6. Question two, only for revise: `CanonicalTask.revise` (`task_choice.py:42`): one Choice over the trained task
+6. Question two, only for revise: `CanonicalTask.revise` (`task_choice.py:41`): one Choice over the trained task
    sentences (`--skills` + the run's instruction) and `none`, own calibration; the chosen sentence verbatim becomes the
    task text. `none` or a low margin → ask (if allowed) else wait. The user's words are evidence only, never S1's
    prompt (`S1Replans`, which sent them raw, removed 2026-10-24).
@@ -187,11 +214,17 @@ T = 1, margin 0.2 (declared).
 On a `hold` recheck of an `UNANSWERED` hold, Jev skips the wait-budget rule and decides the original change.
 
 ## 7. Verifier (`system2/verify/`; opt-in, off in the v1 default)
-- `StepWatcher.check_once` (`watcher.py:96`), every `--verify-every` (1 s): the runtime's active command (moving, with a
-  subtask); "Robot step: '…'. Which is true right now?" (done / possible / blocked); 2 consecutive P(done) ≥ 0.7 → one
-  `StepEvent` per command; failures counted, never posted.
-- `claim` / `confirm` (`:62`, `:66`): an S1-planner step event is checked once before it counts.
-- `OneJevVerifier` (`checks.py:64`): all steps in one request; `MJevVerifier` (`:41`) kept for A/B.
+- `StepWatcher.check_once`, as a cascade: at once on a cue (`cue(reason)`: `SwitchCues` sees the gripper or base mode
+  switch on an applied action), else every `--verify-every` (1 s fallback), and `--recheck` (0.5 s) after a positive
+  check until confirmed. It checks the runtime's active command (moving, with a subtask); "Robot step: '…'. Which is
+  true right now?" (done / possible / blocked); 2 consecutive P(done) ≥ 0.7 → one `StepEvent` per command, its detail
+  naming the cue; failures counted, never posted.
+- `claim` / `confirm` (`:74`, `:87`): an S1-planner step event is checked once before it counts. `busy`: a check
+  runs or waits; the shared assembly's lockstep waits for it.
+- `OneJevVerifier` (`checks.py:64`): all steps in one request; `MJevVerifier` (`:41`) kept for A/B;
+  the chat client's done check: R1.5's "`<step>`. is it satisfied?" asked once per camera on its newest frame, done
+  when any camera answers a plain yes (the bake-off's "either camera" rule).
+- The fallback and recheck periods are wall-clock seconds, also in lockstep.
 - Done-check A/B (222 simulator-labelled pairs): balanced accuracy MJev 0.50 / 0.45, OneJev 0.52 / 0.52: neither is a
   completion signal.
 - SAM 2.1 (`models/sam2.py:43`, `services/sam2`): masks IoU 0.64 from correct points, a bad first mask never recovers;
@@ -200,20 +233,20 @@ On a `hold` recheck of an `UNANSWERED` hold, Jev skips the wait-budget rule and 
 ## 8. Timeline: "wait", then "go on" (XR-1 + Jev, lockstep with S2 paused; smoke test 2026-10-23)
 | sim t | What happens |
 |---|---|
-| 0 | Planning heartbeat → `NativePlanner` → cmd 1 `SWITCH_TO(None)` under the task text; XR-1 supplies |
+| 0 | Planning `start` → `NativePlanner` → cmd 1 `SWITCH_TO(None)` under the task text; XR-1 supplies (run before 2026-11-09: a 1 s heartbeat asked too) |
 | < 3.05 | "wait": rev 1, user turn, `ACK` said, cmd 1 under review; interaction request; the world stops while Jev decides |
 | 3.05 | Jev: {continue, revise, wait, ask, abort} → wait (p 0.88) → GUARDED_WAIT cmd 2 (`pause_hold`), active at once; `Hold(interrupted = cmd 1's operation)`; `target()` = None |
-| … | No heartbeats; the owner renews cmd 2's lease; the robot holds |
+| … | No planning while the hold stands; the owner renews cmd 2's lease; the robot holds |
 | 6.05 | "go on": snapshot carries `hold.interrupted` → resume → cmd 3 = cmd 1's operation; hold released; XR-1 supplies cmd 3 |
 | 10.5 | Task success (simulator check, logged only; nothing in S2 knows) |
 Real time: if OneJev's answer misses `interaction_timeout_s` (1.0 s) the robot holds (`UNANSWERED`) at the deadline and
 the answer is applied when it arrives (since 2026-10-24; confirmed live in E30 with a 0.3 s deadline).
 
-## 9. Evidence (tests re-run 2026-10-24; runs 1–5 from 2026-10-23, before the Jev fixes; E27–E30 after)
+## 9. Evidence (tests re-run 2026-11-10; runs 1–5 from 2026-10-23, before the Jev fixes; E27–E30 after)
 | Suite / run | Result |
 |---|---|
-| core `uv run pytest -q` (owner, Jev, verify, runner, …) | 329 passed, 1 skipped, 2 timing deselected |
-| executor tests (harness incl. both questions as cases, held-out calibration, campaign judge, frame check, serve) | 36 passed |
+| core `uv run pytest -q` (owner, Jev, verify, planning, cues, app session, chat client, …) | 357 passed, 1 skipped, 3 timing deselected |
+| executor tests (harness incl. both questions as cases, held-out calibration, campaign judge, frame check, serve) | 37 passed |
 | smoke test (above) | wait 3.05 s, resume 6.05 s, success 10.5 s |
 | interactive run 1 (+ replay) | a remark became the task; a repeated question went unsaid (fixed: owner re-says, WAITING reply) |
 | run 2 | goals outside XR-1's repertoire → erratic motion |

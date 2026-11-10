@@ -18,6 +18,7 @@ ALLOWED = {
     "eval": {"protocol", "system2"},
     "observability": set(),
     "legacy_v2": {"protocol", "system2", "eval"},
+    "app": {"protocol", "robot", "control", "system1", "system2", "owner"},
 }
 
 
@@ -45,6 +46,12 @@ def test_imports_only_point_down_the_stack():
             if bad:
                 violations.append(f"{path.relative_to(ROOT)} imports {sorted(bad)}")
     assert not violations, violations
+
+
+def test_nothing_depends_on_the_app_layer():
+    users = [str(p.relative_to(ROOT)) for p in ROOT.rglob("*.py")
+             if "app" in rojev_imports(p) and p.parts[len(ROOT.parts)] != "app"]
+    assert not users
 
 
 def test_nothing_depends_on_legacy_v2():

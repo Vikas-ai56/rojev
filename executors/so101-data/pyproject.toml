@@ -1,0 +1,22 @@
+[project]
+name = "rojev-executor-so101-data"
+version = "0.0.1"
+requires-python = "==3.12.*"
+dependencies = [
+    "huggingface-hub>=0.34,<1",
+    "lerobot>=0.4,<0.5",
+    "numpy>=1.26,<3",
+    "pillow>=10",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

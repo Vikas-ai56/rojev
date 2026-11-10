@@ -1,0 +1,9 @@
+# Stage 1 (S1 alone through the runtime on LIBERO): lockstep; no blending between chunks. How much of each chunk runs
+# before S1 is asked again is the model's own setting (execute_steps in config/s1; GR00T on LIBERO: 8 of 16, as
+# NVIDIA's own rollout), not a run setting. Measured 2026-11-10 before that setting existed: 49/50 on LIBERO-goal
+# asking again after 7 actions, 17/20 after 14-15 (E33).
+# Read by executors/libero/evaluate.py --config.
+runtime:
+  lockstep: true
+  blend_s: 0.0
+  watchdog_s: 10.0
